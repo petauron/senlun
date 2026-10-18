@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.24](https://github.com/petauron/senulun/compare/v0.1.0-alpha.23...v0.1.0-alpha.24) (2026-10-18)
+
+
+### Bug Fixes
+
+* **service:** accept visitor IP from an explicit trusted proxy ([b826a34](https://github.com/petauron/senulun/commit/b826a34fa57702efbeea6b935cc6fd57c3260aa7))
+
 ## [0.1.0-alpha.23](https://github.com/petauron/senulun/compare/v0.1.0-alpha.22...v0.1.0-alpha.23) (2026-10-18)
 
 
