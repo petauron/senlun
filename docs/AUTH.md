@@ -30,8 +30,16 @@ passwords or tokens.
 
 ## Sessions and request protection
 
-Sessions expire after 12 hours without sliding renewal; at most eight session
-records are retained. Session cookies are `HttpOnly`, `SameSite=Lax`, host-only,
+Complete logins expire 30 days after authentication without sliding renewal;
+at most eight session records are retained. The persistent cookie and database
+session use the same 30-day lifetime, so closing the browser or restarting the
+Service does not require another login. Logout, password changes, and changes to
+two-factor authentication still revoke the applicable sessions immediately.
+Incomplete OAuth second-factor sessions remain limited to ten minutes.
+Existing sessions keep their original expiry when upgrading; expired sessions
+are never restored, and signing in again issues the new 30-day session.
+
+Session cookies are `HttpOnly`, `SameSite=Lax`, host-only,
 and use `Path=/`. HTTPS uses the `__Host-` cookie prefix and `Secure`. Cookie
 values contain two independently generated UUID v4 values; only their SHA-256
 hashes are stored in SQLite.

@@ -33,7 +33,9 @@ use tokio::{sync::Semaphore, time::timeout};
 use totp_rs::{Builder, Secret, Totp};
 use uuid::Uuid;
 
-const SESSION_TTL: i64 = 12 * 60 * 60;
+// Persist complete logins across daily use and browser/Service restarts.
+// Incomplete OAuth second factors retain the short FLOW_TTL below.
+const SESSION_TTL: i64 = 30 * 24 * 60 * 60;
 const FLOW_TTL: i64 = 10 * 60;
 const MAX_SESSIONS: i64 = 8;
 const MAX_OAUTH_FLOWS: i64 = 32;
@@ -1732,6 +1734,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn complete_sessions_survive_twelve_hours_and_service_restart() {
+        let (directory, state) = state();
+        initialize(&state).await;
+        let (anonymous_cookie, csrf) = anonymous(&state).await;
+        let login = request(
+            &state,
+            "POST",
+            "/api/auth/login",
+            &anonymous_cookie,
+            Some(&csrf),
+            Some(TEST_ORIGIN),
+            json!({ "username": "admin", "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(login.status(), StatusCode::OK);
+        let cookie = response_cookie(&login, state.session_cookie_name());
+        let set_cookie = login.headers()[header::SET_COOKIE].to_str().unwrap();
+        assert!(set_cookie.contains("Max-Age=2592000"));
+        let session = state.session(&headers(&cookie)).await.unwrap().unwrap();
+        let token_hash = session.token_hash;
+        state
+            .database(move |connection| {
+                let ttl: i64 = connection.query_row(
+                    "SELECT expires_at-created_at FROM auth_sessions WHERE token_hash=?1",
+                    [&token_hash],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(ttl, 30 * 24 * 60 * 60);
+                // Model a login made thirteen hours ago, beyond the previous limit.
+                connection.execute(
+                    "UPDATE auth_sessions SET created_at=created_at-?1, expires_at=expires_at-?1 WHERE token_hash=?2",
+                    params![13 * 60 * 60, token_hash],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        drop(state);
+        let restarted = AuthState::new(
+            &directory.path().join("senulun.db"),
+            AuthConfig {
+                public_url: TEST_ORIGIN.to_owned(),
+                github: None,
+            },
+            32 * 1024 * 1024,
+        )
+        .unwrap();
+        let response = request(
+            &restarted,
+            "GET",
+            "/api/auth/status",
+            &cookie,
+            None,
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(payload(response).await["logged_in"], true);
+        restarted
+            .database(|connection| {
+                connection.execute("UPDATE auth_sessions SET expires_at=0", [])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(restarted.session(&headers(&cookie)).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn sessions_expire_are_bounded_and_partial_oauth_cannot_authorize() {
         let (_directory, state) = state();
         initialize(&state).await;
@@ -1742,6 +1813,12 @@ mod tests {
                     insert_session(&transaction, true)?;
                 }
                 let partial = insert_session(&transaction, false)?;
+                let partial_ttl: i64 = transaction.query_row(
+                    "SELECT expires_at-created_at FROM auth_sessions WHERE token_hash=?1",
+                    [hash(&partial)],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(partial_ttl, 10 * 60);
                 let count: i64 =
                     transaction
                         .query_row("SELECT COUNT(*) FROM auth_sessions", [], |row| row.get(0))?;
@@ -1959,7 +2036,7 @@ mod tests {
             )
             .unwrap();
         let cookie = response.headers()[header::SET_COOKIE].to_str().unwrap();
-        assert!(cookie.contains("HttpOnly; SameSite=Lax; Max-Age=43200"));
+        assert!(cookie.contains("HttpOnly; SameSite=Lax; Max-Age=2592000"));
         assert!(!cookie.contains("Domain="));
     }
 
