@@ -199,27 +199,52 @@ pub(crate) async fn ping_records_data(
         let client = uuid
             .or_else(|| record["node_id"].as_str())
             .unwrap_or_default();
-        let success = record["success"].as_bool().unwrap_or(false);
-        let value = if success {
-            record["latency_ms"].as_f64().unwrap_or(-1.0)
-        } else {
-            -1.0
-        };
+        let (value, loss, count) = counted_ping_value(&record)?;
         records.push(json!({
             "task_id": id,
             "client": client,
             "time": format_timestamp(time),
             "value": value,
-            "loss": if success { 0 } else { 100 },
-            "count": 1
+            "loss": loss,
+            "count": count
         }));
     }
     Ok(json!({"count":records.len(),"records":records,"tasks":tasks,"summary":summary}))
 }
 
+// A minute with one failure is not a 100%-failed single probe. Preserve both
+// the mean successful latency and its counted failure rate for theme readers.
+#[allow(clippy::cast_precision_loss)]
+fn counted_ping_value(record: &Value) -> Result<(f64, f64, u64), ApiError> {
+    let count = record["samples"]
+        .as_u64()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| ApiError::unavailable("invalid counted probe record"))?;
+    let failed = record["failed_samples"]
+        .as_u64()
+        .filter(|n| *n <= count)
+        .ok_or_else(|| ApiError::unavailable("invalid counted probe failures"))?;
+    Ok((
+        record["latency_ms"].as_f64().unwrap_or(-1.0),
+        failed as f64 * 100.0 / count as f64,
+        count,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counted_minutes_preserve_partial_failures_and_successful_latency() {
+        let mixed = json!({"samples":10,"failed_samples":2,"success":false,"latency_ms":12.5});
+        assert_eq!(counted_ping_value(&mixed).unwrap(), (12.5, 20.0, 10));
+        let failed = json!({"samples":3,"failed_samples":3,"latency_ms":null});
+        assert_eq!(counted_ping_value(&failed).unwrap(), (-1.0, 100.0, 3));
+        let raw = json!({"samples":1,"failed_samples":0,"latency_ms":7.25});
+        assert_eq!(counted_ping_value(&raw).unwrap(), (7.25, 0.0, 1));
+        assert!(counted_ping_value(&json!({"samples":1,"failed_samples":2})).is_err());
+    }
 
     #[test]
     fn numeric_ids_are_stable_and_javascript_safe() {

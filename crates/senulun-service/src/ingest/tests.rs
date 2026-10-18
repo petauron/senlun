@@ -29,7 +29,7 @@ fn batch_preserves_every_sample_and_exact_deltas_across_duplicates_and_counter_r
     let bad = input("invalid-credential", now + 3000, 9999, 9999);
     let too_fast = input(&node.agent_token, now + 100, 9999, 9999);
     let results = storage
-        .ingest_batch(&[&first, &first, &bad, &too_fast, &next, &reset, &last], 7)
+        .ingest_batch(&[&first, &first, &bad, &too_fast, &next, &reset, &last])
         .unwrap();
     assert!(results[0].is_ok() && results[1].is_ok());
     assert!(matches!(results[2], Err(StorageError::Unauthorized)));
@@ -99,7 +99,7 @@ fn rejected_probe_batch_does_not_remove_other_requests_or_leave_partial_results(
     };
     let snapshot = input(&node.agent_token, now, 100, 200);
     let results = storage
-        .ingest_batch(&[&snapshot, &probes, &valid, &valid], 7)
+        .ingest_batch(&[&snapshot, &probes, &valid, &valid])
         .unwrap();
     assert!(results[0].is_ok());
     assert!(matches!(results[1], Err(StorageError::InvalidInput(_))));
@@ -121,12 +121,12 @@ fn commit_failure_rolls_back_all_samples_and_usage_before_any_success() {
     let (_dir, storage, node) = fixture();
     storage.connection().unwrap().execute_batch("CREATE TABLE metrics.commit_parent(id INTEGER PRIMARY KEY);
         CREATE TABLE metrics.commit_child(id INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
-        CREATE TRIGGER metrics.reject_commit AFTER INSERT ON snapshots BEGIN INSERT INTO commit_child VALUES(999); END;").unwrap();
+        CREATE TRIGGER metrics.reject_commit AFTER INSERT ON traffic_periods BEGIN INSERT INTO commit_child VALUES(999); END;").unwrap();
     let now = unix_time_ms().unwrap();
     let a = input(&node.agent_token, now, 100, 200);
     let b = input(&node.agent_token, now + 3000, 150, 250);
     assert!(matches!(
-        storage.ingest_batch(&[&a, &b], 7),
+        storage.ingest_batch(&[&a, &b]),
         Err(StorageError::Database(_))
     ));
     assert_eq!(count(&storage), 0);
@@ -147,11 +147,7 @@ async fn acknowledgement_waits_for_database_commit() {
     let storage = Arc::new(storage);
     let permit = Arc::new(Semaphore::new(1));
     let held = permit.acquire().await.unwrap();
-    let writer = Arc::new(Ingestor::start(
-        Arc::clone(&storage),
-        Arc::clone(&permit),
-        7,
-    ));
+    let writer = Arc::new(Ingestor::start(Arc::clone(&storage), Arc::clone(&permit)));
     let request = input(&node.agent_token, unix_time_ms().unwrap(), 100, 200);
     let cloned = Arc::clone(&writer);
     let waiting = tokio::spawn(async move { cloned.submit(request).await });
@@ -170,7 +166,6 @@ async fn cancelled_caller_is_committed_and_retry_is_not_counted_twice() {
     let writer = Arc::new(Ingestor::start(
         Arc::clone(&storage),
         Arc::new(Semaphore::new(1)),
-        7,
     ));
     let now = unix_time_ms().unwrap();
     let first = sample(now, 100, 200);
@@ -206,7 +201,7 @@ async fn cancelled_caller_is_committed_and_retry_is_not_counted_twice() {
 async fn credential_revoked_while_queued_is_rechecked_before_writing() {
     let (_dir, storage, node) = fixture();
     let storage = Arc::new(storage);
-    let writer = Ingestor::start(Arc::clone(&storage), Arc::new(Semaphore::new(1)), 7);
+    let writer = Ingestor::start(Arc::clone(&storage), Arc::new(Semaphore::new(1)));
     let now = unix_time_ms().unwrap();
     let (reply, result) = oneshot::channel();
     writer
@@ -230,7 +225,7 @@ async fn credential_revoked_while_queued_is_rechecked_before_writing() {
 async fn closing_queue_drains_partial_batch_and_saturated_queue_fails_explicitly() {
     let (_dir, storage, node) = fixture();
     let storage = Arc::new(storage);
-    let writer = Ingestor::start(Arc::clone(&storage), Arc::new(Semaphore::new(1)), 7);
+    let writer = Ingestor::start(Arc::clone(&storage), Arc::new(Semaphore::new(1)));
     let (reply, result) = oneshot::channel();
     writer
         .sender

@@ -171,6 +171,38 @@ test('network quality labels TCP connection failures as Komari loss', async ({ p
   }
 })
 
+test('minute history displays counted failures and exact statistics on desktop and mobile', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', error => errors.push(error.message))
+  await page.route('**/api/v1/nodes/*/probes?*', async (route) => {
+    const now = Date.now()
+    await route.fulfill({
+      json: {
+        tasks: [{ id: 'minute-probe', name: 'minute-probe', kind: 'tcp', interval_seconds: 5 }],
+        records: [{ task_id: 'minute-probe', collected_at_unix_ms: now, received_at_unix_ms: now, latency_ms: 12.5, success: false, error: 'timeout', aggregated: true, samples: 10, failed_samples: 2, resolution_ms: 60000 }],
+        chart: [{ task_id: 'minute-probe', received_at_unix_ms: now, latency_ms: 12.5, samples: 10, failed_samples: 2 }],
+        summary: [{ task_id: 'minute-probe', samples: 10, loss_percent: 20, avg_latency_ms: 12.5, min_latency_ms: 5, max_latency_ms: 30, latest_latency_ms: 15, p50_latency_ms: 12, p95_latency_ms: 28, p99_latency_ms: 29, p99_p50_ratio: 1.4167 }],
+        chart_source_points: 10,
+        history_resolution_ms: 60000,
+        chart_bucket_ms: 60000,
+        range_start_unix_ms: now - 3_600_000,
+        range_end_unix_ms: now,
+      },
+    })
+  })
+  await login(page)
+  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await expect(page.getByText('较早历史按分钟汇总，峰值、失败次数和延迟分位数保留。')).toBeVisible()
+  const analysis = page.getByRole('region', { name: '延迟数据分析' })
+  await expect(analysis).toContainText('28 ms')
+  await page.getByText('查看最近 1 条记录', { exact: true }).click()
+  const details = page.getByRole('table', { name: '探测结果明细（按服务器接收时间倒序）' })
+  await expect(details).toContainText('分钟汇总 · 10 次，失败 2 次')
+  await expect(details).toContainText('平均延迟 12.5 ms')
+  await expect(details).not.toContainText('失败：timeout')
+  expect(errors).toEqual([])
+})
+
 test('probe history honors Emerald chart defaults and retained range', async ({ page }) => {
   let retentionHours = 168
   await page.route('**/api/public', async (route) => {

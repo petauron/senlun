@@ -39,6 +39,21 @@ fn legacy_store() -> (TempDir, PathBuf, Connection) {
     (directory, control, db)
 }
 
+pub(crate) fn version_six_store() -> (TempDir, PathBuf, Connection) {
+    let (directory, path, mut db) = legacy_store();
+    split(&mut db).unwrap();
+    db.execute_batch(
+        "CREATE TABLE external_traffic_sources (
+        node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
+        config TEXT NOT NULL,credential BLOB NOT NULL,snapshot TEXT,
+        last_attempt_ms INTEGER NOT NULL DEFAULT 0,last_success_ms INTEGER NOT NULL DEFAULT 0,
+        generation TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending');
+        PRAGMA main.user_version=6;",
+    )
+    .unwrap();
+    (directory, path, db)
+}
+
 #[test]
 fn split_preserves_all_metric_fields_and_credentials() {
     let (_directory, _path, mut db) = legacy_store();
@@ -339,7 +354,11 @@ fn real_open_migrates_once_and_keeps_a_pre_upgrade_backup() {
         storage
             .connection()
             .unwrap()
-            .query_row("SELECT count(*) FROM snapshots", [], |r| r.get::<_, i64>(0))
+            .query_row(
+                "SELECT coalesce(sum(samples),0) FROM snapshot_minutes",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
             .unwrap(),
         1
     );
