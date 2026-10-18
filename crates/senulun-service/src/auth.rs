@@ -1799,7 +1799,13 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(restarted.session(&headers(&cookie)).await.unwrap().is_none());
+        assert!(
+            restarted
+                .session(&headers(&cookie))
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
