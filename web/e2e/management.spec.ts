@@ -1,3 +1,4 @@
+import type { TrafficCorrectionContext } from '../src/utils/trafficCorrection'
 import { expect, test } from '@playwright/test'
 import { nodeMetadata } from '../src/utils/admin'
 import { login, mutation, waitForNode } from './auth'
@@ -145,6 +146,68 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
   finally {
     if (taskId)
       await mutation(page.request, `/api/admin/probes/${taskId}/delete`)
+  }
+})
+
+test('local traffic correction previews units, requires confirmation and preserves unrelated settings', async ({ page, request }) => {
+  page.setDefaultTimeout(10_000)
+  await login(page, '/admin?section=nodes')
+  const id = await waitForNode(page.request)
+  const path = `/api/admin/nodes/${id}/traffic-correction`
+  const original = await (await page.request.get(path)).json() as TrafficCorrectionContext
+  const metadata = (await (await page.request.get('/api/admin/state')).json()).nodes.find((node: { id: string }) => node.id === id)
+  expect((await request.get(path)).status()).toBe(401)
+  expect((await request.post(path, { data: {} })).status()).toBe(401)
+  await page.goto(`/admin?section=nodes&node=${id}`)
+  const errors: string[] = []
+  let correctionApplied = false
+  page.on('pageerror', error => errors.push(error.message))
+  try {
+    await page.getByRole('button', { name: '校正本周期本地流量', exact: true }).click()
+    const dialog = page.getByRole('dialog')
+    await expect(dialog.getByText(/最后采样/)).toBeVisible()
+    await dialog.getByLabel('输入单位').selectOption('gb')
+    await dialog.getByLabel('目标上传已用量').fill('1')
+    await dialog.getByLabel('目标下载已用量').fill('2')
+    await dialog.getByLabel('校正原因').fill('Synthetic E2E correction')
+    await dialog.getByRole('button', { name: '预览校正', exact: true }).click()
+    await expect(dialog.getByRole('region', { name: '本地流量校正预览' })).toContainText('→ 1 GB')
+    await dialog.getByRole('button', { name: '返回修改' }).click()
+    await dialog.getByLabel('输入单位').selectOption('gib')
+    await expect(dialog.getByLabel('目标上传已用量')).toHaveValue('0.931322574615478515625')
+    await dialog.getByLabel('输入单位').selectOption('gb')
+    await expect(dialog.getByLabel('目标上传已用量')).toHaveValue('1')
+    await dialog.getByRole('button', { name: '预览校正', exact: true }).click()
+    const response = page.waitForResponse(result => result.url().endsWith(path) && result.request().method() === 'POST')
+    await dialog.getByRole('button', { name: '确认校正本地流量' }).click()
+    const applied = await response
+    expect(applied.status()).toBe(200)
+    correctionApplied = true
+    const sent = applied.request().postDataJSON()
+    expect(sent.used_up_bytes).toBe('1000000000')
+    expect(sent.used_down_bytes).toBe('2000000000')
+    expect((await mutation(page.request, path, sent)).status()).toBe(409)
+    await expect(dialog).not.toBeVisible()
+    await expect(page.getByRole('status').filter({ hasText: '已校正本周期本地流量' })).toBeVisible()
+    const corrected = await (await page.request.get(path)).json() as TrafficCorrectionContext
+    expect(BigInt(corrected.baseline.used_up_bytes)).toBeGreaterThanOrEqual(1000000000n)
+    expect(BigInt(corrected.baseline.used_down_bytes)).toBeGreaterThanOrEqual(2000000000n)
+    const updated = (await (await page.request.get('/api/admin/state')).json()).nodes.find((node: { id: string }) => node.id === id)
+    expect(nodeMetadata(updated)).toEqual(nodeMetadata(metadata))
+    expect(errors).toEqual([])
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+  }
+  finally {
+    if (correctionApplied) {
+      const fresh = await (await page.request.get(path)).json() as TrafficCorrectionContext
+      const restored = await mutation(page.request, path, {
+        baseline: fresh.baseline,
+        used_up_bytes: original.baseline.used_up_bytes,
+        used_down_bytes: original.baseline.used_down_bytes,
+        reason: 'Restore disposable E2E baseline',
+      })
+      expect(restored.status()).toBe(200)
+    }
   }
 })
 

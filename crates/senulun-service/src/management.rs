@@ -5,7 +5,7 @@ use crate::{
     current_time, history_hours,
 };
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::HeaderMap,
     routing::{get, post},
@@ -19,6 +19,10 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/admin/state", get(admin_state))
         .route("/api/admin/settings", post(settings))
         .route("/api/admin/nodes/{id}", post(node))
+        .route(
+            "/api/admin/nodes/{id}/traffic-correction",
+            get(traffic_context).post(correct_traffic),
+        )
         .route("/api/admin/nodes/{id}/{action}", post(node_action))
         .route("/api/admin/enrollment", post(enrollment))
         .route("/api/admin/probes", post(probe))
@@ -69,6 +73,36 @@ async fn node_action(
                     _ => return Err(crate::storage::StorageError::NotFound),
                 }
                 Ok(json!({"ok":true}))
+            })
+            .await?,
+    ))
+}
+
+async fn traffic_context(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let now = current_time()?;
+    let offline = state.offline_after_seconds;
+    Ok(Json(
+        state
+            .database(move |storage| storage.traffic_correction_context(&id, now, offline))
+            .await?,
+    ))
+}
+
+async fn correct_traffic(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(session): Extension<crate::auth::AuthSession>,
+    Json(input): Json<crate::traffic_correction::BrowserTrafficCorrection>,
+) -> Result<Json<Value>, ApiError> {
+    let now = current_time()?;
+    let offline = state.offline_after_seconds;
+    Ok(Json(
+        state
+            .database(move |storage| {
+                storage.correct_browser_traffic(&id, &input, &session.username, now, offline)
             })
             .await?,
     ))
