@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -18,6 +18,9 @@ const username = ref('')
 const password = ref('')
 const bearerToken = ref('')
 const confirmRemove = ref(false)
+const nodeSelect = ref<HTMLSelectElement | null>(null)
+const pendingNodeId = ref<string | null>(null)
+let formLoaded = false
 
 function emptyConfig(): ExternalTrafficConfig {
   return {
@@ -42,17 +45,48 @@ function emptyConfig(): ExternalTrafficConfig {
 }
 
 const draft = ref<ExternalTrafficConfig>(emptyConfig())
+const savedDraft = ref<ExternalTrafficConfig>(emptyConfig())
 const current = computed(() => sources.value.find(source => source.node_id === selectedId.value))
 const canReuseCredential = computed(() => current.value?.has_credential && current.value.config.auth_mode === draft.value.auth_mode)
+const hasUnsavedChanges = computed(() => Boolean(username.value || password.value || bearerToken.value)
+  || (Object.keys(savedDraft.value) as (keyof ExternalTrafficConfig)[])
+    .some(key => draft.value[key] !== savedDraft.value[key]))
+const pendingNodeName = computed(() => props.nodes.find(node => node.id === pendingNodeId.value)?.name)
 
 function selectSource(): void {
-  draft.value = current.value ? { ...current.value.config } : emptyConfig()
+  savedDraft.value = current.value ? { ...current.value.config } : emptyConfig()
+  draft.value = { ...savedDraft.value }
   username.value = ''
   password.value = ''
   bearerToken.value = ''
 }
 
-watch(selectedId, selectSource)
+function switchNode(id: string): void {
+  selectedId.value = id
+  selectSource()
+  error.value = ''
+  success.value = ''
+}
+
+function requestNodeChange(event: Event): void {
+  const select = event.target as HTMLSelectElement
+  const id = select.value
+  // Keep the native control on the active node until a discard is confirmed.
+  select.value = selectedId.value
+  if (id === selectedId.value || busy.value || loading.value)
+    return
+  if (hasUnsavedChanges.value)
+    pendingNodeId.value = id
+  else
+    switchNode(id)
+}
+
+function discardAndSwitch(): void {
+  const id = pendingNodeId.value
+  pendingNodeId.value = null
+  if (id !== null)
+    switchNode(id)
+}
 
 async function load(): Promise<void> {
   loading.value = true
@@ -61,7 +95,10 @@ async function load(): Promise<void> {
     const result = await getSharedApi().get<{ sources: ExternalTrafficSource[], credential_key_ready: boolean }>('admin/traffic-sources')
     sources.value = result.sources
     keyReady.value = result.credential_key_ready
-    selectSource()
+    if (!formLoaded) {
+      selectSource()
+      formLoaded = true
+    }
   }
   catch (cause) { loadError.value = cause instanceof Error ? cause.message : String(cause) }
   finally { loading.value = false }
@@ -71,11 +108,12 @@ const { busy, error, success, run } = useAdminAction(load)
 onMounted(() => void load())
 
 async function save(): Promise<void> {
-  if (!selectedId.value)
+  if (!selectedId.value || loading.value)
     return
+  const config = { ...draft.value }
   await run(async () => {
     await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(selectedId.value)}`, {
-      config: draft.value,
+      config,
       username: username.value,
       password: password.value,
       bearer_token: bearerToken.value,
@@ -83,14 +121,17 @@ async function save(): Promise<void> {
     username.value = ''
     password.value = ''
     bearerToken.value = ''
+    savedDraft.value = config
   }, '已保存；启用后通常在一分钟内首次同步')
 }
 
 async function remove(): Promise<void> {
-  if (!selectedId.value)
+  if (!selectedId.value || loading.value)
     return
   await run(async () => {
     await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(selectedId.value)}/delete`, {})
+    sources.value = sources.value.filter(source => source.node_id !== selectedId.value)
+    selectSource()
     confirmRemove.value = false
   }, '已移除外部流量源')
 }
@@ -126,10 +167,11 @@ const statusText: Record<string, string> = {
       </p>
       <Button type="button" variant="outline" :disabled="loading || busy" @click="load">{{ loading ? '正在刷新…' : '刷新同步状态' }}</Button>
       <label class="grid gap-2 text-sm">关联节点
-        <select v-model="selectedId" class="min-h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring" :disabled="busy || loading">
+        <select ref="nodeSelect" :value="selectedId" class="min-h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring" :disabled="busy || loading" @change="requestNodeChange">
           <option v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</option>
         </select>
       </label>
+      <p v-if="hasUnsavedChanges" role="status" class="text-sm text-muted-foreground">有未保存修改；刷新同步状态不会清空输入。凭据只保留在当前页面内存中。</p>
       <p v-if="!nodes.length" class="text-sm text-muted-foreground">请先注册节点。</p>
       <div v-if="current" class="rounded-md border p-3 text-sm">
         <p>状态：{{ statusText[current.status] ?? current.status }}</p>
@@ -177,11 +219,23 @@ const statusText: Record<string, string> = {
           <label class="grid gap-2 text-sm">周期重置时间路径（可选）<Input v-model="draft.reset_pointer" /></label>
         </fieldset>
         <div class="flex flex-wrap gap-2">
-          <Button type="submit" class="min-h-11" :disabled="busy || !keyReady">{{ busy ? '正在保存…' : '保存外部流量源' }}</Button>
-          <Button v-if="current" type="button" variant="outline" class="min-h-11 text-destructive" :disabled="busy" @click="confirmRemove = true">移除流量源</Button>
+          <Button type="submit" class="min-h-11" :disabled="busy || loading || !keyReady">{{ busy ? '正在保存…' : '保存外部流量源' }}</Button>
+          <Button v-if="current" type="button" variant="outline" class="min-h-11 text-destructive" :disabled="busy || loading" @click="confirmRemove = true">移除流量源</Button>
         </div>
       </form>
     </CardX>
+    <Dialog :open="pendingNodeId !== null" @update:open="value => { if (!value) pendingNodeId = null }">
+      <DialogContent @close-auto-focus="event => { event.preventDefault(); nodeSelect?.focus() }">
+        <DialogHeader>
+          <DialogTitle>放弃未保存修改？</DialogTitle>
+          <DialogDescription>切换到 {{ pendingNodeName }} 会丢弃当前配置草稿及尚未保存的凭据输入，不会保存任何修改。</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" @click="pendingNodeId = null">取消，继续编辑</Button>
+          <Button variant="destructive" @click="discardAndSwitch">放弃修改并切换</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Dialog :open="confirmRemove" @update:open="value => { if (!value && !busy) confirmRemove = false }">
       <DialogContent :show-close="!busy">
         <DialogHeader><DialogTitle>移除外部流量源？</DialogTitle><DialogDescription>将删除此节点的外部流量配置、凭据及快照；Agent 本地流量不会改变。</DialogDescription></DialogHeader>
