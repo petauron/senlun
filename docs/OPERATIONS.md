@@ -60,7 +60,7 @@ The installer creates a dedicated account and mode-0700 state directory, records
 Create an enrollment token locally against the Service database. The JSON response contains an ID, the only display of the token, and its expiry time:
 
 ```bash
-sudo -u senulun env SENULUN_DATABASE_PATH=/var/lib/senulun/senulun.db \
+sudo -u senulun env SENULUN_DATABASE_PATH=/var/lib/senulun/store/senulun.db \
   /usr/local/bin/senulun-service enrollment create --ttl-seconds 600
 ```
 

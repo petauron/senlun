@@ -11,6 +11,7 @@ services:
       SENULUN_ALLOW_PUBLIC_LISTEN: "true"
       SENULUN_DATABASE_PATH: /var/lib/senulun/store/senulun.db
       SENULUN_PUBLIC_URL: ${SENULUN_PUBLIC_URL:?Set the exact browser-facing HTTPS origin}
+      SENULUN_TRUSTED_PROXY_IP: ${SENULUN_TRUSTED_PROXY_IP:-}
       # Optional GitHub OAuth: uncomment these and the two secret entries below together.
       # SENULUN_GITHUB_CLIENT_ID: ${SENULUN_GITHUB_CLIENT_ID}
       # SENULUN_GITHUB_CLIENT_SECRET_FILE: /run/secrets/senulun_github_secret
