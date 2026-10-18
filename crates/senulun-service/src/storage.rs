@@ -43,6 +43,7 @@ pub(crate) enum StorageError {
     RateLimited,
     NotFound,
     InvalidInput(&'static str),
+    Conflict(&'static str),
     Database(rusqlite::Error),
 }
 
@@ -54,7 +55,7 @@ impl Display for StorageError {
             Self::NodeLimit => formatter.write_str("node limit reached"),
             Self::RateLimited => formatter.write_str("snapshot rate limited"),
             Self::NotFound => formatter.write_str("record not found"),
-            Self::InvalidInput(message) => formatter.write_str(message),
+            Self::InvalidInput(message) | Self::Conflict(message) => formatter.write_str(message),
             Self::Database(error) => write!(formatter, "database error: {error}"),
         }
     }
