@@ -178,6 +178,192 @@ fn traffic_counter_decreases_rebaseline_each_direction_without_recounting() {
     assert_eq!(current["nodes"][0]["traffic_used_up"], 150);
     assert_eq!(current["nodes"][0]["traffic_used_down"], 300);
 }
+
+fn browser_traffic_request(
+    storage: &Storage,
+    id: &str,
+    now: u64,
+) -> crate::traffic_correction::BrowserTrafficCorrection {
+    let context = storage.traffic_correction_context(id, now, 90).unwrap();
+    serde_json::from_value(json!({
+        "baseline":context["baseline"],"used_up_bytes":"500","used_down_bytes":"800",
+        "reason":"Correct a synthetic imported baseline"
+    }))
+    .unwrap()
+}
+
+#[test]
+fn browser_traffic_correction_retains_increments_and_fences_replays_and_other_admins() {
+    let (_directory, storage, node) = fixture();
+    let now = unix_time_ms().unwrap();
+    let hash = crate::storage::hash_token(&node.agent_token);
+    storage
+        .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+        .unwrap();
+    let input = browser_traffic_request(&storage, &node.node_id, now);
+    let mut competing = browser_traffic_request(&storage, &node.node_id, now);
+    competing.used_up_bytes = "900".into();
+    storage
+        .ingest(&hash, &sample(now + 1000, 1100, 2200), now + 1000, 7)
+        .unwrap();
+    let result = storage
+        .correct_browser_traffic(&node.node_id, &input, "test-admin", now + 1000, 90)
+        .unwrap();
+    assert_eq!(result["baseline"]["used_up_bytes"], "600");
+    assert_eq!(result["baseline"]["used_down_bytes"], "1000");
+    for request in [&input, &competing] {
+        assert!(matches!(
+            storage.correct_browser_traffic(&node.node_id, request, "other-admin", now + 1000, 90),
+            Err(StorageError::Conflict(_))
+        ));
+    }
+    storage
+        .ingest(&hash, &sample(now + 2000, 1150, 2300), now + 2000, 7)
+        .unwrap();
+    let next = storage
+        .traffic_correction_context(&node.node_id, now + 2000, 90)
+        .unwrap();
+    assert_eq!(next["baseline"]["used_up_bytes"], "650");
+    assert_eq!(next["baseline"]["used_down_bytes"], "1100");
+    let events = storage.audit_events(100).unwrap();
+    let corrections: Vec<_> = events
+        .iter()
+        .filter(|event| event.action == "node.traffic.correct")
+        .collect();
+    assert_eq!(corrections.len(), 1);
+    let evidence: serde_json::Value = serde_json::from_str(&corrections[0].subject).unwrap();
+    assert_eq!(evidence["actor"], "test-admin");
+    assert_eq!(evidence["reason"], input.reason);
+    assert_eq!(evidence["previous_up"], 100);
+    assert_eq!(evidence["used_up"], 600);
+    let db = storage.connection().unwrap();
+    let (raw_up, raw_down): (i64, i64) = db
+        .query_row(
+            "SELECT raw_up,raw_down FROM traffic_periods WHERE node_id=?1",
+            [&node.node_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!((raw_up, raw_down), (1150, 2300));
+    let history_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM snapshots WHERE node_id=?1",
+            [&node.node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(history_count, 3);
+    let options_count: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM node_options WHERE node_id=?1",
+            [&node.node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        options_count, 0,
+        "correction created or changed quota/reset-day settings"
+    );
+}
+
+#[test]
+fn browser_traffic_correction_rejects_reset_counter_decrease_and_period_changes() {
+    for scenario in [
+        "reset",
+        "counter-rebound",
+        "metadata",
+        "cycle",
+        "stale-baseline",
+        "pruned-audit",
+    ] {
+        let (_directory, storage, node) = fixture();
+        let now = unix_time_ms().unwrap();
+        let hash = crate::storage::hash_token(&node.agent_token);
+        storage
+            .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+            .unwrap();
+        let mut input = browser_traffic_request(&storage, &node.node_id, now);
+        let mut later = now + 2000;
+        match scenario {
+            "reset" => storage.reset_traffic(&node.node_id).unwrap(),
+            "counter-rebound" => {
+                storage
+                    .ingest(&hash, &sample(now + 1000, 50, 100), now + 1000, 7)
+                    .unwrap();
+                storage
+                    .ingest(&hash, &sample(later, 1100, 2200), later, 7)
+                    .unwrap();
+            }
+            "metadata" => {
+                let mut options = NodeOptions {
+                    name: "example".into(),
+                    currency: "USD".into(),
+                    traffic_reset_day: 2,
+                    traffic_limit_type: "up".into(),
+                    ..NodeOptions::default()
+                };
+                storage
+                    .save_node_options(&node.node_id, &mut options)
+                    .unwrap();
+            }
+            "cycle" => input.baseline.cycle_start_ms = 0,
+            "stale-baseline" => {
+                later = now + 121_000;
+                storage
+                    .ingest(&hash, &sample(later, 1100, 2200), later, 7)
+                    .unwrap();
+            }
+            "pruned-audit" => input.baseline.audit_cursor = "9223372036854775807".into(),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                storage.correct_browser_traffic(&node.node_id, &input, "test-admin", later, 90),
+                Err(StorageError::Conflict(_))
+            ),
+            "{scenario}"
+        );
+        assert!(
+            !storage
+                .audit_events(100)
+                .unwrap()
+                .iter()
+                .any(|event| event.action == "node.traffic.correct")
+        );
+    }
+}
+
+#[test]
+fn browser_traffic_correction_rejects_offline_overflow_and_rolls_back_audit_failure() {
+    let (_directory, storage, node) = fixture();
+    let now = unix_time_ms().unwrap();
+    let hash = crate::storage::hash_token(&node.agent_token);
+    storage
+        .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+        .unwrap();
+    let mut input = browser_traffic_request(&storage, &node.node_id, now);
+    assert!(matches!(
+        storage.correct_browser_traffic(&node.node_id, &input, "test-admin", now + 91_000, 90),
+        Err(StorageError::Conflict(_))
+    ));
+    input.used_up_bytes = "9223372036854775808".into();
+    assert!(matches!(
+        storage.correct_browser_traffic(&node.node_id, &input, "test-admin", now, 90),
+        Err(StorageError::InvalidInput(_))
+    ));
+    input.used_up_bytes = "500".into();
+    storage.connection().unwrap().execute_batch("CREATE TEMP TRIGGER fail_correction_audit BEFORE INSERT ON main.audit_events WHEN NEW.action='node.traffic.correct' BEGIN SELECT RAISE(ABORT,'synthetic audit failure'); END;").unwrap();
+    assert!(
+        storage
+            .correct_browser_traffic(&node.node_id, &input, "test-admin", now, 90)
+            .is_err()
+    );
+    let result = storage
+        .traffic_correction_context(&node.node_id, now, 90)
+        .unwrap();
+    assert_eq!(result["baseline"]["used_up_bytes"], "0");
+    assert_eq!(result["baseline"]["used_down_bytes"], "0");
+}
 use senulun_protocol::{EnrollmentRequest, PROTOCOL_VERSION, ProbeBatch, ProbeKind, ProbeResult};
 use serde_json::json;
 use tempfile::TempDir;

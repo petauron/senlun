@@ -42,6 +42,7 @@ mod notifications;
 mod session_gate;
 mod storage;
 mod themes;
+mod traffic_correction;
 
 pub use auth::{AuthConfig, GithubOAuthConfig};
 pub use storage::{AuditEvent, EnrollmentRecord, EnrollmentSecret, NodeReportingRecord};
@@ -481,7 +482,7 @@ async fn request_guard(
     // OAuth callback acquires its lease only after external identity verification.
     // Never let an anonymous slow upload hold the exclusive session lease.
     // Retain the original request parts so cookies, Origin, and CSRF are unchanged.
-    let request = if auth_mutation {
+    let mut request = if auth_mutation {
         match buffer_authentication_body(request).await {
             Ok(request) => request,
             Err(response) => return *response,
@@ -521,6 +522,7 @@ async fn request_guard(
                         {
                             return error.into_response();
                         }
+                        request.extensions_mut().insert(session);
                     }
                     Ok(_) => {}
                 }
@@ -1066,6 +1068,10 @@ fn map_storage_error(error: StorageError) -> ApiError {
             message: "record not found".to_owned(),
         },
         StorageError::InvalidInput(message) => ApiError::bad_request(message),
+        StorageError::Conflict(message) => ApiError {
+            status: StatusCode::CONFLICT,
+            message: message.to_owned(),
+        },
         StorageError::Database(error) => {
             tracing::error!(%error, "database operation failed");
             ApiError::unavailable("database operation failed")
@@ -1372,6 +1378,93 @@ mod tests {
             udp_connection_count: None,
             gpus: None,
         }
+    }
+
+    #[tokio::test]
+    async fn local_traffic_correction_requires_admin_origin_csrf_and_fences_replay() {
+        let (_directory, state) = test_state();
+        let (cookie, csrf) = initialize_admin(&state).await;
+        let now = unix_time_ms().unwrap();
+        let token = state.storage.create_enrollment(600, now).unwrap();
+        let node = state
+            .storage
+            .enroll(
+                &EnrollmentRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    node_name: "traffic-fixture".into(),
+                    agent_version: "test".into(),
+                    region: String::new(),
+                    group: String::new(),
+                },
+                &hash_token(&token.token),
+                100,
+                now,
+            )
+            .unwrap();
+        state
+            .storage
+            .ingest(&hash_token(&node.agent_token), &snapshot(), now, 7)
+            .unwrap();
+        let path = format!("/api/admin/nodes/{}/traffic-correction", node.node_id);
+        let anonymous = router(state.clone())
+            .oneshot(Request::builder().uri(&path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        let context = state
+            .storage
+            .traffic_correction_context(&node.node_id, now, 90)
+            .unwrap();
+        let input = json!({"baseline":context["baseline"],"used_up_bytes":"500","used_down_bytes":"800","reason":"Synthetic correction"});
+        let request = |csrf: &str, origin: &str, input: &Value| {
+            Request::builder()
+                .method("POST")
+                .uri(&path)
+                .header(header::COOKIE, &cookie)
+                .header(header::ORIGIN, origin)
+                .header("X-CSRF-Token", csrf)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(input.to_string()))
+                .unwrap()
+        };
+        for (token, origin) in [
+            ("", "http://127.0.0.1:8080"),
+            (csrf.as_str(), "https://example.invalid"),
+        ] {
+            let response = router(state.clone())
+                .oneshot(request(token, origin, &input))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let mut forged = input.clone();
+        forged["actor"] = json!("forged-administrator");
+        let response = router(state.clone())
+            .oneshot(request(&csrf, "http://127.0.0.1:8080", &forged))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let mut floating = input.clone();
+        floating["used_up_bytes"] = json!(1.5);
+        let response = router(state.clone())
+            .oneshot(request(&csrf, "http://127.0.0.1:8080", &floating))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        for expected in [StatusCode::OK, StatusCode::CONFLICT] {
+            let response = router(state.clone())
+                .oneshot(request(&csrf, "http://127.0.0.1:8080", &input))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let events = state.storage.audit_events(10).unwrap();
+        let event = events
+            .iter()
+            .find(|event| event.action == "node.traffic.correct")
+            .unwrap();
+        let evidence: Value = serde_json::from_str(&event.subject).unwrap();
+        assert_eq!(evidence["actor"], "admin");
     }
 
     #[tokio::test]
