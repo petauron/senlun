@@ -12,7 +12,7 @@ const appStore = useAppStore()
 
 const isScrolled = inject<ReturnType<typeof ref<boolean>>>('isScrolled', ref(false))
 
-const siteFavicon = ref('/favicon.ico')
+const siteFavicon = '/senulun-avatar.png'
 
 const actionButtons = computed(() => {
   const buttons = [
