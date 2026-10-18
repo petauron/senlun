@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import type { RouteLocationNormalized } from 'vue-router'
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -20,6 +22,9 @@ const bearerToken = ref('')
 const confirmRemove = ref(false)
 const nodeSelect = ref<HTMLSelectElement | null>(null)
 const pendingNodeId = ref<string | null>(null)
+const pendingLeave = ref(false)
+let resolveLeave: ((leave: boolean) => void) | null = null
+let discardFocusTarget: HTMLElement | null = null
 let formLoaded = false
 
 function emptyConfig(): ExternalTrafficConfig {
@@ -76,18 +81,62 @@ function requestNodeChange(event: Event): void {
   select.value = selectedId.value
   if (id === selectedId.value || busy.value || loading.value)
     return
-  if (hasUnsavedChanges.value)
+  if (hasUnsavedChanges.value) {
+    discardFocusTarget = select
     pendingNodeId.value = id
-  else
+  }
+  else {
     switchNode(id)
+  }
 }
 
-function discardAndSwitch(): void {
+function settleLeave(leave: boolean): void {
+  const resolve = resolveLeave
+  resolveLeave = null
+  pendingLeave.value = false
+  resolve?.(leave)
+}
+
+function cancelDiscard(): void {
+  pendingNodeId.value = null
+  settleLeave(false)
+}
+
+function discardAndContinue(): void {
+  if (pendingLeave.value) {
+    settleLeave(true)
+    return
+  }
   const id = pendingNodeId.value
   pendingNodeId.value = null
   if (id !== null)
     switchNode(id)
 }
+
+function restoreDiscardFocus(event: Event): void {
+  event.preventDefault()
+  if (discardFocusTarget?.isConnected)
+    discardFocusTarget.focus()
+  discardFocusTarget = null
+}
+
+function confirmDeparture(to: RouteLocationNormalized): boolean | Promise<boolean> {
+  if ((to.name === 'admin' && to.query.section === 'traffic') || !hasUnsavedChanges.value)
+    return true
+  if (busy.value)
+    return false
+  // Keep only one pending decision, including repeated browser Back attempts.
+  cancelDiscard()
+  discardFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  pendingLeave.value = true
+  return new Promise<boolean>((resolve) => {
+    resolveLeave = resolve
+  })
+}
+
+onBeforeRouteUpdate(confirmDeparture)
+onBeforeRouteLeave(confirmDeparture)
+onBeforeUnmount(() => settleLeave(false))
 
 async function load(): Promise<void> {
   loading.value = true
@@ -224,15 +273,24 @@ const statusText: Record<string, string> = {
         </div>
       </form>
     </CardX>
-    <Dialog :open="pendingNodeId !== null" @update:open="value => { if (!value) pendingNodeId = null }">
-      <DialogContent @close-auto-focus="event => { event.preventDefault(); nodeSelect?.focus() }">
+    <Dialog :open="pendingNodeId !== null || pendingLeave" @update:open="value => { if (!value) cancelDiscard() }">
+      <DialogContent @close-auto-focus="restoreDiscardFocus">
         <DialogHeader>
           <DialogTitle>放弃未保存修改？</DialogTitle>
-          <DialogDescription>切换到 {{ pendingNodeName }} 会丢弃当前配置草稿及尚未保存的凭据输入，不会保存任何修改。</DialogDescription>
+          <DialogDescription v-if="pendingLeave">
+            离开外部流量栏目会丢弃当前配置草稿及尚未保存的凭据输入，不会保存任何修改。
+          </DialogDescription>
+          <DialogDescription v-else>
+            切换到 {{ pendingNodeName }} 会丢弃当前配置草稿及尚未保存的凭据输入，不会保存任何修改。
+          </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" @click="pendingNodeId = null">取消，继续编辑</Button>
-          <Button variant="destructive" @click="discardAndSwitch">放弃修改并切换</Button>
+          <Button variant="outline" @click="cancelDiscard">
+            取消，继续编辑
+          </Button>
+          <Button variant="destructive" @click="discardAndContinue">
+            {{ pendingLeave ? '放弃修改并离开' : '放弃修改并切换' }}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
