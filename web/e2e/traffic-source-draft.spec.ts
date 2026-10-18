@@ -11,16 +11,32 @@ test('traffic status refresh preserves drafts and credentials until a node switc
     { ...state.nodes[0], id: 'draft-node-b', name: 'Draft node B' },
   ]
   const config: ExternalTrafficConfig = {
-    name: 'Saved source', enabled: false, auth_mode: 'none',
-    traffic_url: 'https://example.invalid/usage', login_url: '', refresh_url: '',
-    username_field: 'email', password_field: 'password', refresh_token_field: 'refresh_token',
-    access_pointer: '/data/access_token', refresh_pointer: '/data/refresh_token',
-    up_pointer: '/up', down_pointer: '/down', used_pointer: '', limit_pointer: '',
-    limit_unit: 'bytes', reset_pointer: '',
+    name: 'Saved source',
+    enabled: false,
+    auth_mode: 'none',
+    traffic_url: 'https://example.invalid/usage',
+    login_url: '',
+    refresh_url: '',
+    username_field: 'email',
+    password_field: 'password',
+    refresh_token_field: 'refresh_token',
+    access_pointer: '/data/access_token',
+    refresh_pointer: '/data/refresh_token',
+    up_pointer: '/up',
+    down_pointer: '/down',
+    used_pointer: '',
+    limit_pointer: '',
+    limit_unit: 'bytes',
+    reset_pointer: '',
   }
   const source: ExternalTrafficSource = {
-    node_id: nodes[0]!.id, config, has_credential: false, snapshot: null,
-    last_attempt_unix_ms: 0, last_success_unix_ms: 0, status: 'pending',
+    node_id: nodes[0]!.id,
+    config,
+    has_credential: false,
+    snapshot: null,
+    last_attempt_unix_ms: 0,
+    last_success_unix_ms: 0,
+    status: 'pending',
   }
   let failRefresh = false
   let failSave = true
@@ -83,8 +99,8 @@ test('traffic status refresh preserves drafts and credentials until a node switc
   await nodeSelect.selectOption(nodes[1]!.id)
   const confirmation = page.getByRole('dialog', { name: '放弃未保存修改？' })
   await expect(confirmation).toContainText('Draft node B')
-  await expect(nodeSelect).toHaveValue(nodes[0]!.id)
   await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(nodeSelect).toHaveValue(nodes[0]!.id)
   await expect(password).toHaveValue('synthetic-password')
   await expect(name).toHaveValue('Unsaved source')
   await nodeSelect.selectOption(nodes[1]!.id)

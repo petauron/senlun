@@ -52,6 +52,7 @@ const hasUnsavedChanges = computed(() => Boolean(username.value || password.valu
   || (Object.keys(savedDraft.value) as (keyof ExternalTrafficConfig)[])
     .some(key => draft.value[key] !== savedDraft.value[key]))
 const pendingNodeName = computed(() => props.nodes.find(node => node.id === pendingNodeId.value)?.name)
+const { busy, error, success, run } = useAdminAction(load)
 
 function selectSource(): void {
   savedDraft.value = current.value ? { ...current.value.config } : emptyConfig()
@@ -104,7 +105,6 @@ async function load(): Promise<void> {
   finally { loading.value = false }
 }
 
-const { busy, error, success, run } = useAdminAction(load)
 onMounted(() => void load())
 
 async function save(): Promise<void> {
