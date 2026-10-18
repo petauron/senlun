@@ -4,6 +4,14 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.25](https://github.com/petauron/senulun/compare/v0.1.0-alpha.24...v0.1.0-alpha.25) (2026-10-18)
+
+
+### Bug Fixes
+
+* **auth:** keep administrator logins valid for thirty days ([0086706](https://github.com/petauron/senulun/commit/00867061eff71777e9e053e8281485dfdf21cf5d))
+* **deploy:** support documented standalone installation ([dfec921](https://github.com/petauron/senulun/commit/dfec92155873c992858248288630487febb71ee5))
+
 ## [0.1.0-alpha.24](https://github.com/petauron/senulun/compare/v0.1.0-alpha.23...v0.1.0-alpha.24) (2026-10-18)
 
 
