@@ -3,7 +3,7 @@ use crate::{
     storage::{Storage, StorageError, unix_time_ms},
 };
 
-fn sample(now: u64, up: u64, down: u64) -> senulun_protocol::SystemSnapshot {
+pub(crate) fn sample(now: u64, up: u64, down: u64) -> senulun_protocol::SystemSnapshot {
     senulun_protocol::SystemSnapshot {
         protocol_version: PROTOCOL_VERSION,
         sample_id: Uuid::new_v4().to_string(),
@@ -183,7 +183,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use uuid::Uuid;
 
-fn fixture() -> (TempDir, Storage, senulun_protocol::EnrollmentResponse) {
+pub(crate) fn fixture() -> (TempDir, Storage, senulun_protocol::EnrollmentResponse) {
     let directory = tempfile::tempdir().unwrap();
     let storage = Storage::open(&directory.path().join("senulun.db"), 64 * 1024 * 1024).unwrap();
     let now = unix_time_ms().unwrap();

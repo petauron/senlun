@@ -474,7 +474,7 @@ impl Storage {
 
     pub(crate) fn prune_before_ingest(
         &self,
-        transaction: &Transaction<'_>,
+        transaction: &Connection,
         now_ms: u64,
         retention_days: u32,
     ) -> Result<bool, StorageError> {
@@ -506,15 +506,15 @@ impl Storage {
         }
     }
 
-    pub(crate) fn ingest(
+    pub(crate) fn ingest_snapshot_tx(
         &self,
+        transaction: &Connection,
         token_hash: &str,
         snapshot: &SystemSnapshot,
         received_at_ms: u64,
         retention_days: u32,
-    ) -> Result<(), StorageError> {
-        let mut connection = self.connection()?;
-        let transaction = connection.transaction()?;
+        allow_prune: bool,
+    ) -> Result<bool, StorageError> {
         let node_id: Option<String> = transaction
             .query_row(
                 "SELECT id FROM nodes
@@ -535,7 +535,7 @@ impl Storage {
             |row| row.get(0),
         )?;
         if duplicate {
-            return Ok(());
+            return Ok(false);
         }
         let received_at = to_i64(received_at_ms)?;
         let previous_received_at: Option<i64> = transaction
@@ -552,13 +552,12 @@ impl Storage {
             return Err(StorageError::RateLimited);
         }
 
-        let pruned = self.prune_before_ingest(&transaction, received_at_ms, retention_days)?;
-        update_node_from_snapshot(&transaction, &node_id, snapshot, received_at)?;
-        insert_snapshot(&transaction, &node_id, snapshot, received_at)?;
-        crate::control::update_traffic(&transaction, &node_id, snapshot, received_at_ms)?;
-        transaction.commit()?;
-        self.record_ingest_prune(pruned, received_at_ms);
-        Ok(())
+        let pruned =
+            allow_prune && self.prune_before_ingest(transaction, received_at_ms, retention_days)?;
+        update_node_from_snapshot(transaction, &node_id, snapshot, received_at)?;
+        insert_snapshot(transaction, &node_id, snapshot, received_at)?;
+        crate::control::update_traffic(transaction, &node_id, snapshot, received_at_ms)?;
+        Ok(pruned)
     }
 
     pub(crate) fn native_nodes(
@@ -673,7 +672,7 @@ impl Storage {
 }
 
 fn update_node_from_snapshot(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     node_id: &str,
     snapshot: &SystemSnapshot,
     received_at: i64,
@@ -715,7 +714,7 @@ fn update_node_from_snapshot(
 }
 
 fn insert_snapshot(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     node_id: &str,
     snapshot: &SystemSnapshot,
     received_at: i64,
@@ -961,7 +960,7 @@ fn history_row(row: &Row<'_>) -> rusqlite::Result<Value> {
 }
 
 fn prune_expired_snapshots(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     received_at_ms: i64,
     retention_days: u32,
     limit: usize,

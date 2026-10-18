@@ -34,6 +34,7 @@ mod control;
 #[cfg(test)]
 mod control_tests;
 mod external_traffic;
+mod ingest;
 mod ip_info;
 mod komari;
 mod luminaplus;
@@ -96,6 +97,7 @@ impl ServiceConfig {
 pub struct AppState {
     storage: Arc<Storage>,
     database_permit: Arc<Semaphore>,
+    ingest: Arc<tokio::sync::OnceCell<ingest::Ingestor>>,
     request_permits: Arc<Semaphore>,
     enrollment_attempts: Arc<Mutex<VecDeque<Instant>>>,
     retention_days: u32,
@@ -141,6 +143,7 @@ impl AppState {
         Ok(Self {
             storage: Arc::new(storage),
             database_permit: Arc::new(Semaphore::new(1)),
+            ingest: Arc::new(tokio::sync::OnceCell::new()),
             request_permits: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             enrollment_attempts: Arc::new(Mutex::new(VecDeque::new())),
             retention_days: config.retention_days,
@@ -175,6 +178,20 @@ impl AppState {
             }
             tokio::task::yield_now().await;
         }
+    }
+
+    async fn submit_ingest(&self, input: ingest::Input) -> Result<(), ApiError> {
+        self.ingest
+            .get_or_init(|| async {
+                ingest::Ingestor::start(
+                    Arc::clone(&self.storage),
+                    Arc::clone(&self.database_permit),
+                    self.retention_days,
+                )
+            })
+            .await
+            .submit(input)
+            .await
     }
 
     async fn database<T, F>(&self, operation: F) -> Result<T, ApiError>
@@ -609,10 +626,11 @@ async fn ingest_snapshot(
     let token_hash = hash_token(bearer_token(&headers)?);
     let received_at = current_time()?;
     let clock_skew_ms = signed_difference(received_at, snapshot.collected_at_unix_ms);
-    let retention_days = state.retention_days;
     state
-        .database(move |storage| {
-            storage.ingest(&token_hash, &snapshot, received_at, retention_days)
+        .submit_ingest(ingest::Input::Snapshot {
+            token_hash,
+            snapshot: Box::new(snapshot),
+            received_at,
         })
         .await?;
     Ok(Json(SnapshotResponse {
@@ -1008,7 +1026,7 @@ async fn load_records(
     })))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct ApiError {
     #[serde(skip)]
     status: StatusCode,

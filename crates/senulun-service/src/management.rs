@@ -145,9 +145,12 @@ pub(crate) async fn agent_probes(
 ) -> Result<Json<Value>, ApiError> {
     let token = bearer_token(&headers)?.to_owned();
     let now = current_time()?;
-    let retention = state.retention_days;
     state
-        .database(move |storage| storage.ingest_probes(&token, &batch, now, retention))
+        .submit_ingest(crate::ingest::Input::Probes {
+            token,
+            batch,
+            received_at: now,
+        })
         .await?;
     Ok(Json(json!({"accepted":true})))
 }
