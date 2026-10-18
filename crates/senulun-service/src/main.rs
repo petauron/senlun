@@ -67,6 +67,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     config.max_database_bytes = max_database_bytes;
     config.auth = senulun_service::AuthConfig::from_env()?;
     config.traffic_key_file = env::var_os("SENULUN_TRAFFIC_KEY_FILE").map(PathBuf::from);
+    config.trusted_proxy_ip = env::var("SENULUN_TRUSTED_PROXY_IP")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.parse())
+        .transpose()?;
     let state = AppState::open(&config)?;
     let listener = TcpListener::bind(listen_address).await?;
     let maintenance = tokio::spawn(retention_maintenance(state.clone()));
