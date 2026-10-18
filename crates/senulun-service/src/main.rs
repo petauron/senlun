@@ -77,23 +77,41 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let maintenance = tokio::spawn(retention_maintenance(state.clone()));
     let alerts = tokio::spawn(alert_maintenance(state.clone()));
     let external_traffic = tokio::spawn(external_traffic_maintenance(state.clone()));
+    let minutes = tokio::spawn(minute_maintenance(state.clone()));
 
     tracing::info!(address = %listen_address, "Senulun Service listening");
     let serve_result = axum::serve(
         listener,
-        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        router(state.clone()).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await;
     maintenance.abort();
     alerts.abort();
     external_traffic.abort();
+    minutes.abort();
     let _ = maintenance.await;
     let _ = alerts.await;
     let _ = external_traffic.await;
+    let _ = minutes.await;
     serve_result?;
+    state
+        .flush_monitoring(true)
+        .await
+        .map_err(std::io::Error::other)?;
     tracing::info!("Senulun Service stopped cleanly");
     Ok(())
+}
+
+async fn minute_maintenance(state: AppState) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(3));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        if let Err(error) = state.flush_monitoring(false).await {
+            tracing::error!(%error,"monitoring minute flush failed");
+        }
+    }
 }
 
 async fn external_traffic_maintenance(state: AppState) {
@@ -125,7 +143,7 @@ async fn retention_maintenance(state: AppState) {
         ticker.tick().await;
         match state.maintain_retention().await {
             Ok(removed) if removed > 0 => {
-                tracing::info!(removed, "expired monitoring snapshots pruned");
+                tracing::info!(removed, "expired monitoring rows pruned");
             }
             Ok(_) => {}
             Err(error) => {

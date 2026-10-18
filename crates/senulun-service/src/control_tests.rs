@@ -52,24 +52,24 @@ fn billing_deltas_reset_and_extended_history_survive_new_snapshots() {
     let now = unix_time_ms().unwrap();
     let token_hash = crate::storage::hash_token(&node.agent_token);
     storage
-        .ingest(&token_hash, &sample(now, 1000, 2000), now, 7)
+        .ingest(&token_hash, &sample(now, 1000, 2000), now)
         .unwrap();
     storage
-        .ingest(&token_hash, &sample(now + 2000, 1100, 2200), now + 2000, 7)
+        .ingest(&token_hash, &sample(now + 2000, 1100, 2200), now + 2000)
         .unwrap();
     let current = storage.admin_state().unwrap();
     assert_eq!(current["nodes"][0]["traffic_used_up"], 100);
     assert_eq!(current["nodes"][0]["traffic_used_down"], 200);
     storage.reset_traffic(&node.node_id).unwrap();
     storage
-        .ingest(&token_hash, &sample(now + 4000, 1150, 2300), now + 4000, 7)
+        .ingest(&token_hash, &sample(now + 4000, 1150, 2300), now + 4000)
         .unwrap();
     assert_eq!(
         storage.admin_state().unwrap()["nodes"][0]["traffic_used_up"],
         50
     );
     storage
-        .ingest(&token_hash, &sample(now + 6000, 20, 30), now + 6000, 7)
+        .ingest(&token_hash, &sample(now + 6000, 20, 30), now + 6000)
         .unwrap();
     assert_eq!(
         storage.admin_state().unwrap()["nodes"][0]["traffic_used_up"],
@@ -91,7 +91,7 @@ fn traffic_correction_preserves_deltas_and_rejects_stale_baselines() {
     let now = unix_time_ms().unwrap();
     let hash = crate::storage::hash_token(&node.agent_token);
     storage
-        .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+        .ingest(&hash, &sample(now, 1000, 2000), now)
         .unwrap();
     let mut correction = crate::control::TrafficCorrection {
         cycle_start_ms: crate::control::period_start(now, 1),
@@ -102,7 +102,7 @@ fn traffic_correction_preserves_deltas_and_rejects_stale_baselines() {
         used_down: 800,
     };
     storage
-        .ingest(&hash, &sample(now + 1000, 1100, 2200), now + 1000, 7)
+        .ingest(&hash, &sample(now + 1000, 1100, 2200), now + 1000)
         .unwrap();
     storage
         .correct_traffic(&node.node_id, &correction, now + 1000)
@@ -114,7 +114,7 @@ fn traffic_correction_preserves_deltas_and_rejects_stale_baselines() {
     assert_eq!(state["nodes"][0]["traffic_used_up"], 600);
     assert_eq!(state["nodes"][0]["traffic_used_down"], 1000);
     storage
-        .ingest(&hash, &sample(now + 2000, 1150, 2300), now + 2000, 7)
+        .ingest(&hash, &sample(now + 2000, 1150, 2300), now + 2000)
         .unwrap();
     assert_eq!(
         storage.admin_state().unwrap()["nodes"][0]["traffic_used_up"],
@@ -166,12 +166,7 @@ fn traffic_counter_decreases_rebaseline_each_direction_without_recounting() {
         (6000, 15, 30),
     ] {
         storage
-            .ingest(
-                &token_hash,
-                &sample(now + offset, up, down),
-                now + offset,
-                7,
-            )
+            .ingest(&token_hash, &sample(now + offset, up, down), now + offset)
             .unwrap();
     }
     let current = storage.admin_state().unwrap();
@@ -198,13 +193,13 @@ fn browser_traffic_correction_retains_increments_and_fences_replays_and_other_ad
     let now = unix_time_ms().unwrap();
     let hash = crate::storage::hash_token(&node.agent_token);
     storage
-        .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+        .ingest(&hash, &sample(now, 1000, 2000), now)
         .unwrap();
     let input = browser_traffic_request(&storage, &node.node_id, now);
     let mut competing = browser_traffic_request(&storage, &node.node_id, now);
     competing.used_up_bytes = "900".into();
     storage
-        .ingest(&hash, &sample(now + 1000, 1100, 2200), now + 1000, 7)
+        .ingest(&hash, &sample(now + 1000, 1100, 2200), now + 1000)
         .unwrap();
     let result = storage
         .correct_browser_traffic(&node.node_id, &input, "test-admin", now + 1000, 90)
@@ -218,7 +213,7 @@ fn browser_traffic_correction_retains_increments_and_fences_replays_and_other_ad
         ));
     }
     storage
-        .ingest(&hash, &sample(now + 2000, 1150, 2300), now + 2000, 7)
+        .ingest(&hash, &sample(now + 2000, 1150, 2300), now + 2000)
         .unwrap();
     let next = storage
         .traffic_correction_context(&node.node_id, now + 2000, 90)
@@ -280,7 +275,7 @@ fn browser_traffic_correction_rejects_reset_counter_decrease_and_period_changes(
         let now = unix_time_ms().unwrap();
         let hash = crate::storage::hash_token(&node.agent_token);
         storage
-            .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+            .ingest(&hash, &sample(now, 1000, 2000), now)
             .unwrap();
         let mut input = browser_traffic_request(&storage, &node.node_id, now);
         let mut later = now + 2000;
@@ -288,10 +283,10 @@ fn browser_traffic_correction_rejects_reset_counter_decrease_and_period_changes(
             "reset" => storage.reset_traffic(&node.node_id).unwrap(),
             "counter-rebound" => {
                 storage
-                    .ingest(&hash, &sample(now + 1000, 50, 100), now + 1000, 7)
+                    .ingest(&hash, &sample(now + 1000, 50, 100), now + 1000)
                     .unwrap();
                 storage
-                    .ingest(&hash, &sample(later, 1100, 2200), later, 7)
+                    .ingest(&hash, &sample(later, 1100, 2200), later)
                     .unwrap();
             }
             "metadata" => {
@@ -310,7 +305,7 @@ fn browser_traffic_correction_rejects_reset_counter_decrease_and_period_changes(
             "stale-baseline" => {
                 later = now + 121_000;
                 storage
-                    .ingest(&hash, &sample(later, 1100, 2200), later, 7)
+                    .ingest(&hash, &sample(later, 1100, 2200), later)
                     .unwrap();
             }
             "pruned-audit" => input.baseline.audit_cursor = "9223372036854775807".into(),
@@ -339,7 +334,7 @@ fn browser_traffic_correction_rejects_offline_overflow_and_rolls_back_audit_fail
     let now = unix_time_ms().unwrap();
     let hash = crate::storage::hash_token(&node.agent_token);
     storage
-        .ingest(&hash, &sample(now, 1000, 2000), now, 7)
+        .ingest(&hash, &sample(now, 1000, 2000), now)
         .unwrap();
     let mut input = browser_traffic_request(&storage, &node.node_id, now);
     assert!(matches!(
@@ -470,18 +465,18 @@ fn probes_are_assigned_idempotent_bounded_and_revocable() {
         }],
     };
     storage
-        .ingest_probes(&node.agent_token, &batch, now, 7)
+        .ingest_probes(&node.agent_token, &batch, now)
         .unwrap();
     storage
-        .ingest_probes(&node.agent_token, &batch, now, 7)
+        .ingest_probes(&node.agent_token, &batch, now)
         .unwrap();
     batch.results[0].sample_id = Uuid::new_v4().to_string();
     storage
-        .ingest_probes(&node.agent_token, &batch, now + 100, 7)
+        .ingest_probes(&node.agent_token, &batch, now + 100)
         .unwrap();
     batch.results[0].sample_id = Uuid::new_v4().to_string();
     assert!(matches!(
-        storage.ingest_probes(&node.agent_token, &batch, now + 200, 7),
+        storage.ingest_probes(&node.agent_token, &batch, now + 200),
         Err(StorageError::RateLimited)
     ));
     let history = storage
@@ -533,7 +528,7 @@ fn probes_are_assigned_idempotent_bounded_and_revocable() {
         Err(StorageError::Unauthorized)
     ));
     assert!(matches!(
-        storage.ingest_probes(&node.agent_token, &batch, now + 10000, 7),
+        storage.ingest_probes(&node.agent_token, &batch, now + 10000),
         Err(StorageError::Unauthorized)
     ));
 }
@@ -566,12 +561,13 @@ fn probe_history_statistics_cover_samples_outside_chart_limit() {
                 Some(10.0)
             };
             tx.execute(
-                "INSERT INTO metrics.probe_results (node_id,task_id,sample_id,collected_at_ms,received_at_ms,latency_ms,success,error) VALUES (?1,?2,?3,?4,?4,?5,?6,NULL)",
-                rusqlite::params![node.node_id, task.id, index.to_string(), i64::try_from(now).unwrap() - 3_003 + index * 3, latency, latency.is_some()],
+                "INSERT INTO hot.probe_results (node_id,task_id,sample_id,collected_at_ms,received_at_ms,latency_ms,success,error) VALUES (?1,?2,?3,?4,?4,?5,?6,NULL)",
+                rusqlite::params![node.node_id, task.id, index.to_string(), i64::try_from(now).unwrap() - 3_003_000 + index * 3_000, latency, latency.is_some()],
             ).unwrap();
         }
         tx.commit().unwrap();
     }
+    storage.flush_monitoring(now, false).unwrap();
     let history = storage.probe_history(&node.node_id, None, 1, now).unwrap();
     let summary = &history["summary"][0];
     let recent = history["records"].as_array().unwrap();

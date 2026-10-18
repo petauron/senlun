@@ -7,27 +7,33 @@ use std::path::{Path, PathBuf};
 
 fn schema_four_fixture(directory: &Path, title: &str) -> PathBuf {
     let path = directory.join("senulun.db");
-    let storage = Storage::open(&path, 64 * 1024 * 1024).unwrap();
-    let db = storage.connection().unwrap();
-    // Schema 5 only updates one setting. The schema-4 shape is identical.
+    let (_fixture, source, db) = crate::storage::version_six_store();
+    drop(db);
+    std::fs::copy(&source, &path).unwrap();
+    std::fs::copy(
+        source.with_file_name("senulun.metrics.db"),
+        directory.join("senulun.metrics.db"),
+    )
+    .unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute(
+        "ATTACH DATABASE ?1 AS metrics",
+        [directory.join("senulun.metrics.db").to_str().unwrap()],
+    )
+    .unwrap();
+    // Build the released v4 shape from the immutable split-schema fixture,
+    // rather than relabelling the latest schema as an older version.
     db.execute(
         "UPDATE monitoring_settings SET data=json_set(data,'$.site_name',?1,'$.private_site',json('false'))",
         [title],
     )
     .unwrap();
     db.execute_batch(
-        "INSERT INTO nodes(id,token_hash,name,agent_version,created_at_ms,updated_at_ms)
-         VALUES('node-a','credential-hash','example','test',10,20);
-         INSERT INTO metrics.traffic_periods VALUES('node-a',0,800,700,80,70);
-         INSERT INTO auth_admin(id,username,password_hash,auth_version,totp_secret)
-         VALUES(1,'admin','test-password-hash',2,X'0102');
-         INSERT INTO auth_sessions VALUES('test-session-hash',1,2,10,999999,1);
-         DROP TABLE external_traffic_sources;
+        "DROP TABLE external_traffic_sources;
          PRAGMA main.user_version=4;",
     )
     .unwrap();
     drop(db);
-    drop(storage);
     path
 }
 

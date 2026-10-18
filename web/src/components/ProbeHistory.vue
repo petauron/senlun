@@ -461,6 +461,9 @@ function exportPng(): void {
       </div>
       <Empty v-else-if="!loading && (!data || !tasks.length)" description="暂无延迟数据" />
       <template v-else-if="data && tasks.length">
+        <p v-if="data.history_resolution_ms" class="text-xs text-muted-foreground">
+          较早历史按分钟汇总，峰值、失败次数和延迟分位数保留。
+        </p>
         <section aria-label="延迟数据分析" class="flex flex-col gap-3">
           <div class="flex flex-wrap items-center justify-between gap-2">
             <h3 class="text-sm font-semibold">
@@ -621,7 +624,13 @@ function exportPng(): void {
                   </td><td class="p-2">
                     {{ names.get(record.task_id) ?? record.task_id }}
                   </td><td class="p-2" :class="record.success ? '' : 'text-destructive'">
-                    {{ record.success ? latency(record.latency_ms) : `失败：${record.error || '无响应'}` }}
+                    <template v-if="record.aggregated">
+                      <span class="block">分钟汇总 · {{ record.samples }} 次，失败 {{ record.failed_samples }} 次</span>
+                      <span class="text-xs text-muted-foreground">平均延迟 {{ latency(record.latency_ms) }}</span>
+                    </template>
+                    <template v-else>
+                      {{ record.success ? latency(record.latency_ms) : `失败：${record.error || '无响应'}` }}
+                    </template>
                   </td>
                 </tr>
               </tbody>

@@ -4,10 +4,7 @@ use std::{
     fmt::{self, Display, Formatter},
     fs::{self, OpenOptions},
     path::{Path, PathBuf},
-    sync::{
-        Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Mutex, MutexGuard},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -20,10 +17,12 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 mod metrics;
+#[cfg(test)]
+pub(crate) use metrics::tests::version_six_store;
+pub(crate) mod rollups;
 
-pub(crate) const SCHEMA_VERSION: i64 = 6;
+pub(crate) const SCHEMA_VERSION: i64 = 7;
 const MIN_SNAPSHOT_SPACING_MS: i64 = 950;
-const INGEST_PRUNE_INTERVAL_MS: u64 = 60_000;
 pub(crate) const RETENTION_PRUNE_BATCH_SIZE: usize = 10_000;
 
 /// Service-local evidence for the currently authenticated monitoring credential.
@@ -79,7 +78,6 @@ impl From<rusqlite::Error> for StorageError {
 pub(crate) struct Storage {
     connection: Mutex<Connection>,
     path: PathBuf,
-    next_prune_at_ms: AtomicU64,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,13 +180,14 @@ impl Storage {
                     );",
                 )?;
             }
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
+            rollups::migrate(&mut connection)?;
         }
+        rollups::initialize_hot(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             path: path.to_path_buf(),
-            next_prune_at_ms: AtomicU64::new(0),
         })
     }
 
@@ -451,6 +450,9 @@ impl Storage {
         let mut connection = self
             .connection()
             .map_err(|error| -> Box<dyn Error + Send + Sync> { Box::new(error) })?;
+        let tx = connection.transaction()?;
+        rollups::flush(&tx, unix_time_ms()?, true)?;
+        tx.commit()?;
         metrics::backup(&mut connection, &self.path)
     }
 
@@ -461,61 +463,45 @@ impl Storage {
     ) -> Result<usize, StorageError> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
-        let removed = prune_expired_snapshots(
-            &transaction,
-            to_i64(now_ms)?,
-            retention_days,
-            RETENTION_PRUNE_BATCH_SIZE,
+        let cutoff = to_i64(now_ms.saturating_sub(u64::from(retention_days) * 86_400_000))?;
+        let hot_snapshots = transaction.execute(
+            "DELETE FROM hot.snapshots WHERE received_at_ms<?1",
+            [cutoff],
         )?;
-        let probe_removed=transaction.execute("DELETE FROM probe_results WHERE id IN (SELECT id FROM probe_results WHERE received_at_ms<?1 ORDER BY received_at_ms LIMIT 10000)",
-            [to_i64(now_ms.saturating_sub(u64::from(retention_days)*86_400_000))?])?;
+        let hot_probes = transaction.execute(
+            "DELETE FROM hot.probe_results WHERE received_at_ms<?1",
+            [cutoff],
+        )?;
+        let removed=transaction.execute("DELETE FROM snapshot_minutes WHERE id IN
+            (SELECT id FROM snapshot_minutes WHERE bucket_ms+60000<=?1 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
+        let probe_removed=transaction.execute("DELETE FROM probe_minutes WHERE id IN
+            (SELECT id FROM probe_minutes WHERE bucket_ms+60000<=?1 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
+        rollups::flush(&transaction, now_ms, false)?;
         transaction.commit()?;
-        Ok(removed.saturating_add(probe_removed))
+        Ok(removed
+            .saturating_add(probe_removed)
+            .saturating_add(hot_snapshots)
+            .saturating_add(hot_probes))
     }
 
-    pub(crate) fn prune_before_ingest(
+    pub(crate) fn flush_monitoring(
         &self,
-        transaction: &Connection,
         now_ms: u64,
-        retention_days: u32,
-    ) -> Result<bool, StorageError> {
-        if now_ms < self.next_prune_at_ms.load(Ordering::Relaxed) {
-            return Ok(false);
-        }
-        prune_expired_snapshots(
-            transaction,
-            to_i64(now_ms)?,
-            retention_days,
-            RETENTION_PRUNE_BATCH_SIZE,
-        )?;
-        transaction.execute(
-            "DELETE FROM probe_results WHERE id IN (SELECT id FROM probe_results
-             WHERE received_at_ms<?1 ORDER BY received_at_ms LIMIT 10000)",
-            [to_i64(
-                now_ms.saturating_sub(u64::from(retention_days) * 86_400_000),
-            )?],
-        )?;
-        Ok(true)
-    }
-
-    pub(crate) fn record_ingest_prune(&self, pruned: bool, now_ms: u64) {
-        if pruned {
-            self.next_prune_at_ms.store(
-                now_ms.saturating_add(INGEST_PRUNE_INTERVAL_MS),
-                Ordering::Relaxed,
-            );
-        }
+        include_open: bool,
+    ) -> Result<(), StorageError> {
+        let mut connection = self.connection()?;
+        let tx = connection.transaction()?;
+        rollups::flush(&tx, now_ms, include_open)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub(crate) fn ingest_snapshot_tx(
-        &self,
         transaction: &Connection,
         token_hash: &str,
         snapshot: &SystemSnapshot,
         received_at_ms: u64,
-        retention_days: u32,
-        allow_prune: bool,
-    ) -> Result<bool, StorageError> {
+    ) -> Result<(), StorageError> {
         let node_id: Option<String> = transaction
             .query_row(
                 "SELECT id FROM nodes
@@ -529,20 +515,20 @@ impl Storage {
         };
 
         let duplicate: bool = transaction.query_row(
-            "SELECT EXISTS(
-                SELECT 1 FROM snapshots WHERE node_id = ?1 AND sample_id = ?2
-             )",
-            params![node_id, snapshot.sample_id],
+            "SELECT EXISTS(SELECT 1 FROM snapshots WHERE node_id=?1 AND sample_id=?2)
+             OR EXISTS(SELECT 1 FROM node_state WHERE node_id=?1 AND last_sample_id=?2)
+             OR EXISTS(SELECT 1 FROM snapshot_minutes m,json_each(m.data,'$.recent_ids') i
+                WHERE m.node_id=?1 AND m.dedup_until_ms>?3 AND m.bucket_ms>=?3-660000 AND i.value=?2)",
+            params![node_id, snapshot.sample_id,to_i64(received_at_ms)?],
             |row| row.get(0),
         )?;
         if duplicate {
-            return Ok(false);
+            return Ok(());
         }
         let received_at = to_i64(received_at_ms)?;
         let previous_received_at: Option<i64> = transaction
             .query_row(
-                "SELECT received_at_ms FROM snapshots WHERE node_id = ?1
-                 ORDER BY received_at_ms DESC LIMIT 1",
+                "SELECT last_seen_at_ms FROM node_state WHERE node_id = ?1",
                 params![node_id],
                 |row| row.get(0),
             )
@@ -552,13 +538,23 @@ impl Storage {
         {
             return Err(StorageError::RateLimited);
         }
+        let bucket = received_at / 60_000 * 60_000;
+        let in_bucket: i64 = transaction.query_row(
+            "SELECT
+            coalesce((SELECT sum(samples) FROM (SELECT samples FROM snapshot_minutes WHERE node_id=?1 AND bucket_ms=?2 LIMIT 65)),0)+
+            (SELECT count(*) FROM hot.snapshots WHERE node_id=?1 AND received_at_ms>=?2
+                AND received_at_ms<?2+60000 AND persisted=0)",
+            params![node_id, bucket],
+            |r| r.get(0),
+        )?;
+        if in_bucket >= 64 {
+            return Err(StorageError::RateLimited);
+        }
 
-        let pruned =
-            allow_prune && self.prune_before_ingest(transaction, received_at_ms, retention_days)?;
         update_node_from_snapshot(transaction, &node_id, snapshot, received_at)?;
         insert_snapshot(transaction, &node_id, snapshot, received_at)?;
         crate::control::update_traffic(transaction, &node_id, snapshot, received_at_ms)?;
-        Ok(pruned)
+        Ok(())
     }
 
     pub(crate) fn native_nodes(
@@ -630,45 +626,7 @@ impl Storage {
         if !crate::control::visible(&connection, node_id)? {
             return Err(StorageError::NotFound);
         }
-        let bounds: (i64, Option<i64>, Option<i64>) = connection.query_row(
-            "SELECT COUNT(*), MIN(received_at_ms), MAX(received_at_ms)
-             FROM snapshots
-             WHERE node_id = ?1 AND received_at_ms BETWEEN ?2 AND ?3",
-            params![node_id, to_i64(requested_start)?, to_i64(requested_end)?],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        let source_points = from_i64(bounds.0);
-        let downsampled = source_points > u64::from(limit);
-        let span = requested_end
-            .saturating_sub(requested_start)
-            .saturating_add(1);
-        let bucket_ms = if downsampled {
-            span.div_ceil(u64::from(limit)).max(1)
-        } else {
-            0
-        };
-        let records = if downsampled {
-            query_aggregate_history(
-                &connection,
-                node_id,
-                requested_start,
-                requested_end,
-                bucket_ms,
-            )?
-        } else {
-            query_raw_history(&connection, node_id, requested_start, requested_end)?
-        };
-        let coverage = HistoryCoverage {
-            requested_start_unix_ms: requested_start,
-            requested_end_unix_ms: requested_end,
-            actual_start_unix_ms: bounds.1.map(from_i64),
-            actual_end_unix_ms: bounds.2.map(from_i64),
-            source_points,
-            returned_points: records.len(),
-            bucket_ms,
-            downsampled,
-        };
-        Ok(HistorySeries { records, coverage })
+        rollups::history(&connection, node_id, requested_start, requested_end, limit)
     }
 }
 
@@ -761,10 +719,10 @@ fn insert_snapshot(
         ])?;
     transaction
         .prepare_cached(
-            "INSERT INTO node_state(node_id,last_seen_at_ms) VALUES(?1,?2)
-         ON CONFLICT(node_id) DO UPDATE SET last_seen_at_ms=excluded.last_seen_at_ms",
+            "INSERT INTO node_state(node_id,last_seen_at_ms,last_sample_id) VALUES(?1,?2,?3)
+         ON CONFLICT(node_id) DO UPDATE SET last_seen_at_ms=excluded.last_seen_at_ms,last_sample_id=excluded.last_sample_id",
         )?
-        .execute(params![node_id, received_at])?;
+        .execute(params![node_id, received_at, snapshot.sample_id])?;
     Ok(())
 }
 
@@ -856,72 +814,43 @@ fn query_latest_statuses(
             online: now.saturating_sub(last_seen_at_ms) <= offline_after_ms,
         })
     })?;
-    let statuses = rows.collect::<Result<Vec<_>, _>>()?;
+    let mut statuses = rows.collect::<Result<Vec<_>, _>>()?;
+    for (summary, last_seen) in rollups::latest_minutes(connection)? {
+        let value = summary.last;
+        let integer = |key: &str| value[key].as_u64().unwrap_or(0);
+        let number = |key: &str| value[key].as_f64().unwrap_or(0.0);
+        statuses.push(DashboardStatus {
+            node_id: value["client"].as_str().unwrap_or_default().to_owned(),
+            received_at_ms: summary.last_received,
+            collected_at_ms: summary.last_received.saturating_add_signed(
+                value["clock_skew_ms"]
+                    .as_i64()
+                    .unwrap_or(0)
+                    .saturating_neg(),
+            ),
+            uptime_seconds: integer("uptime"),
+            cpu_usage_percent: number("cpu"),
+            load_one: number("load"),
+            load_five: number("load5"),
+            load_fifteen: number("load15"),
+            memory_total_bytes: integer("ram_total"),
+            memory_used_bytes: integer("ram"),
+            swap_total_bytes: integer("swap_total"),
+            swap_used_bytes: integer("swap"),
+            disk_total_bytes: integer("disk_total"),
+            disk_used_bytes: integer("disk"),
+            network_receive_bytes_per_second: integer("net_in"),
+            network_transmit_bytes_per_second: integer("net_out"),
+            network_total_received_bytes: integer("net_total_down"),
+            network_total_transmitted_bytes: integer("net_total_up"),
+            process_count: value["process"].as_u64(),
+            online: last_seen.is_some_and(|seen| now.saturating_sub(seen) <= offline_after_ms),
+        });
+    }
     Ok(statuses
         .into_iter()
         .map(|status| (status.node_id.clone(), status))
         .collect())
-}
-
-fn query_raw_history(
-    connection: &Connection,
-    node_id: &str,
-    start_ms: u64,
-    end_ms: u64,
-) -> Result<Vec<Value>, StorageError> {
-    let mut statement = connection.prepare(
-        "SELECT node_id, received_at_ms, collected_at_ms, cpu_usage_percent,
-                memory_used_bytes, memory_total_bytes, swap_used_bytes, swap_total_bytes,
-                load_one, load_five, load_fifteen, disk_used_bytes, disk_total_bytes,
-                network_receive_bytes_per_second, network_transmit_bytes_per_second,
-                network_total_received_bytes, network_total_transmitted_bytes, process_count, extensions
-         FROM snapshots
-         WHERE node_id = ?1 AND received_at_ms BETWEEN ?2 AND ?3
-         ORDER BY received_at_ms ASC, id ASC",
-    )?;
-    let rows = statement.query_map(
-        params![node_id, to_i64(start_ms)?, to_i64(end_ms)?],
-        history_row,
-    )?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-}
-
-fn query_aggregate_history(
-    connection: &Connection,
-    node_id: &str,
-    start_ms: u64,
-    end_ms: u64,
-    bucket_ms: u64,
-) -> Result<Vec<Value>, StorageError> {
-    let mut statement = connection.prepare(
-        "SELECT MIN(node_id), MAX(received_at_ms), CAST(AVG(collected_at_ms) AS INTEGER),
-                AVG(cpu_usage_percent), CAST(AVG(memory_used_bytes) AS INTEGER),
-                MAX(memory_total_bytes), CAST(AVG(swap_used_bytes) AS INTEGER),
-                MAX(swap_total_bytes), AVG(load_one), AVG(load_five), AVG(load_fifteen),
-                CAST(AVG(disk_used_bytes) AS INTEGER), MAX(disk_total_bytes),
-                CAST(AVG(network_receive_bytes_per_second) AS INTEGER),
-                CAST(AVG(network_transmit_bytes_per_second) AS INTEGER),
-                MAX(network_total_received_bytes), MAX(network_total_transmitted_bytes),
-                CAST(AVG(process_count) AS INTEGER),
-                json_object('tcp_connection_count',AVG(json_extract(extensions,'$.tcp_connection_count')),
-                    'udp_connection_count',AVG(json_extract(extensions,'$.udp_connection_count')),
-                    'gpu',AVG((SELECT AVG(json_extract(value,'$.usage_percent')) FROM json_each(snapshots.extensions,'$.gpus'))),
-                    'temp',MAX((SELECT MAX(json_extract(value,'$.temperature_celsius')) FROM json_each(snapshots.extensions,'$.gpus'))))
-         FROM snapshots
-         WHERE node_id = ?1 AND received_at_ms BETWEEN ?2 AND ?3
-         GROUP BY ((received_at_ms - ?2) / ?4)
-         ORDER BY MAX(received_at_ms) ASC",
-    )?;
-    let rows = statement.query_map(
-        params![
-            node_id,
-            to_i64(start_ms)?,
-            to_i64(end_ms)?,
-            to_i64(bucket_ms)?
-        ],
-        history_row,
-    )?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
 }
 
 fn history_row(row: &Row<'_>) -> rusqlite::Result<Value> {
@@ -957,29 +886,9 @@ fn history_row(row: &Row<'_>) -> rusqlite::Result<Value> {
         rusqlite::Error::FromSqlConversionFailure(18, rusqlite::types::Type::Text, Box::new(e))
     })?;
     crate::control::apply_extensions(&data, &mut value);
+    value["extensions"] = data;
+    value["uptime"] = json!(from_i64(row.get(19)?));
     Ok(value)
-}
-
-fn prune_expired_snapshots(
-    transaction: &Connection,
-    received_at_ms: i64,
-    retention_days: u32,
-    limit: usize,
-) -> rusqlite::Result<usize> {
-    let retention_ms = i64::from(retention_days) * 24 * 60 * 60 * 1_000;
-    transaction.execute(
-        "DELETE FROM snapshots
-         WHERE id IN (
-            SELECT id FROM snapshots
-            WHERE received_at_ms < ?1
-            ORDER BY received_at_ms ASC
-            LIMIT ?2
-         )",
-        params![
-            received_at_ms.saturating_sub(retention_ms),
-            i64::try_from(limit).unwrap_or(i64::MAX)
-        ],
-    )
 }
 
 fn migrate(connection: &mut Connection, from_version: i64) -> rusqlite::Result<()> {
@@ -1533,7 +1442,6 @@ mod tests {
                 &hash_token(&original.agent_token),
                 &sample(Uuid::new_v4().to_string(), 13_000),
                 13_000,
-                7,
             )
             .unwrap();
         let token = storage
@@ -1553,7 +1461,6 @@ mod tests {
                 &hash_token(&token),
                 &sample(Uuid::new_v4().to_string(), 16_000),
                 16_000,
-                7,
             )
             .unwrap();
         let changes = storage.connection().unwrap().total_changes();
@@ -1642,7 +1549,6 @@ mod tests {
                     &token,
                     &snapshot,
                     20_000 + u64::try_from(index).unwrap() * 5_000,
-                    7,
                 )
                 .unwrap();
             let (total, nodes) = storage.native_nodes(0, 10, 90).unwrap();
@@ -1685,12 +1591,7 @@ mod tests {
         let (directory, storage, credentials) = enrolled_storage();
         let token = hash_token(&credentials.agent_token);
         storage
-            .ingest(
-                &token,
-                &sample(Uuid::new_v4().to_string(), 20_000),
-                20_000,
-                7,
-            )
+            .ingest(&token, &sample(Uuid::new_v4().to_string(), 20_000), 20_000)
             .unwrap();
         let observer = Connection::open(directory.path().join("senulun.db")).unwrap();
         let version = || {
@@ -1703,7 +1604,7 @@ mod tests {
             let now = 20_000 + index * 1000;
             let mut snapshot = sample(Uuid::new_v4().to_string(), now);
             snapshot.network_total_received_bytes += index;
-            storage.ingest(&token, &snapshot, now, 7).unwrap();
+            storage.ingest(&token, &snapshot, now).unwrap();
         }
         assert_eq!(
             version(),
@@ -1722,7 +1623,7 @@ mod tests {
         drop(db);
         let mut changed = sample(Uuid::new_v4().to_string(), 31_000);
         changed.region = "JP".into();
-        storage.ingest(&token, &changed, 31_000, 7).unwrap();
+        storage.ingest(&token, &changed, 31_000).unwrap();
         assert_ne!(
             version(),
             before,
@@ -1777,7 +1678,6 @@ mod tests {
                 &hash_token(&original.agent_token),
                 &sample(Uuid::new_v4().to_string(), 3_000),
                 3_000,
-                7,
             )
             .unwrap();
         let changes = storage.connection().unwrap().total_changes();
@@ -1813,8 +1713,7 @@ mod tests {
             storage.ingest(
                 &hash_token(&original.agent_token),
                 &sample(Uuid::new_v4().to_string(), 71_000),
-                71_000,
-                7
+                71_000
             ),
             Err(StorageError::Unauthorized)
         ));
@@ -1823,7 +1722,6 @@ mod tests {
                 &hash_token(&rotated),
                 &sample(Uuid::new_v4().to_string(), 71_000),
                 71_000,
-                7,
             )
             .unwrap();
         assert_eq!(
@@ -1905,18 +1803,13 @@ mod tests {
         let token = hash_token(&credentials.agent_token);
         let duplicate_id = Uuid::new_v4().to_string();
         storage
-            .ingest(
-                &token,
-                &sample(duplicate_id.clone(), 999_999_999),
-                20_000,
-                7,
-            )
+            .ingest(&token, &sample(duplicate_id.clone(), 999_999_999), 20_000)
             .unwrap();
         storage
-            .ingest(&token, &sample(duplicate_id, 1), 25_000, 7)
+            .ingest(&token, &sample(duplicate_id, 1), 25_000)
             .unwrap();
         storage
-            .ingest(&token, &sample(Uuid::new_v4().to_string(), 1), 25_000, 7)
+            .ingest(&token, &sample(Uuid::new_v4().to_string(), 1), 25_000)
             .unwrap();
 
         let series = storage
@@ -1940,16 +1833,10 @@ mod tests {
                 &token,
                 &sample(Uuid::new_v4().to_string(), u64::MAX / 2),
                 10_000,
-                1,
             )
             .unwrap();
         storage
-            .ingest(
-                &token,
-                &sample(Uuid::new_v4().to_string(), 1),
-                86_410_001,
-                1,
-            )
+            .ingest(&token, &sample(Uuid::new_v4().to_string(), 1), 86_410_001)
             .unwrap();
         let count: i64 = storage
             .connection()
@@ -1967,7 +1854,6 @@ mod tests {
                 &hash_token(&credentials.agent_token),
                 &sample(Uuid::new_v4().to_string(), 10_000),
                 10_000,
-                1,
             )
             .unwrap();
 
@@ -1982,7 +1868,7 @@ mod tests {
     }
 
     #[test]
-    fn pruning_before_insert_recovers_from_the_sqlite_page_limit() {
+    fn retention_maintenance_recovers_from_the_sqlite_page_limit() {
         let (_directory, storage, credentials) = enrolled_storage();
         let token_hash = hash_token(&credentials.agent_token);
         let mut received_at = 100_000_u64;
@@ -1992,7 +1878,6 @@ mod tests {
                     &token_hash,
                     &sample(Uuid::new_v4().to_string(), received_at),
                     received_at,
-                    365,
                 )
                 .unwrap();
             received_at += 5_000;
@@ -2018,7 +1903,6 @@ mod tests {
                     &token_hash,
                     &sample(Uuid::new_v4().to_string(), candidate_time),
                     candidate_time,
-                    365,
                 ) {
                     Ok(()) => None,
                     Err(StorageError::Database(rusqlite::Error::SqliteFailure(code, _)))
@@ -2032,12 +1916,12 @@ mod tests {
             .expect("database should reach its configured page limit");
 
         let recovered_at = full_at + 86_400_001;
+        storage.prune_expired(recovered_at, 1).unwrap();
         storage
             .ingest(
                 &token_hash,
                 &sample(Uuid::new_v4().to_string(), recovered_at),
                 recovered_at,
-                1,
             )
             .unwrap();
         let remaining: (i64, i64) = storage
@@ -2062,7 +1946,6 @@ mod tests {
                     &token,
                     &sample(Uuid::new_v4().to_string(), 900_000 - index),
                     100_000 + index * 5_000,
-                    7,
                 )
                 .unwrap();
         }
@@ -2091,8 +1974,7 @@ mod tests {
             storage.ingest(
                 &old_hash,
                 &sample(Uuid::new_v4().to_string(), 20_000),
-                20_000,
-                7
+                20_000
             ),
             Err(StorageError::Unauthorized)
         ));
@@ -2101,7 +1983,6 @@ mod tests {
                 &hash_token(&replacement),
                 &sample(Uuid::new_v4().to_string(), 21_000),
                 21_000,
-                7,
             )
             .unwrap();
         storage.revoke_node(&credentials.node_id, 30_000).unwrap();
@@ -2109,8 +1990,7 @@ mod tests {
             storage.ingest(
                 &hash_token(&replacement),
                 &sample(Uuid::new_v4().to_string(), 31_000),
-                31_000,
-                7
+                31_000
             ),
             Err(StorageError::Unauthorized)
         ));
@@ -2450,7 +2330,11 @@ mod tests {
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
         let process: Option<i64> = connection
-            .query_row("SELECT process_count FROM snapshots", [], |row| row.get(0))
+            .query_row(
+                "SELECT json_extract(data,'$.last.process') FROM snapshot_minutes",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(process, None);

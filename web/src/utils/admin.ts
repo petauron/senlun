@@ -129,6 +129,10 @@ export interface ProbeRecord {
   latency_ms: number | null
   success: boolean
   error: string | null
+  samples?: number
+  failed_samples?: number
+  resolution_ms?: number
+  aggregated?: boolean
 }
 
 export interface ProbeHistory {
@@ -155,6 +159,7 @@ export interface ProbeHistory {
     p99_p50_ratio: number | null
   }[]
   chart_source_points: number
+  history_resolution_ms?: number
   chart_bucket_ms: number
   range_start_unix_ms: number
   range_end_unix_ms: number

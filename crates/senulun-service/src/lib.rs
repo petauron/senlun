@@ -181,13 +181,23 @@ impl AppState {
         }
     }
 
+    /// Persists sealed minutes, or also the partial minute during clean shutdown.
+    ///
+    /// # Errors
+    /// Returns an error if the clock, database queue or durable commit fails.
+    pub async fn flush_monitoring(&self, include_open: bool) -> Result<(), String> {
+        let now = storage::unix_time_ms().map_err(|error| error.to_string())?;
+        self.database(move |storage| storage.flush_monitoring(now, include_open))
+            .await
+            .map_err(|error| error.message)
+    }
+
     async fn submit_ingest(&self, input: ingest::Input) -> Result<(), ApiError> {
         self.ingest
             .get_or_init(|| async {
                 ingest::Ingestor::start(
                     Arc::clone(&self.storage),
                     Arc::clone(&self.database_permit),
-                    self.retention_days,
                 )
             })
             .await
@@ -1421,7 +1431,7 @@ mod tests {
             .unwrap();
         state
             .storage
-            .ingest(&hash_token(&node.agent_token), &snapshot(), now, 7)
+            .ingest(&hash_token(&node.agent_token), &snapshot(), now)
             .unwrap();
         let path = format!("/api/admin/nodes/{}/traffic-correction", node.node_id);
         let anonymous = router(state.clone())

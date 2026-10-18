@@ -21,7 +21,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const VERSION: i64 = 1;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 const SCHEMA: &str = "
 CREATE TABLE metrics.storage_identity (
@@ -127,6 +127,14 @@ pub(super) fn attach(db: &mut Connection, control: &Path, max_bytes: u64) -> Res
         split(db)?;
     }
     validate_pair(db)?;
+    configure_runtime(db)?;
+    // Cross-file foreign keys are unsupported. A committed control-plane delete
+    // is authoritative; recover interrupted cleanup before exposing read APIs.
+    while prune_orphans(db)? != 0 {}
+    Ok(())
+}
+
+pub(super) fn configure_runtime(db: &Connection) -> Result<()> {
     db.execute_batch(
         "PRAGMA main.journal_mode=WAL;
          PRAGMA main.synchronous=FULL;
@@ -140,9 +148,6 @@ pub(super) fn attach(db: &mut Connection, control: &Path, max_bytes: u64) -> Res
          PRAGMA metrics.journal_size_limit=67108864;",
     )?;
     db.set_prepared_statement_cache_capacity(32);
-    // Cross-file foreign keys are unsupported. A committed control-plane delete
-    // is authoritative; recover interrupted cleanup before exposing read APIs.
-    while prune_orphans(db)? != 0 {}
     Ok(())
 }
 
@@ -234,9 +239,10 @@ fn validate_pair(db: &Connection) -> Result<()> {
         return Err("unsupported control schema for paired storage".into());
     }
     let version: i64 = db.query_row("PRAGMA metrics.user_version", [], |r| r.get(0))?;
-    if version != VERSION {
+    let expected = if control_version >= 7 { 2 } else { VERSION };
+    if version != expected {
         return Err(
-            format!("unsupported metrics schema version {version}; expected {VERSION}").into(),
+            format!("unsupported metrics schema version {version}; expected {expected}").into(),
         );
     }
     let matches: bool = db.query_row(
@@ -256,14 +262,21 @@ pub(super) fn prune_orphans(db: &mut Connection) -> std::result::Result<usize, S
     // enrollment followed by ingestion must not be mistaken for an orphan.
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut removed = 0;
-    for table in ["snapshots", "probe_results"] {
-        let missing_task = if table == "probe_results" {
+    let version: i64 = tx.query_row("PRAGMA metrics.user_version", [], |r| r.get(0))?;
+    let tables = if version >= 2 {
+        ["snapshot_minutes", "probe_minutes"]
+    } else {
+        ["snapshots", "probe_results"]
+    };
+    for table in tables {
+        let missing_task = if table.starts_with("probe_") {
             " OR NOT EXISTS(SELECT 1 FROM main.probe_tasks WHERE id=m.task_id)"
         } else {
             ""
         };
+        let key = "id";
         removed += tx.execute(&format!(
-            "DELETE FROM metrics.{table} WHERE id IN (SELECT m.id FROM metrics.{table} m
+            "DELETE FROM metrics.{table} WHERE ({key}) IN (SELECT {key} FROM metrics.{table} m
              WHERE NOT EXISTS(SELECT 1 FROM main.nodes WHERE id=m.node_id){missing_task} LIMIT 10000)"
         ), [])?;
     }
@@ -286,8 +299,8 @@ pub(super) fn delete_node(
 ) -> std::result::Result<(), StorageError> {
     let tx = db.transaction()?;
     for table in [
-        "snapshots",
-        "probe_results",
+        "snapshot_minutes",
+        "probe_minutes",
         "traffic_periods",
         "node_state",
     ] {
@@ -295,6 +308,9 @@ pub(super) fn delete_node(
             &format!("DELETE FROM metrics.{table} WHERE node_id=?1"),
             [node],
         )?;
+    }
+    for table in ["snapshots", "probe_results"] {
+        tx.execute(&format!("DELETE FROM hot.{table} WHERE node_id=?1"), [node])?;
     }
     tx.commit()?;
     Ok(())
@@ -328,11 +344,13 @@ pub(super) fn backup(db: &mut Connection, control: &Path) -> Result<PathBuf> {
     )?;
     let control_version: i64 =
         reservation.query_row("PRAGMA main.user_version", [], |r| r.get(0))?;
+    let metrics_version: i64 =
+        reservation.query_row("PRAGMA metrics.user_version", [], |r| r.get(0))?;
     reservation.rollback()?;
     let manifest = serde_json::json!({
         "format_version": 1, "store_id": identity,
         "control": "senulun.db", "metrics": "senulun.metrics.db",
-        "control_schema": control_version, "metrics_schema": VERSION,
+        "control_schema": control_version, "metrics_schema": metrics_version,
         "created_at_unix_ms": super::unix_time_ms()?
     });
     let manifest_path = temporary.join("manifest.json");

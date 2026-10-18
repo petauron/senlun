@@ -43,7 +43,7 @@ pub(crate) struct Ingestor {
 }
 
 impl Ingestor {
-    pub(crate) fn start(storage: Arc<Storage>, permit: Arc<Semaphore>, retention: u32) -> Self {
+    pub(crate) fn start(storage: Arc<Storage>, permit: Arc<Semaphore>) -> Self {
         let (sender, mut receiver) = mpsc::channel::<Pending>(QUEUE_CAPACITY);
         tokio::spawn(async move {
             while let Some(first) = receiver.recv().await {
@@ -71,10 +71,8 @@ impl Ingestor {
                 let storage = Arc::clone(&storage);
                 if tokio::task::spawn_blocking(move || {
                     let _guard = guard;
-                    let outcome = storage.ingest_batch(
-                        &pending.iter().map(|p| &p.input).collect::<Vec<_>>(),
-                        retention,
-                    );
+                    let outcome =
+                        storage.ingest_batch(&pending.iter().map(|p| &p.input).collect::<Vec<_>>());
                     match outcome {
                         Ok(results) => {
                             for (item, result) in pending.into_iter().zip(results) {
@@ -121,12 +119,10 @@ impl Storage {
     fn ingest_batch(
         &self,
         inputs: &[&Input],
-        retention: u32,
     ) -> Result<Vec<Result<(), StorageError>>, StorageError> {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         let mut results = Vec::with_capacity(inputs.len());
-        let mut pruned_at = None;
         for input in inputs {
             tx.execute_batch("SAVEPOINT ingest_item")?;
             let result = match input {
@@ -134,33 +130,16 @@ impl Storage {
                     token_hash,
                     snapshot,
                     received_at,
-                } => self.ingest_snapshot_tx(
-                    &tx,
-                    token_hash,
-                    snapshot,
-                    *received_at,
-                    retention,
-                    pruned_at.is_none(),
-                ),
+                } => Self::ingest_snapshot_tx(&tx, token_hash, snapshot, *received_at),
                 Input::Probes {
                     token,
                     batch,
                     received_at,
-                } => self.ingest_probes_tx(
-                    &tx,
-                    token,
-                    batch,
-                    *received_at,
-                    retention,
-                    pruned_at.is_none(),
-                ),
+                } => Self::ingest_probes_tx(&tx, token, batch, *received_at),
             };
             match result {
-                Ok(pruned) => {
+                Ok(()) => {
                     tx.execute_batch("RELEASE ingest_item")?;
-                    if pruned {
-                        pruned_at = Some(input.received_at());
-                    }
                     results.push(Ok(()));
                 }
                 Err(error @ StorageError::Database(_)) => return Err(error),
@@ -170,10 +149,10 @@ impl Storage {
                 }
             }
         }
-        tx.commit()?;
-        if let Some(now) = pruned_at {
-            self.record_ingest_prune(true, now);
+        if let Some(now) = inputs.iter().map(|input| input.received_at()).max() {
+            crate::storage::rollups::flush(&tx, now, false)?;
         }
+        tx.commit()?;
         Ok(results)
     }
 
@@ -183,16 +162,12 @@ impl Storage {
         token_hash: &str,
         snapshot: &SystemSnapshot,
         received_at: u64,
-        retention: u32,
     ) -> Result<(), StorageError> {
-        self.ingest_batch(
-            &[&Input::Snapshot {
-                token_hash: token_hash.into(),
-                snapshot: Box::new(snapshot.clone()),
-                received_at,
-            }],
-            retention,
-        )?
+        self.ingest_batch(&[&Input::Snapshot {
+            token_hash: token_hash.into(),
+            snapshot: Box::new(snapshot.clone()),
+            received_at,
+        }])?
         .remove(0)
     }
     #[cfg(test)]
@@ -201,16 +176,12 @@ impl Storage {
         token: &str,
         batch: &ProbeBatch,
         received_at: u64,
-        retention: u32,
     ) -> Result<(), StorageError> {
-        self.ingest_batch(
-            &[&Input::Probes {
-                token: token.into(),
-                batch: batch.clone(),
-                received_at,
-            }],
-            retention,
-        )?
+        self.ingest_batch(&[&Input::Probes {
+            token: token.into(),
+            batch: batch.clone(),
+            received_at,
+        }])?
         .remove(0)
     }
 }

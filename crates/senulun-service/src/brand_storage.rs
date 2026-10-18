@@ -249,7 +249,7 @@ mod tests {
                 "INSERT INTO nodes(id,token_hash,name,agent_version,created_at_ms,updated_at_ms)
              VALUES('retained-node','unchanged-hash','custom name','old-version',10,20);
              INSERT INTO metrics.traffic_periods VALUES('retained-node',0,800,700,80,70);
-             INSERT INTO metrics.node_state VALUES('retained-node',12345);",
+             INSERT INTO metrics.node_state(node_id,last_seen_at_ms) VALUES('retained-node',12345);",
             )
             .unwrap();
         drop(original);

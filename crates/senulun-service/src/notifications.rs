@@ -220,13 +220,19 @@ impl Storage {
 fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>, StorageError> {
     let mut statement = db.prepare(
         "SELECT n.id,n.name,n.created_at_ms,ns.last_seen_at_ms,o.data,
-                s.cpu_usage_percent,s.memory_used_bytes,s.memory_total_bytes,
-                s.disk_used_bytes,s.disk_total_bytes,t.used_up,t.used_down,t.cycle_start_ms
+                coalesce(s.cpu_usage_percent,json_extract(m.data,'$.last.cpu')),
+                coalesce(s.memory_used_bytes,json_extract(m.data,'$.last.ram')),
+                coalesce(s.memory_total_bytes,json_extract(m.data,'$.last.ram_total')),
+                coalesce(s.disk_used_bytes,json_extract(m.data,'$.last.disk')),
+                coalesce(s.disk_total_bytes,json_extract(m.data,'$.last.disk_total')),
+                t.used_up,t.used_down,t.cycle_start_ms
          FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id
          LEFT JOIN node_state ns ON ns.node_id=n.id
          LEFT JOIN traffic_periods t ON t.node_id=n.id
          LEFT JOIN snapshots s ON s.id=(SELECT latest.id FROM snapshots latest
              WHERE latest.node_id=n.id ORDER BY latest.received_at_ms DESC,latest.id DESC LIMIT 1)
+         LEFT JOIN snapshot_minutes m ON m.id=(SELECT id FROM snapshot_minutes WHERE node_id=n.id
+             ORDER BY bucket_ms DESC,json_extract(data,'$.last_received') DESC,id DESC LIMIT 1)
          WHERE n.disabled_at_ms IS NULL ORDER BY n.id LIMIT ?1",
     )?;
     let mut rows = statement.query([i64::try_from(MAX_NODES).expect("node limit fits SQLite")])?;
