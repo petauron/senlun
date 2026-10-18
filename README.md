@@ -107,6 +107,13 @@ The visual implementation is derived from [Komari Theme Emerald](https://github.
 
 ## Production operation
 
+Senulun installs and runs independently of Vastora. Use the published binaries
+with the bundled systemd installer, or the Service image with Docker Compose.
+Follow [the standalone installation guide](docs/STANDALONE.md) for the complete
+Service → administrator → Agent flow. Vastora is an optional package manager:
+it installs and upgrades artifacts and publishes access entries; Senulun owns
+its accounts, enrollment, monitoring settings, themes and data.
+
 Official Linux binary archives use a Debian 12 (glibc 2.36) runtime baseline. Both the Service and Agent must start in a clean Debian 12 runtime in CI and release jobs. For musl-based distributions or older runtimes, use the container or build from source.
 
 Each release publishes archives containing both binaries, systemd units, and reversible install/rollback scripts, alongside checksums, provenance attestations, and SPDX SBOMs. A non-root Service container is also available. See [docs/OPERATIONS.md](docs/OPERATIONS.md) for deployment, TLS/access-control, enrollment, credential rotation/revocation, backup/restore, upgrade, rollback, and uninstall procedures.
