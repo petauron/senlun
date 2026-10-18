@@ -72,6 +72,8 @@ pub struct ServiceConfig {
     pub auth: AuthConfig,
     /// A separate 0600 file containing 32 random bytes for external credentials.
     pub traffic_key_file: Option<PathBuf>,
+    /// Exact network peer allowed to supply an overwritten X-Real-IP header.
+    pub trusted_proxy_ip: Option<std::net::IpAddr>,
 }
 
 impl ServiceConfig {
@@ -85,6 +87,7 @@ impl ServiceConfig {
             max_database_bytes: DEFAULT_MAX_DATABASE_BYTES,
             auth: AuthConfig::default(),
             traffic_key_file: None,
+            trusted_proxy_ip: None,
         }
     }
 }
@@ -103,6 +106,7 @@ pub struct AppState {
     themes: Arc<themes::ThemeStore>,
     ip_info: Arc<ip_info::IpInfo>,
     traffic_key: Option<Arc<external_traffic::CredentialKey>>,
+    trusted_proxy_ip: Option<std::net::IpAddr>,
 }
 
 impl AppState {
@@ -147,6 +151,7 @@ impl AppState {
             themes,
             ip_info: Arc::new(ip_info::IpInfo::new()?),
             traffic_key,
+            trusted_proxy_ip: config.trusted_proxy_ip,
         })
     }
 
@@ -910,38 +915,60 @@ async fn me(
     peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
 ) -> Response {
-    // Never trust arbitrary forwarding headers. Behind a proxy the public IP
-    // is unavailable unless the transport supplies a public peer address.
-    let ip = peer.and_then(|peer| {
-        if headers.contains_key("forwarded")
-            || headers.contains_key("x-forwarded-for")
-            || headers.contains_key("cf-connecting-ip")
-        {
-            return None;
-        }
-        let ip = peer.0.0.ip();
-        let public = match ip {
-            std::net::IpAddr::V4(v) => {
-                !v.is_private()
-                    && !v.is_loopback()
-                    && !v.is_link_local()
-                    && !v.is_unspecified()
-                    && !v.is_multicast()
-            }
-            std::net::IpAddr::V6(v) => {
-                !v.is_loopback()
-                    && !v.is_unspecified()
-                    && !v.is_unique_local()
-                    && !v.is_unicast_link_local()
-                    && !v.is_multicast()
-            }
-        };
-        public.then(|| ip.to_string())
-    });
+    let ip =
+        peer.and_then(|peer| visitor_public_ip(peer.0.0.ip(), &headers, state.trusted_proxy_ip));
     match state.auth.session(&headers).await {
         Ok(session)=>Json(json!({ "ip":ip, "logged_in":session.is_some(), "username":session.map(|s|s.username).unwrap_or_default() })).into_response(),
         Err(error)=>error.into_response(),
     }
+}
+
+fn visitor_public_ip(
+    peer: std::net::IpAddr,
+    headers: &HeaderMap,
+    trusted_proxy_ip: Option<std::net::IpAddr>,
+) -> Option<String> {
+    let ip = if trusted_proxy_ip == Some(peer) {
+        // The reverse proxy must remove client-supplied X-Real-IP and set exactly
+        // one value from its own verified connection metadata.
+        let mut values = headers.get_all("x-real-ip").iter();
+        let value = values.next()?.to_str().ok()?;
+        if values.next().is_some() {
+            return None;
+        }
+        value.parse().ok()?
+    } else {
+        if [
+            "forwarded",
+            "x-forwarded-for",
+            "cf-connecting-ip",
+            "x-real-ip",
+        ]
+        .iter()
+        .any(|name| headers.contains_key(*name))
+        {
+            return None;
+        }
+        peer
+    };
+    let public = match ip {
+        std::net::IpAddr::V4(v) => {
+            !v.is_private()
+                && !v.is_loopback()
+                && !v.is_link_local()
+                && !v.is_unspecified()
+                && !v.is_multicast()
+                && !v.is_broadcast()
+        }
+        std::net::IpAddr::V6(v) => {
+            !v.is_loopback()
+                && !v.is_unspecified()
+                && !v.is_unique_local()
+                && !v.is_unicast_link_local()
+                && !v.is_multicast()
+        }
+    };
+    public.then(|| ip.to_string())
 }
 
 async fn version() -> Json<Value> {
@@ -1208,6 +1235,48 @@ mod tests {
         config.max_database_bytes = 64 * 1024 * 1024;
         let state = AppState::open(&config).expect("test state");
         (directory, state)
+    }
+
+    #[test]
+    fn visitor_ip_requires_an_explicit_trusted_proxy() {
+        let proxy = "127.0.0.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-real-ip", "8.8.8.8".parse().unwrap());
+        assert_eq!(visitor_public_ip(proxy, &headers, None), None);
+        assert_eq!(
+            visitor_public_ip(proxy, &headers, Some(proxy)),
+            Some("8.8.8.8".into())
+        );
+        assert_eq!(
+            visitor_public_ip("127.0.0.2".parse().unwrap(), &headers, Some(proxy)),
+            None
+        );
+    }
+
+    #[test]
+    fn visitor_ip_rejects_ambiguous_and_nonpublic_proxy_values() {
+        let proxy = "127.0.0.1".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.append("x-real-ip", "8.8.8.8".parse().unwrap());
+        headers.append("x-real-ip", "1.1.1.1".parse().unwrap());
+        assert_eq!(visitor_public_ip(proxy, &headers, Some(proxy)), None);
+        headers.remove("x-real-ip");
+        for value in ["8.8.8.8, 1.1.1.1", "127.0.0.1", "10.0.0.1", "not-an-ip"] {
+            headers.insert("x-real-ip", value.parse().unwrap());
+            assert_eq!(visitor_public_ip(proxy, &headers, Some(proxy)), None);
+        }
+    }
+
+    #[test]
+    fn visitor_ip_uses_public_transport_only_without_forwarding_headers() {
+        let peer = "8.8.8.8".parse().unwrap();
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            visitor_public_ip(peer, &headers, None),
+            Some("8.8.8.8".into())
+        );
+        headers.insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
+        assert_eq!(visitor_public_ip(peer, &headers, None), None);
     }
 
     async fn initialize_admin(state: &AppState) -> (String, String) {

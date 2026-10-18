@@ -8,6 +8,17 @@ Alpha.3 includes administrator authentication and defaults to a private dashboar
 
 Remote Agents accept only HTTPS Service URLs. Senulun has no analytics, telemetry, runtime CDN, or mandatory third-party account. Metrics go only to the configured Service.
 
+The visitor-information pill obtains the current visitor's public address from
+`/api/me`. A reverse proxy hides the browser's transport address, so this field
+stays unavailable by default. To enable it, set `SENULUN_TRUSTED_PROXY_IP` to
+the **exact IP of the proxy's connection to Senulun** and configure that proxy
+to discard any client-provided `X-Real-IP` and overwrite it with the verified
+client address. Senulun accepts a single public IP in that header only from
+the exact configured peer; it does not trust `X-Forwarded-For` or
+`CF-Connecting-IP` from arbitrary callers. Keep the Service on a private or
+loopback listener and verify the proxy's overwrite behavior before enabling
+this option. No external IP service is queried by this feature.
+
 **Default outbound request:** Agents with no manual region use GeoJS to discover
 their country. GeoJS sees the public egress IP and Agent version, not Senulun tokens
 or metrics. To prevent this, set `SENULUN_GEOIP_PROVIDER=disabled` in the Agent
