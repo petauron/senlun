@@ -327,7 +327,10 @@ pub(crate) fn configuration_audit(
     Ok(())
 }
 
-fn options_or_none(db: &Connection, id: &str) -> Result<Option<NodeOptions>, StorageError> {
+pub(crate) fn options_or_none(
+    db: &Connection,
+    id: &str,
+) -> Result<Option<NodeOptions>, StorageError> {
     let value: Option<String> = db
         .query_row(
             "SELECT data FROM node_options WHERE node_id=?1",
@@ -338,7 +341,7 @@ fn options_or_none(db: &Connection, id: &str) -> Result<Option<NodeOptions>, Sto
     value.map(|value| decode(&value)).transpose()
 }
 
-fn verify_nodes(db: &Connection, ids: &[String]) -> Result<(), StorageError> {
+pub(crate) fn verify_nodes(db: &Connection, ids: &[String]) -> Result<(), StorageError> {
     if ids.len() > MAX_NODE_ASSIGNMENTS || ids.iter().collect::<HashSet<_>>().len() != ids.len() {
         return Err(StorageError::InvalidInput("invalid node selection"));
     }
@@ -482,6 +485,28 @@ impl Storage {
         value: &TrafficCorrection,
         now: u64,
     ) -> Result<(), StorageError> {
+        let mut db = self.connection()?;
+        let tx = db.transaction()?;
+        Self::correct_traffic_in_transaction(
+            &tx,
+            id,
+            value,
+            now,
+            "local-cli",
+            "Local administrator correction",
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn correct_traffic_in_transaction(
+        tx: &Transaction<'_>,
+        id: &str,
+        value: &TrafficCorrection,
+        now: u64,
+        actor: &str,
+        reason: &str,
+    ) -> Result<(u64, u64), StorageError> {
         if value.sampled_at_ms > now
             || now - value.sampled_at_ms > 120_000
             || [value.raw_up, value.raw_down, value.used_up, value.used_down]
@@ -492,10 +517,8 @@ impl Storage {
                 "invalid or stale traffic correction",
             ));
         }
-        let mut db = self.connection()?;
-        let tx = db.transaction()?;
-        verify_nodes(&tx, &[id.to_owned()])?;
-        let day = options_or_none(&tx, id)?.map_or(1, |o| o.traffic_reset_day);
+        verify_nodes(tx, &[id.to_owned()])?;
+        let day = options_or_none(tx, id)?.map_or(1, |o| o.traffic_reset_day);
         if value.cycle_start_ms != period_start(now, day) {
             return Err(StorageError::InvalidInput("traffic cycle has changed"));
         }
@@ -523,12 +546,11 @@ impl Storage {
             "UPDATE traffic_periods SET used_up=?2,used_down=?3 WHERE node_id=?1",
             params![id, used_up, used_down],
         )?;
-        let evidence = json!({"node_id":id,"cycle_start_ms":cycle,
+        let evidence = json!({"node_id":id,"cycle_start_ms":cycle,"actor":actor,"reason":reason,
             "previous_up":old_up,"previous_down":old_down,
             "used_up":used_up,"used_down":used_down,"sampled_at_ms":value.sampled_at_ms});
-        configuration_audit(&tx, "node.traffic.correct", &evidence.to_string())?;
-        tx.commit()?;
-        Ok(())
+        configuration_audit(tx, "node.traffic.correct", &evidence.to_string())?;
+        Ok((unsigned(used_up), unsigned(used_down)))
     }
 
     pub(crate) fn save_probe(&self, task: &mut ProbeDefinition) -> Result<(), StorageError> {

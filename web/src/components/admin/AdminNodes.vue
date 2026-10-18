@@ -3,6 +3,7 @@ import type { ManagedNode } from '@/utils/admin'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import AdminTrafficCorrection from '@/components/admin/AdminTrafficCorrection.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -222,6 +223,7 @@ async function execute(): Promise<void> {
         </p>
       </form>
       <div v-if="draft" class="flex flex-wrap gap-2 border-t pt-4">
+        <AdminTrafficCorrection v-if="selected" :node="selected" :disabled="busy" :refresh="props.refresh" />
         <Button v-for="(label, action) in actionLabels" :key="action" variant="outline" type="button" :disabled="busy" :class="action === 'delete' ? 'text-destructive' : ''" @click="confirm = action">
           {{ label }}
         </Button>
