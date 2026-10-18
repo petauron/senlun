@@ -720,21 +720,21 @@ impl Storage {
         })
     }
 
-    pub(crate) fn ingest_probes(
+    pub(crate) fn ingest_probes_tx(
         &self,
+        tx: &Connection,
         token: &str,
         batch: &ProbeBatch,
         now: u64,
         retention_days: u32,
-    ) -> Result<(), StorageError> {
+        allow_prune: bool,
+    ) -> Result<bool, StorageError> {
         if batch.schema_version != 1 || batch.results.len() > 16 {
             return Err(StorageError::InvalidInput("invalid probe batch"));
         }
-        let mut db = self.connection()?;
-        let tx = db.transaction()?;
-        let node = authenticated_node(&tx, token)?;
-        let tasks = list_probe_tasks(&tx)?;
-        let pruned = self.prune_before_ingest(&tx, now, retention_days)?;
+        let node = authenticated_node(tx, token)?;
+        let tasks = list_probe_tasks(tx)?;
+        let pruned = allow_prune && self.prune_before_ingest(tx, now, retention_days)?;
         for result in &batch.results {
             let task = tasks
                 .iter()
@@ -789,9 +789,7 @@ impl Storage {
         }
         // Hard per-node cap, independent of retention or sample frequency.
         tx.execute("DELETE FROM probe_results WHERE id IN (SELECT id FROM probe_results WHERE node_id=?1 ORDER BY received_at_ms DESC,id DESC LIMIT 10000 OFFSET 100000)",[node])?;
-        tx.commit()?;
-        self.record_ingest_prune(pruned, now);
-        Ok(())
+        Ok(pruned)
     }
 
     pub(crate) fn public_ping_tasks(&self) -> Result<Vec<Value>, StorageError> {
@@ -1179,7 +1177,7 @@ pub(crate) fn period_start(now: u64, day: u8) -> u64 {
 }
 
 pub(crate) fn update_traffic(
-    tx: &Transaction<'_>,
+    tx: &Connection,
     node: &str,
     snapshot: &SystemSnapshot,
     now: u64,
