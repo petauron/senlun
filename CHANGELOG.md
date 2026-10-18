@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.23](https://github.com/petauron/senulun/compare/v0.1.0-alpha.22...v0.1.0-alpha.23) (2026-10-18)
+
+
+### Bug Fixes
+
+* **web:** use Senulun mascot for site avatar and favicon ([b74a29a](https://github.com/petauron/senulun/commit/b74a29a442d3a2fc86275b53cde931e437518da8))
+
 ## [0.1.0-alpha.22](https://github.com/petauron/senulun/compare/v0.1.0-alpha.21...v0.1.0-alpha.22) (2026-10-17)
 
 
