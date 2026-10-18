@@ -1431,7 +1431,7 @@ mod tests {
             .unwrap();
         state
             .storage
-            .ingest(&hash_token(&node.agent_token), &snapshot(), now, 7)
+            .ingest(&hash_token(&node.agent_token), &snapshot(), now)
             .unwrap();
         let path = format!("/api/admin/nodes/{}/traffic-correction", node.node_id);
         let anonymous = router(state.clone())
