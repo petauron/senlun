@@ -915,8 +915,8 @@ async fn me(
     peer: Option<axum::Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
 ) -> Response {
-    let ip = peer
-        .and_then(|peer| visitor_public_ip(peer.0.0.ip(), &headers, state.trusted_proxy_ip));
+    let ip =
+        peer.and_then(|peer| visitor_public_ip(peer.0.0.ip(), &headers, state.trusted_proxy_ip));
     match state.auth.session(&headers).await {
         Ok(session)=>Json(json!({ "ip":ip, "logged_in":session.is_some(), "username":session.map(|s|s.username).unwrap_or_default() })).into_response(),
         Err(error)=>error.into_response(),
@@ -938,9 +938,14 @@ fn visitor_public_ip(
         }
         value.parse().ok()?
     } else {
-        if ["forwarded", "x-forwarded-for", "cf-connecting-ip", "x-real-ip"]
-            .iter()
-            .any(|name| headers.contains_key(*name))
+        if [
+            "forwarded",
+            "x-forwarded-for",
+            "cf-connecting-ip",
+            "x-real-ip",
+        ]
+        .iter()
+        .any(|name| headers.contains_key(*name))
         {
             return None;
         }
@@ -948,12 +953,19 @@ fn visitor_public_ip(
     };
     let public = match ip {
         std::net::IpAddr::V4(v) => {
-            !v.is_private() && !v.is_loopback() && !v.is_link_local()
-                && !v.is_unspecified() && !v.is_multicast() && !v.is_broadcast()
+            !v.is_private()
+                && !v.is_loopback()
+                && !v.is_link_local()
+                && !v.is_unspecified()
+                && !v.is_multicast()
+                && !v.is_broadcast()
         }
         std::net::IpAddr::V6(v) => {
-            !v.is_loopback() && !v.is_unspecified() && !v.is_unique_local()
-                && !v.is_unicast_link_local() && !v.is_multicast()
+            !v.is_loopback()
+                && !v.is_unspecified()
+                && !v.is_unique_local()
+                && !v.is_unicast_link_local()
+                && !v.is_multicast()
         }
     };
     public.then(|| ip.to_string())
@@ -1231,7 +1243,10 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-real-ip", "8.8.8.8".parse().unwrap());
         assert_eq!(visitor_public_ip(proxy, &headers, None), None);
-        assert_eq!(visitor_public_ip(proxy, &headers, Some(proxy)), Some("8.8.8.8".into()));
+        assert_eq!(
+            visitor_public_ip(proxy, &headers, Some(proxy)),
+            Some("8.8.8.8".into())
+        );
         assert_eq!(
             visitor_public_ip("127.0.0.2".parse().unwrap(), &headers, Some(proxy)),
             None
@@ -1256,7 +1271,10 @@ mod tests {
     fn visitor_ip_uses_public_transport_only_without_forwarding_headers() {
         let peer = "8.8.8.8".parse().unwrap();
         let mut headers = HeaderMap::new();
-        assert_eq!(visitor_public_ip(peer, &headers, None), Some("8.8.8.8".into()));
+        assert_eq!(
+            visitor_public_ip(peer, &headers, None),
+            Some("8.8.8.8".into())
+        );
         headers.insert("x-forwarded-for", "1.1.1.1".parse().unwrap());
         assert_eq!(visitor_public_ip(peer, &headers, None), None);
     }
