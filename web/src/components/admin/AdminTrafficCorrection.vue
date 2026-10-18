@@ -95,7 +95,10 @@ async function save(): Promise<void> {
   await run(async () => {
     try {
       await getSharedApi().post(`admin/nodes/${encodeURIComponent(id)}/traffic-correction`, {
-        baseline, used_up_bytes: target.up, used_down_bytes: target.down, reason: target.reason,
+        baseline,
+        used_up_bytes: target.up,
+        used_down_bytes: target.down,
+        reason: target.reason,
       })
       opened.value = false
     }

@@ -150,6 +150,7 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
 })
 
 test('local traffic correction previews units, requires confirmation and preserves unrelated settings', async ({ page, request }) => {
+  page.setDefaultTimeout(10_000)
   await login(page, '/admin?section=nodes')
   const id = await waitForNode(page.request)
   const path = `/api/admin/nodes/${id}/traffic-correction`
@@ -159,6 +160,7 @@ test('local traffic correction previews units, requires confirmation and preserv
   expect((await request.post(path, { data: {} })).status()).toBe(401)
   await page.goto(`/admin?section=nodes&node=${id}`)
   const errors: string[] = []
+  let correctionApplied = false
   page.on('pageerror', error => errors.push(error.message))
   try {
     await page.getByRole('button', { name: '校正本周期本地流量', exact: true }).click()
@@ -180,6 +182,7 @@ test('local traffic correction previews units, requires confirmation and preserv
     await dialog.getByRole('button', { name: '确认校正本地流量' }).click()
     const applied = await response
     expect(applied.status()).toBe(200)
+    correctionApplied = true
     const sent = applied.request().postDataJSON()
     expect(sent.used_up_bytes).toBe('1000000000')
     expect(sent.used_down_bytes).toBe('2000000000')
@@ -195,14 +198,16 @@ test('local traffic correction previews units, requires confirmation and preserv
     await expect(page.locator('vite-error-overlay')).toHaveCount(0)
   }
   finally {
-    const fresh = await (await page.request.get(path)).json() as TrafficCorrectionContext
-    const restored = await mutation(page.request, path, {
-      baseline: fresh.baseline,
-      used_up_bytes: original.baseline.used_up_bytes,
-      used_down_bytes: original.baseline.used_down_bytes,
-      reason: 'Restore disposable E2E baseline',
-    })
-    expect(restored.status()).toBe(200)
+    if (correctionApplied) {
+      const fresh = await (await page.request.get(path)).json() as TrafficCorrectionContext
+      const restored = await mutation(page.request, path, {
+        baseline: fresh.baseline,
+        used_up_bytes: original.baseline.used_up_bytes,
+        used_down_bytes: original.baseline.used_down_bytes,
+        reason: 'Restore disposable E2E baseline',
+      })
+      expect(restored.status()).toBe(200)
+    }
   }
 })
 

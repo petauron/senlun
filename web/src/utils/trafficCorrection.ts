@@ -21,6 +21,7 @@ export interface TrafficCorrectionContext {
 
 const maximumBytes = 9223372036854775807n
 const decimalPattern = /^\d+(?:\.\d{1,30})?$/
+const trailingZeroPattern = /0+$/
 const factor = (unit: TrafficUnit) => unit === 'gb' ? 1000000000n : 1073741824n
 
 // Do not pass traffic input through Number: accepted counts may exceed 2^53.
@@ -42,7 +43,9 @@ export function formatTrafficAmount(bytes: string, unit: TrafficUnit): string {
   const divisor = factor(unit)
   const precision = unit === 'gb' ? 9 : 30
   const fraction = ((value % divisor) * 10n ** BigInt(precision) / divisor)
-    .toString().padStart(precision, '0').replace(/0+$/, '')
+    .toString()
+    .padStart(precision, '0')
+    .replace(trailingZeroPattern, '')
   return `${value / divisor}${fraction ? `.${fraction}` : ''}`
 }
 
