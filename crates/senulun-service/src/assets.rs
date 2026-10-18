@@ -141,7 +141,7 @@ pub(crate) async fn static_asset(State(state): State<AppState>, uri: Uri) -> Res
     let mime = mime_guess::from_path(served_path).first_or_octet_stream();
     let cache_control = if served_path == "index.html" {
         "no-cache"
-    } else if served_path == "favicon.ico"
+    } else if served_path == "senulun-avatar.png"
         || served_path.starts_with("assets/flags/")
         || served_path.starts_with("assets/logo/")
     {
