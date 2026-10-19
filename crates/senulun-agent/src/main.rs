@@ -260,7 +260,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let credentials = load_or_enroll(&client, &config).await?;
     let region = region::RegionResolver::start(&config.region, config.geoip_provider);
     let extended =
-        extended_metrics::ExtendedCollector::start(config.extended_metrics, config.gpu_metrics);
+        extended_metrics::ExtendedCollector::new(config.extended_metrics, config.gpu_metrics);
     let mut probes = probes::ProbeRunner::start(
         client.clone(),
         config.service_url.clone(),
@@ -287,7 +287,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 continue;
             }
         }
-        let mut snapshot = collector.collect(&config, extended.current())?;
+        let extra = extended.collect().await;
+        let mut snapshot = collector.collect(&config, extra)?;
         snapshot.region = region.current();
         match send_snapshot(
             &client,

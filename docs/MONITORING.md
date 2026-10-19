@@ -119,11 +119,19 @@ Linux extended collection counts processes and TCP/UDP sockets in the Agent's
 current process/network namespace using bounded streaming reads. TCP includes
 listening and non-established sockets; UDP includes unconnected sockets. Running
 the Agent in a container does not turn container metrics into host metrics.
+Extended metrics are collected once per host-reporting tick on a blocking worker,
+not by a separate timer or from a cached sample. The default interval remains
+three seconds. Probe scheduling waits for the next due task, a completed probe,
+or configuration refresh instead of polling every 100 ms; probe intervals,
+timeouts, retry rules and concurrency limits are unchanged.
 
 AMD GPU metrics use readable sysfs fields; NVIDIA uses a fixed `nvidia-smi` command
 with bounded output/time. Hardware, drivers, permissions and hardened systemd
 device isolation may make GPU data unavailable. Missing capabilities produce
-null/N/A. On Linux, the Agent reads the bounded `/etc/os-release` `PRETTY_NAME`
+null/N/A. GPU capabilities are checked once at startup; absent AMD devices or an
+absent NVIDIA driver/device or executable skip that collector for this run.
+Restart the Agent after adding GPU hardware, drivers or tools to detect them.
+On Linux, the Agent reads the bounded `/etc/os-release` `PRETTY_NAME`
 for the exact distribution version and uses a fixed, two-second
 `systemd-detect-virt` invocation when installed; bounded local metadata remains
 the fallback. Virtualization auto-detection is best-effort, and explicit

@@ -1,19 +1,18 @@
-//! Capability-based optional collectors. One background worker caches one
-//! sample; Linux counters use bounded streaming reads, never a process table.
+//! Optional collectors run once per host sample on a blocking worker.
+//! GPU capabilities are detected once; Linux counters use bounded streaming reads.
 
 #[cfg(any(target_os = "linux", test))]
 use std::io::Read;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(any(target_os = "linux", test))]
+use std::time::Instant;
 #[cfg(target_os = "linux")]
 use std::{fs, path::Path};
 
 use senulun_protocol::{GpuSnapshot, MAX_GPU_DEVICES};
-use tokio::{sync::watch, task::JoinHandle};
 
 use crate::system_command::{self, SystemCommand};
 
-const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
-const MAX_SAMPLE_AGE: Duration = Duration::from_secs(15);
 #[cfg(any(target_os = "linux", test))]
 const MAX_PROC_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(target_os = "linux")]
@@ -32,57 +31,72 @@ pub struct ExtendedSnapshot {
 }
 
 pub struct ExtendedCollector {
-    latest: watch::Receiver<Option<(Instant, ExtendedSnapshot)>>,
-    worker: Option<JoinHandle<()>>,
+    enabled: bool,
+    amd_enabled: bool,
+    nvidia_enabled: bool,
 }
 
 impl ExtendedCollector {
-    pub fn start(enabled: bool, gpu_enabled: bool) -> Self {
-        let (sender, latest) = watch::channel(None);
-        let worker = enabled.then(|| {
-            tokio::spawn(async move {
-                loop {
-                    // Only one blocking job exists at a time. No timeout/retry can
-                    // accumulate blocked filesystem operations in Tokio's pool.
-                    let mut sample =
-                        tokio::task::spawn_blocking(move || collect_local(gpu_enabled))
-                            .await
-                            .unwrap_or_default();
-                    if gpu_enabled
-                        && let Ok(body) = system_command::run(
-                            SystemCommand::NvidiaMetrics,
-                            Duration::from_secs(2),
-                        )
-                        .await
-                        && let Some(mut nvidia) = parse_nvidia_metrics(&body)
-                    {
-                        let devices = sample.gpus.get_or_insert_with(Vec::new);
-                        nvidia.truncate(MAX_GPU_DEVICES.saturating_sub(devices.len()));
-                        devices.extend(nvidia);
-                    }
-                    sender.send_replace(Some((Instant::now(), sample)));
-                    tokio::time::sleep(REFRESH_INTERVAL).await;
-                }
-            })
-        });
-        Self { latest, worker }
+    pub fn new(enabled: bool, gpu_enabled: bool) -> Self {
+        let (amd_enabled, nvidia_enabled) = if enabled && gpu_enabled {
+            gpu_capabilities()
+        } else {
+            (false, false)
+        };
+        Self {
+            enabled,
+            amd_enabled,
+            nvidia_enabled,
+        }
     }
 
-    pub fn current(&self) -> ExtendedSnapshot {
-        self.latest
-            .borrow()
-            .as_ref()
-            .filter(|(collected_at, _)| collected_at.elapsed() <= MAX_SAMPLE_AGE)
-            .map_or_else(ExtendedSnapshot::default, |(_, sample)| sample.clone())
+    pub async fn collect(&self) -> ExtendedSnapshot {
+        if !self.enabled {
+            return ExtendedSnapshot::default();
+        }
+        // The host loop awaits this one job: no independent timer, cached
+        // stale sample, or accumulating blocking work.
+        let amd_enabled = self.amd_enabled;
+        let mut sample = tokio::task::spawn_blocking(move || collect_local(amd_enabled))
+            .await
+            .unwrap_or_default();
+        if self.nvidia_enabled
+            && let Ok(body) =
+                system_command::run(SystemCommand::NvidiaMetrics, Duration::from_secs(2)).await
+            && let Some(mut nvidia) = parse_nvidia_metrics(&body)
+        {
+            let devices = sample.gpus.get_or_insert_with(Vec::new);
+            nvidia.truncate(MAX_GPU_DEVICES.saturating_sub(devices.len()));
+            devices.extend(nvidia);
+        }
+        sample
     }
 }
 
-impl Drop for ExtendedCollector {
-    fn drop(&mut self) {
-        if let Some(worker) = &self.worker {
-            worker.abort();
-        }
-    }
+#[cfg(target_os = "linux")]
+fn gpu_capabilities() -> (bool, bool) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let amd = fs::read_dir("/sys/class/drm").is_ok_and(|entries| {
+        entries.take(128).filter_map(Result::ok).any(|entry| {
+            let name = entry.file_name();
+            let card = name.to_str().and_then(|name| name.strip_prefix("card"));
+            let is_card = card.is_some_and(|index| {
+                !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+            });
+            is_card && small_file(entry.path().join("device/vendor")).as_deref() == Some("0x1002")
+        })
+    });
+    let nvidia_device = fs::read_dir("/proc/driver/nvidia/gpus")
+        .is_ok_and(|entries| entries.take(MAX_GPU_DEVICES).any(|entry| entry.is_ok()));
+    let nvidia_tool = fs::metadata("/usr/bin/nvidia-smi")
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0);
+    (amd, nvidia_device && nvidia_tool)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn gpu_capabilities() -> (bool, bool) {
+    (false, false)
 }
 
 #[cfg(target_os = "linux")]
@@ -450,9 +464,10 @@ mod tests {
     }
 
     #[test]
-    fn disabled_collector_needs_no_runtime_and_has_no_worker() {
-        let collector = ExtendedCollector::start(false, false);
-        assert!(collector.worker.is_none());
-        assert!(collector.current().process_count.is_none());
+    fn disabled_collector_needs_no_runtime_or_gpu_detection() {
+        let collector = ExtendedCollector::new(false, false);
+        assert!(!collector.enabled);
+        assert!(!collector.amd_enabled);
+        assert!(!collector.nvidia_enabled);
     }
 }

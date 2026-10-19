@@ -76,6 +76,7 @@ async fn run_worker(
     let mut next_config = Instant::now();
     let mut active = JoinSet::new();
     let mut in_flight = HashSet::new();
+    let mut completion = None;
     loop {
         let now = Instant::now();
         if now >= next_config {
@@ -93,6 +94,7 @@ async fn run_worker(
                             .iter()
                             .any(|scheduled| !enabled_tasks.contains(&scheduled.task))
                     {
+                        completion = None;
                         active.abort_all();
                         while active.join_next().await.is_some() {}
                         in_flight.clear();
@@ -117,7 +119,7 @@ async fn run_worker(
         // Each completed result exists in exactly one JoinSet entry or this
         // bounded batch. Delivery failure drops it; no historical retry queue.
         let mut results = Vec::with_capacity(MAX_PROBE_CONCURRENCY);
-        while let Some(completed) = active.try_join_next() {
+        while let Some(completed) = completion.take().or_else(|| active.try_join_next()) {
             if let Ok(result) = completed {
                 let result: ProbeResult = result;
                 in_flight.remove(&result.task_id);
@@ -163,8 +165,33 @@ async fn run_worker(
                 active.spawn(run_probe(target_client.clone(), scheduled.task.clone()));
             }
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // An in-flight task already owns its next run. When every slot is
+        // occupied, wait for a completion instead of spinning on overdue work.
+        let next_wake = next_wake(&schedules, &in_flight, active.len(), next_config);
+        tokio::select! {
+            completed = active.join_next(), if !active.is_empty() => {
+                completion = completed;
+            }
+            () = tokio::time::sleep_until(next_wake.into()) => {}
+        }
     }
+}
+
+fn next_wake(
+    schedules: &[ScheduledProbe],
+    in_flight: &HashSet<String>,
+    active_count: usize,
+    next_config: Instant,
+) -> Instant {
+    if active_count >= MAX_PROBE_CONCURRENCY {
+        return next_config;
+    }
+    schedules
+        .iter()
+        .filter(|scheduled| !in_flight.contains(&scheduled.task.id))
+        .map(|scheduled| scheduled.next_run)
+        .min()
+        .map_or(next_config, |next_probe| next_probe.min(next_config))
 }
 
 async fn fetch_config(
