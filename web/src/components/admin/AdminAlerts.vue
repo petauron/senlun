@@ -15,7 +15,7 @@ const channel = ref(emptyChannel())
 const rule = ref(emptyRule())
 const removing = ref<{ kind: 'channels' | 'alert-rules', id: string, name: string } | null>(null)
 const { busy, error, success, run } = useAdminAction(props.refresh)
-const metricLabels = { offline: '节点离线', cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', traffic: '流量额度使用率', expiry: '到期提醒' }
+const metricLabels = { offline: '节点离线', cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', traffic: '本地流量额度使用率', expiry: '到期提醒' }
 const thresholdLabel = computed(() => rule.value.metric === 'expiry' ? '提前提醒（天）' : '阈值（%）')
 const date = (value: number) => new Date(value).toLocaleString()
 const nodeName = (id: string) => props.nodes.find(node => node.id === id)?.name ?? id
@@ -92,6 +92,9 @@ async function remove(): Promise<void> {
       </form>
     </CardX>
     <CardX title="告警规则" content-class="space-y-4">
+      <p class="text-sm text-muted-foreground">
+        流量告警按节点本地网卡周期累计和配置额度计算，不含服务商流量。
+      </p>
       <p v-if="!rules.length" class="text-sm text-muted-foreground">
         尚无告警规则。选择告警条件即可启用站内告警，通知渠道可按需配置。
       </p>
