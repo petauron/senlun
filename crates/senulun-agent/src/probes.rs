@@ -167,16 +167,7 @@ async fn run_worker(
         }
         // An in-flight task already owns its next run. When every slot is
         // occupied, wait for a completion instead of spinning on overdue work.
-        let next_wake = if active.len() < MAX_PROBE_CONCURRENCY {
-            schedules
-                .iter()
-                .filter(|scheduled| !in_flight.contains(&scheduled.task.id))
-                .map(|scheduled| scheduled.next_run)
-                .min()
-                .map_or(next_config, |next_probe| next_probe.min(next_config))
-        } else {
-            next_config
-        };
+        let next_wake = next_wake(&schedules, &in_flight, active.len(), next_config);
         tokio::select! {
             completed = active.join_next(), if !active.is_empty() => {
                 completion = completed;
@@ -184,6 +175,23 @@ async fn run_worker(
             () = tokio::time::sleep_until(next_wake.into()) => {}
         }
     }
+}
+
+fn next_wake(
+    schedules: &[ScheduledProbe],
+    in_flight: &HashSet<String>,
+    active_count: usize,
+    next_config: Instant,
+) -> Instant {
+    if active_count >= MAX_PROBE_CONCURRENCY {
+        return next_config;
+    }
+    schedules
+        .iter()
+        .filter(|scheduled| !in_flight.contains(&scheduled.task.id))
+        .map(|scheduled| scheduled.next_run)
+        .min()
+        .map_or(next_config, |next_probe| next_probe.min(next_config))
 }
 
 async fn fetch_config(
