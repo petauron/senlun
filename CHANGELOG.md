@@ -4,6 +4,26 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.26](https://github.com/petauron/senulun/compare/v0.1.0-alpha.25...v0.1.0-alpha.26) (2026-10-19)
+
+
+### Features
+
+* **traffic:** correct current-cycle local usage from node management ([c8695aa](https://github.com/petauron/senulun/commit/c8695aa61d895a5bbbf41c13ebeb877404bba9bb))
+
+
+### Bug Fixes
+
+* **traffic:** confirm unsaved drafts before leaving traffic settings ([2faf01f](https://github.com/petauron/senulun/commit/2faf01f563faefd660ec5a274faaf321662c0533))
+* **traffic:** preserve unsaved source drafts when refreshing status ([80c9606](https://github.com/petauron/senulun/commit/80c9606a4784e48c66727f55becc84ec7828c666))
+
+
+### Performance Improvements
+
+* **agent:** avoid idle polling and duplicate metric collection ([8b6dbc3](https://github.com/petauron/senulun/commit/8b6dbc3399bae76f4c3b10b8cbb9e7bedbab7110))
+* **storage:** group agent ingestion into durable SQLite batches ([eabacfd](https://github.com/petauron/senulun/commit/eabacfd54835546c3baa81fbb1feca53f597ca02))
+* **storage:** persist minute rollups with a bounded hot window ([f3b420b](https://github.com/petauron/senulun/commit/f3b420b16a50c04aec193a4d85499a66500a2917))
+
 ## [0.1.0-alpha.25](https://github.com/petauron/senulun/compare/v0.1.0-alpha.24...v0.1.0-alpha.25) (2026-10-18)
 
 
