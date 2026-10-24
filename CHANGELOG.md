@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.28](https://github.com/petauron/senulun/compare/v0.1.0-alpha.27...v0.1.0-alpha.28) (2026-10-24)
+
+
+### Bug Fixes
+
+* include IPv6 probes in dashboard summaries ([#99](https://github.com/petauron/senulun/issues/99)) ([560a0c8](https://github.com/petauron/senulun/commit/560a0c849b236b7d2fea43d5a7b12febd06cdb54))
+
 ## [0.1.0-alpha.27](https://github.com/petauron/senulun/compare/v0.1.0-alpha.26...v0.1.0-alpha.27) (2026-10-24)
 
 
