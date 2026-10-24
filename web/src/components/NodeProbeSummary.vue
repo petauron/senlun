@@ -7,10 +7,11 @@ import { formatDateTime } from '@/utils/helper'
 import { getProbeToneColor, selectHomeProbes } from '@/utils/nodeHelpers'
 import { failureRateLabel } from '@/utils/probeLabels'
 
-const props = defineProps<{ probes?: NodeProbe[], compact?: boolean, nodeUuid?: string, interactive?: boolean, nodeName?: string }>()
+const props = defineProps<{ probes?: NodeProbe[], compact?: boolean, nodeUuid?: string, interactive?: boolean, nodeName?: string, ipVersion?: 'ipv4' | 'ipv6' }>()
 const emit = defineEmits<{ open: [] }>()
 const app = useAppStore()
 const metrics = ['latency', 'loss'] as const
+const ipv6DisplayName = /ipv6/gi
 const historyHours = computed(() => {
   if (!props.nodeUuid)
     return 1
@@ -22,17 +23,17 @@ const historyLabel = computed(() => historyHours.value % 24 === 0 ? `${historyHo
 const emptyPoints: NodeProbe['points'] = Array.from({ length: 10 }, (_, bucket) => ({ bucket, time: 0, latency: null, loss: 0, samples: 0, successful_samples: 0 }))
 const rows = computed(() => {
   const selected = props.nodeUuid
-    ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings)
+    ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
     : props.probes ?? []
   return selected.map((task, index) => {
     if (!task) {
-      return { id: `empty-${index}`, name: '未配置', kind: 'icmp' as const, stale: true, points: emptyPoints, latency: '--', loss: '--' }
+      return { id: `empty-${index}`, name: props.ipVersion === 'ipv6' ? '未配置 V6' : '未配置 V4', kind: 'icmp' as const, stale: true, points: emptyPoints, latency: '--', loss: '--' }
     }
     const stale = task.samples === 0
     const points = task.points.slice(-10)
     return {
       id: task.id,
-      name: task.name,
+      name: props.nodeUuid ? task.name.replace(ipv6DisplayName, 'V6') : task.name,
       kind: task.kind,
       stale,
       points: emptyPoints.map((empty, bucket) => points.find(p => p.bucket === bucket) ?? empty),

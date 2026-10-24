@@ -2,12 +2,20 @@
 import type { NodeData } from '@/stores/nodes'
 import { computed, defineAsyncComponent, ref } from 'vue'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
+import { useAppStore } from '@/stores/app'
 import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
+const app = useAppStore()
+const probeIPVersions = ['ipv4', 'ipv6'] as const
+const probeIPVersion = computed<'ipv4' | 'ipv6'>({
+  get: () => app.getHomeProbeIPVersion(props.node.uuid),
+  set: value => app.setHomeProbeIPVersion(props.node.uuid, value),
+})
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
 const { pickSurfaceClass } = useBackgroundSurface()
 const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map(probe => probe.kind) ?? []))
@@ -15,13 +23,25 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 
 <template>
   <div @click.stop>
+    <div role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="mb-1 flex justify-end gap-0.5">
+      <Button
+        v-for="version in probeIPVersions" :key="version"
+        variant="ghost" size="xs" class="rounded-sm px-2"
+        :aria-pressed="probeIPVersion === version"
+        :aria-label="`${node.name} 显示 ${version === 'ipv4' ? 'IPv4' : 'IPv6'} 延迟`"
+        :class="probeIPVersion === version ? 'bg-emerald-500/10 text-emerald-600' : ''"
+        @click="probeIPVersion = version"
+      >
+        {{ version === 'ipv4' ? 'IPv4' : 'IPv6' }}
+      </Button>
+    </div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :aria-label="`${node.name} 延迟 / ${rateLabel}详情`" @click="open = true" @keydown.enter.self.prevent="open = true" @keydown.space.self.prevent="open = true"
     >
-      <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" />
+      <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" :ip-version="probeIPVersion" />
     </div>
-    <NodeProbeSummary v-else :probes="node.probes" :node-uuid="node.uuid" :node-name="node.name" interactive @open="open = true" />
+    <NodeProbeSummary v-else :probes="node.probes" :node-uuid="node.uuid" :ip-version="probeIPVersion" :node-name="node.name" interactive @open="open = true" />
     <Dialog v-model:open="open">
       <DialogContent
         class="max-w-6xl gap-0 overflow-hidden border-emerald-600/10 p-0 shadow-[0_0_2rem] shadow-emerald-800/10 transition-all"

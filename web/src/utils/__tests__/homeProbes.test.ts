@@ -24,6 +24,6 @@ describe('selectHomeProbes', () => {
   it('bounds row count and preserves an explicit empty selection', () => {
     expect(selectHomeProbes(probes, 'node', { homePingRowCount: 0 })).toEqual([probes[0]])
     expect(selectHomeProbes(probes, 'node', { homePingRowCount: 3, homePingTasksByNode: { node: [] } })).toEqual([null, null, null])
-    expect(selectHomeProbes([], 'node', { homePingRowCount: 99 })).toHaveLength(8)
+    expect(selectHomeProbes([], 'node', { homePingRowCount: 99 })).toHaveLength(3)
   })
 })

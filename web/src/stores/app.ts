@@ -44,6 +44,22 @@ const useAppStore = defineStore('app', () => {
   // 使用 null 表示未设置，等待主题配置加载后决定
   const storedViewMode = useStorageAsync<NodeViewMode | null>('nodeViewMode', null, localStorage)
 
+  // IPv4 is the default; retain at most 1,000 node-specific IPv6 selections.
+  const storedIPv6ProbeNodes = useStorageAsync<string[]>('homeIPv6ProbeNodes', [], localStorage)
+
+  function getHomeProbeIPVersion(nodeUuid: string): 'ipv4' | 'ipv6' {
+    return Array.isArray(storedIPv6ProbeNodes.value) && storedIPv6ProbeNodes.value.slice(-1000).includes(nodeUuid)
+      ? 'ipv6'
+      : 'ipv4'
+  }
+
+  function setHomeProbeIPVersion(nodeUuid: string, version: 'ipv4' | 'ipv6') {
+    const previous = Array.isArray(storedIPv6ProbeNodes.value)
+      ? storedIPv6ProbeNodes.value.filter(id => typeof id === 'string' && id !== nodeUuid)
+      : []
+    storedIPv6ProbeNodes.value = (version === 'ipv6' ? [...previous, nodeUuid] : previous).slice(-1000)
+  }
+
   // 计算属性：从主题配置获取默认视图模式
   const defaultViewMode = computed<NodeViewMode>(() => {
     const settings = publicSettings.value?.theme_settings
@@ -327,6 +343,8 @@ const useAppStore = defineStore('app', () => {
     lang,
     nodeSelectedGroup,
     nodeViewMode,
+    getHomeProbeIPVersion,
+    setHomeProbeIPVersion,
     defaultViewMode,
     rpcTransportMode,
     byteDecimals,
