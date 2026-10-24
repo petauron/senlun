@@ -27,9 +27,10 @@ impl DashboardProbeConfig {
     pub(crate) fn from_theme(settings: &Value, retention_days: u32) -> Self {
         let hours = bounded_theme_integer(settings, "homePingHistoryHours", 1, 1, 168)
             .min(retention_days.saturating_mul(24).max(1));
+        // Include both carrier families; the theme selects three or six visible rows per node.
         let row_count =
-            usize::try_from(bounded_theme_integer(settings, "homePingRowCount", 3, 1, 8))
-                .unwrap_or(3);
+            usize::try_from(bounded_theme_integer(settings, "homePingRowCount", 6, 1, 8))
+                .unwrap_or(6);
         let mut tasks_by_node = HashMap::new();
         if let Some(nodes) = settings["homePingTasksByNode"].as_object() {
             for (node, task_ids) in nodes {
@@ -79,7 +80,7 @@ impl Default for DashboardProbeConfig {
     fn default() -> Self {
         Self {
             hours: 1,
-            row_count: 3,
+            row_count: 6,
             tasks_by_node: HashMap::new(),
         }
     }
