@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.29](https://github.com/petauron/senulun/compare/v0.1.0-alpha.28...v0.1.0-alpha.29) (2026-10-24)
+
+
+### Features
+
+* **ui:** switch IPv4 and IPv6 probes per node ([#101](https://github.com/petauron/senulun/issues/101)) ([51878e9](https://github.com/petauron/senulun/commit/51878e957b10edf0fab603ed2ee42b7a9047ab05))
+
 ## [0.1.0-alpha.28](https://github.com/petauron/senulun/compare/v0.1.0-alpha.27...v0.1.0-alpha.28) (2026-10-24)
 
 
