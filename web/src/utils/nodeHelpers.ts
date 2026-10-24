@@ -95,11 +95,13 @@ export function getProbeToneColor(metric: 'latency' | 'loss', value: number | nu
   return typeof configured === 'string' && hexColor.test(configured) ? configured.toUpperCase() : probeToneDefaults[tone]!
 }
 
+const ipv6ProbeName = /ipv6/i
+
 export function selectHomeProbes(probes: NodeProbe[], nodeUuid: string, settings?: Record<string, unknown> | null): Array<NodeProbe | null> {
   const configuredCount = settings?.homePingRowCount
   const rowCount = typeof configuredCount === 'number' && Number.isFinite(configuredCount)
     ? Math.round(Math.min(8, Math.max(1, configuredCount)))
-    : 3
+    : probes.some(probe => ipv6ProbeName.test(probe.name)) ? 6 : 3
   const configuredMap = settings?.homePingTasksByNode
   const taskIds = configuredMap && typeof configuredMap === 'object' && !Array.isArray(configuredMap) && Object.hasOwn(configuredMap, nodeUuid)
     ? (configuredMap as Record<string, unknown>)[nodeUuid]
