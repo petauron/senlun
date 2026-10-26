@@ -448,7 +448,7 @@ impl Storage {
             .unwrap_or(i64::MAX)
             .saturating_sub(POLL_INTERVAL_MS);
         let mut statement = tx.prepare("SELECT s.node_id,s.config,s.credential,s.generation FROM external_traffic_sources s JOIN nodes n ON n.id=s.node_id
-            WHERE n.disabled_at_ms IS NULL AND json_extract(s.config,'$.enabled')=1 AND s.last_attempt_ms<=?1
+            WHERE n.disabled_at_ms IS NULL AND json_extract(s.config,'$.enabled')=1 AND s.status!='authentication_required' AND s.last_attempt_ms<=?1
             ORDER BY s.last_attempt_ms,s.node_id LIMIT 8")?;
         let rows = statement.query_map([due], |row| {
             Ok((
@@ -618,12 +618,20 @@ async fn poll_source(
     if matches!(response, Err("authentication_required"))
         && config.auth_mode == AuthMode::LoginRefresh
     {
-        if !credential.refresh_token.is_empty() && refresh(config, credential).await.is_ok() {
-            token = Some(credential.access_token.clone());
-        } else {
+        if credential.refresh_token.is_empty() {
             authenticate(config, credential).await?;
-            token = Some(credential.access_token.clone());
+        } else {
+            match refresh(config, credential).await {
+                Ok(()) => {}
+                // Only an explicit HTTP 401/403 permits one password-login attempt.
+                // Invalid refresh responses and transient failures never trigger login.
+                Err("refresh_http_authentication_rejected") => {
+                    authenticate(config, credential).await?;
+                }
+                Err(status) => return Err(status),
+            }
         }
+        token = Some(credential.access_token.clone());
         response = request_json(&traffic_url, reqwest::Method::GET, None, token.as_deref()).await;
     }
     let value = response?;
@@ -662,7 +670,15 @@ async fn refresh(config: &SourceConfig, credential: &mut Credential) -> Result<(
         Value::String(credential.refresh_token.clone()),
     );
     let body = Value::Object(fields);
-    let value = request_json(&url, reqwest::Method::POST, Some(&body), None).await?;
+    let value = request_json(&url, reqwest::Method::POST, Some(&body), None)
+        .await
+        .map_err(|status| match status {
+            // request_json uses this status only for an HTTP 401/403 response.
+            "authentication_required" => "refresh_http_authentication_rejected",
+            // A non-JSON challenge or changed response requires administrator review.
+            "invalid_data" => "authentication_required",
+            status => status,
+        })?;
     let access = json_string(&value, &config.access_pointer).ok_or("authentication_required")?;
     let next = json_string(&value, &config.refresh_pointer)
         .unwrap_or(&credential.refresh_token)
@@ -769,7 +785,10 @@ async fn request_json(
         request = request.json(body);
     }
     let mut response = request.send().await.map_err(|_| "provider_unavailable")?;
-    if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+    if matches!(
+        response.status(),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+    ) {
         return Err("authentication_required");
     }
     if !response.status().is_success() {
