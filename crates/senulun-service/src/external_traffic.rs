@@ -20,7 +20,7 @@ use ring::{
     aead,
     rand::{SecureRandom, SystemRandom},
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::lookup_host;
@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::{
     ApiError, AppState,
-    control::configuration_audit,
+    control::{TrafficSource, configuration_audit, options_or_none},
     ip_info::public_ip,
     storage::{Storage, StorageError},
 };
@@ -273,6 +273,19 @@ fn validate_url(raw: &str) -> Result<Url, StorageError> {
     Ok(url)
 }
 
+fn retire_provider_evaluation(tx: &Transaction<'_>, node_id: &str) -> Result<(), StorageError> {
+    if options_or_none(tx, node_id)?
+        .is_some_and(|options| options.traffic_source == TrafficSource::Provider)
+    {
+        crate::notifications::retire_traffic_evaluation(
+            tx,
+            node_id,
+            crate::storage::unix_time_ms()?,
+        )?;
+    }
+    Ok(())
+}
+
 impl Storage {
     pub(crate) fn has_traffic_sources(&self) -> Result<bool, StorageError> {
         let db = self.connection()?;
@@ -410,6 +423,9 @@ impl Storage {
         let config = serde_json::to_string(&input.config)
             .map_err(|_| StorageError::InvalidInput("invalid traffic configuration"))?;
         let sealed = key.encrypt(&credential)?;
+        if changed {
+            retire_provider_evaluation(&tx, node_id)?;
+        }
         let generation = Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO external_traffic_sources(node_id,config,credential,last_attempt_ms,status,generation)
@@ -436,6 +452,7 @@ impl Storage {
         {
             return Err(StorageError::NotFound);
         }
+        retire_provider_evaluation(&tx, node_id)?;
         configuration_audit(&tx, "traffic_source.delete", node_id)?;
         tx.commit()?;
         Ok(())

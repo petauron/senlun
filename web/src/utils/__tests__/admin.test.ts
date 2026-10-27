@@ -20,6 +20,7 @@ describe('node metadata updates', () => {
       billing_cycle_days: 30,
       expired_at_unix_ms: null,
       auto_renewal: false,
+      traffic_source: 'local',
       traffic_limit_bytes: 1024,
       traffic_limit_type: 'sum',
       traffic_reset_day: 1,

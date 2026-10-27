@@ -40,6 +40,7 @@ export interface NodeData {
   traffic_limit: number
   traffic_limit_type: TrafficLimitType
   external_traffic?: Client['external_traffic']
+  selected_traffic?: Client['selected_traffic']
   created_at: string
   updated_at: string
   // Status 信息
@@ -69,6 +70,7 @@ export type WsConnectionState = 'disconnected' | 'connecting' | 'connected' | 'r
 
 /** 状态数据（用于更新） */
 interface StatusData {
+  selected_traffic?: Client['selected_traffic']
   online: boolean
   time: string
   cpu: number
@@ -163,6 +165,7 @@ const useNodesStore = defineStore('nodes', () => {
       traffic_limit: client.traffic_limit,
       traffic_limit_type: client.traffic_limit_type as TrafficLimitType,
       external_traffic: client.external_traffic,
+      selected_traffic: client.selected_traffic,
       created_at: client.created_at,
       updated_at: client.updated_at,
       // Status 默认值
@@ -207,6 +210,7 @@ const useNodesStore = defineStore('nodes', () => {
       disk: status.disk,
       net_in: status.net_in,
       net_out: status.net_out,
+      selected_traffic: status.selected_traffic,
       net_total_up: status.net_total_up,
       net_total_down: status.net_total_down,
       process: status.process,
@@ -234,6 +238,7 @@ const useNodesStore = defineStore('nodes', () => {
       disk: status.disk,
       net_in: status.net_in,
       net_out: status.net_out,
+      selected_traffic: status.selected_traffic,
       net_total_up: status.net_total_up,
       net_total_down: status.net_total_down,
       process: status.process,
@@ -363,6 +368,7 @@ const useNodesStore = defineStore('nodes', () => {
           disk: currentNode.disk,
           net_in: currentNode.net_in,
           net_out: currentNode.net_out,
+          selected_traffic: client.selected_traffic,
           net_total_up: currentNode.net_total_up,
           net_total_down: currentNode.net_total_down,
           process: currentNode.process,

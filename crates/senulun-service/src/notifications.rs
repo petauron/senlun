@@ -8,7 +8,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    control::{AlertRule, Channel, NodeOptions, period_start, validate_webhook},
+    control::{AlertRule, Channel, NodeOptions, TrafficSource, selected_traffic, validate_webhook},
     storage::{Storage, StorageError},
 };
 
@@ -38,6 +38,7 @@ struct NodeState {
     memory: Option<f64>,
     disk: Option<f64>,
     traffic: Option<f64>,
+    traffic_source: TrafficSource,
     expiry: Option<u64>,
 }
 
@@ -65,7 +66,7 @@ impl Storage {
         )?;
         if !enabled {
             tx.execute("DELETE FROM alert_deliveries", [])?;
-            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status!='resolved'", [integer(now_ms)])?;
+            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status NOT IN ('resolved','superseded')", [integer(now_ms)])?;
             tx.commit()?;
             return Ok(());
         }
@@ -83,7 +84,7 @@ impl Storage {
             let rule: AlertRule = decode(&record?)?;
             if !rule.enabled {
                 tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT id FROM alert_incidents WHERE rule_id=?1)", [&rule.id])?;
-                tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2 WHERE rule_id=?1 AND status!='resolved'", params![rule.id, integer(now_ms)])?;
+                tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2 WHERE rule_id=?1 AND status NOT IN ('resolved','superseded')", params![rule.id, integer(now_ms)])?;
                 continue;
             }
             retire_unassigned(&tx, &rule, &nodes, now_ms)?;
@@ -117,7 +118,7 @@ impl Storage {
         }
         drop(rules);
         tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT a.id FROM alert_incidents a JOIN nodes n ON n.id=a.node_id WHERE n.disabled_at_ms IS NOT NULL)", [])?;
-        tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status!='resolved' AND node_id IN (SELECT id FROM nodes WHERE disabled_at_ms IS NOT NULL)", [integer(now_ms)])?;
+        tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status NOT IN ('resolved','superseded') AND node_id IN (SELECT id FROM nodes WHERE disabled_at_ms IS NOT NULL)", [integer(now_ms)])?;
         tx.commit()?;
         Ok(())
     }
@@ -215,6 +216,17 @@ impl Storage {
     }
 }
 
+// Source/resource edits end only current traffic evaluations, never monitoring history.
+pub(crate) fn retire_traffic_evaluation(
+    tx: &Transaction<'_>,
+    node_id: &str,
+    now: u64,
+) -> Result<(), StorageError> {
+    tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT i.id FROM alert_incidents i JOIN alert_rules r ON r.id=i.rule_id WHERE i.node_id=?1 AND json_extract(r.data,'$.metric')='traffic')", [node_id])?;
+    tx.execute("UPDATE alert_incidents SET status='superseded',message=message || ' [Traffic source changed; previous evaluation ended without recovery]',updated_at_ms=?2,last_sent_at_ms=0 WHERE node_id=?1 AND (status IN ('pending','firing') OR last_sent_at_ms<0) AND rule_id IN (SELECT id FROM alert_rules WHERE json_extract(data,'$.metric')='traffic')", params![node_id, integer(now)])?;
+    Ok(())
+}
+
 // Percentages are approximate display/threshold values; byte counters stay exact in storage.
 #[allow(clippy::cast_precision_loss)]
 fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>, StorageError> {
@@ -224,11 +236,9 @@ fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>
                 coalesce(s.memory_used_bytes,json_extract(m.data,'$.last.ram')),
                 coalesce(s.memory_total_bytes,json_extract(m.data,'$.last.ram_total')),
                 coalesce(s.disk_used_bytes,json_extract(m.data,'$.last.disk')),
-                coalesce(s.disk_total_bytes,json_extract(m.data,'$.last.disk_total')),
-                t.used_up,t.used_down,t.cycle_start_ms
+                coalesce(s.disk_total_bytes,json_extract(m.data,'$.last.disk_total'))
          FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id
          LEFT JOIN node_state ns ON ns.node_id=n.id
-         LEFT JOIN traffic_periods t ON t.node_id=n.id
          LEFT JOIN snapshots s ON s.id=(SELECT latest.id FROM snapshots latest
              WHERE latest.node_id=n.id ORDER BY latest.received_at_ms DESC,latest.id DESC LIMIT 1)
          LEFT JOIN snapshot_minutes m ON m.id=(SELECT id FROM snapshot_minutes WHERE node_id=n.id
@@ -242,27 +252,7 @@ fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>
             .get::<_, Option<String>>(4)?
             .map(|raw| decode(&raw))
             .transpose()?;
-        let used_up = row.get::<_, Option<i64>>(10)?.map(unsigned);
-        let used_down = row.get::<_, Option<i64>>(11)?.map(unsigned);
-        let stored_cycle = row.get::<_, Option<i64>>(12)?.map(unsigned);
-        let traffic = options.as_ref().and_then(|options| {
-            let current_cycle = period_start(now_ms, options.traffic_reset_day);
-            // An offline Agent cannot roll its persisted counters into the new
-            // billing period. Previous-period usage must not trigger this one.
-            let (up, down) = if stored_cycle? == current_cycle {
-                (used_up?, used_down?)
-            } else {
-                (0, 0)
-            };
-            let used = match options.traffic_limit_type.as_str() {
-                "up" => up,
-                "down" => down,
-                "min" => up.min(down),
-                "max" => up.max(down),
-                _ => up.saturating_add(down),
-            };
-            percentage(Some(used as f64), Some(options.traffic_limit_bytes as f64))
-        });
+        let selection = selected_traffic(db, &row.get::<_, String>(0)?, options.as_ref(), now_ms)?;
         nodes.insert(
             row.get(0)?,
             NodeState {
@@ -275,12 +265,52 @@ fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>
                 cpu: row.get(5)?,
                 memory: percentage(row.get(6)?, row.get(7)?),
                 disk: percentage(row.get(8)?, row.get(9)?),
-                traffic,
+                traffic: selection.percentage,
+                traffic_source: selection.source,
                 expiry: options.and_then(|options| options.expired_at_unix_ms),
             },
         );
     }
     Ok(nodes)
+}
+
+// Unknown data breaks pending duration and cancels queued traffic transitions,
+// but it cannot prove recovery of an already firing incident.
+fn pause_evaluation(
+    tx: &Transaction<'_>,
+    rule: &AlertRule,
+    incident: Option<&Incident>,
+    now: u64,
+) -> Result<(), StorageError> {
+    let Some(incident) = incident else {
+        return Ok(());
+    };
+    if rule.metric == "traffic" {
+        let removed = tx.execute(
+            "DELETE FROM alert_deliveries WHERE incident_id=?1",
+            [&incident.id],
+        )?;
+        if incident.status == "resolved" && incident.last_sent_at < 0 {
+            tx.execute("UPDATE alert_incidents SET status='superseded',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1", params![incident.id, integer(now)])?;
+        } else if removed > 0 {
+            tx.execute(
+                "UPDATE alert_incidents SET last_sent_at_ms=0 WHERE id=?1",
+                [&incident.id],
+            )?;
+        }
+    }
+    if incident.status == "pending" {
+        let status = if rule.metric == "traffic" {
+            "superseded"
+        } else {
+            "resolved"
+        };
+        tx.execute(
+            "UPDATE alert_incidents SET status=?3,updated_at_ms=?2 WHERE id=?1",
+            params![incident.id, integer(now), status],
+        )?;
+    }
+    Ok(())
 }
 
 fn evaluate_node(
@@ -298,18 +328,14 @@ fn evaluate_node(
     ).optional()?;
     let (breached, _) = condition(rule, node, now, offline_after);
     let Some(breached) = breached else {
-        // Missing/stale metrics break a pending duration; they cannot prove
-        // recovery of an already firing incident.
-        if let Some(incident) = old.filter(|incident| incident.status == "pending") {
-            tx.execute(
-                "UPDATE alert_incidents SET status='resolved',updated_at_ms=?2 WHERE id=?1",
-                params![incident.id, integer(now)],
-            )?;
-        }
+        pause_evaluation(tx, rule, old.as_ref(), now)?;
         return Ok(());
     };
     if !breached {
         if let Some(incident) = old {
+            if incident.status == "superseded" {
+                return Ok(());
+            }
             let message = format!("{}: {} recovered", node.name, rule.name);
             let needs_recovery = incident.status == "firing"
                 || (incident.status == "resolved" && incident.last_sent_at < 0);
@@ -351,26 +377,21 @@ fn evaluate_node(
         tx.execute("INSERT INTO alert_incidents(id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,last_sent_at_ms) VALUES(?1,?2,?3,'pending','',?4,?4,0)", params![incident.id, node_id, rule.id, integer(now)])?;
         incident
     };
-    if incident.status == "resolved" {
+    if incident.status == "resolved" || incident.status == "superseded" {
         incident.status = "pending".into();
         incident.opened_at = now;
+        if rule.metric == "traffic" {
+            incident.last_sent_at = 0;
+        }
     }
     let ready =
         now.saturating_sub(incident.opened_at) >= rule.duration_seconds.saturating_mul(1000);
     if incident.status == "pending" && ready {
         incident.status = "firing".into();
     }
-    let reason = match rule.metric.as_str() {
-        "offline" => "node is offline",
-        "cpu" => "CPU usage exceeded the configured threshold",
-        "memory" => "memory usage exceeded the configured threshold",
-        "disk" => "disk usage exceeded the configured threshold",
-        "traffic" => "traffic usage exceeded the configured threshold",
-        "expiry" => "node expiry is within the configured warning window",
-        _ => "monitoring rule triggered",
-    };
+    let reason = alert_reason(&rule.metric, node.traffic_source);
     let message = format!("{}: {}: {reason}", node.name, rule.name);
-    tx.execute("UPDATE alert_incidents SET status=?2,message=?3,opened_at_ms=?4,updated_at_ms=?5 WHERE id=?1 AND (status!=?2 OR message!=?3 OR opened_at_ms!=?4)", params![incident.id, incident.status, message, integer(incident.opened_at), integer(now)])?;
+    tx.execute("UPDATE alert_incidents SET status=?2,message=?3,opened_at_ms=?4,updated_at_ms=?5,last_sent_at_ms=?6 WHERE id=?1 AND (status!=?2 OR message!=?3 OR opened_at_ms!=?4 OR last_sent_at_ms!=?6)", params![incident.id, incident.status, message, integer(incident.opened_at), integer(now), incident.last_sent_at])?;
     if incident.status == "firing"
         && (incident.last_sent_at <= 0
             || now.saturating_sub(unsigned(incident.last_sent_at))
@@ -392,6 +413,21 @@ fn evaluate_node(
         )?;
     }
     Ok(())
+}
+
+fn alert_reason(metric: &str, source: TrafficSource) -> &'static str {
+    match metric {
+        "offline" => "node is offline",
+        "cpu" => "CPU usage exceeded the configured threshold",
+        "memory" => "memory usage exceeded the configured threshold",
+        "disk" => "disk usage exceeded the configured threshold",
+        "traffic" if source == TrafficSource::Provider => {
+            "provider traffic usage exceeded the configured threshold"
+        }
+        "traffic" => "local traffic usage exceeded the configured threshold",
+        "expiry" => "node expiry is within the configured warning window",
+        _ => "monitoring rule triggered",
+    }
 }
 
 // Elapsed seconds and fractional days are presentation/threshold values, not stored counters.
@@ -430,7 +466,7 @@ fn reserve_incident(tx: &Transaction<'_>, available: &mut usize) -> Result<bool,
         *available -= 1;
         return Ok(true);
     }
-    let removed = tx.execute("DELETE FROM alert_incidents WHERE id IN (SELECT id FROM alert_incidents WHERE status='resolved' AND NOT EXISTS(SELECT 1 FROM alert_deliveries WHERE incident_id=alert_incidents.id) ORDER BY updated_at_ms,id LIMIT 1)", [])?;
+    let removed = tx.execute("DELETE FROM alert_incidents WHERE id IN (SELECT id FROM alert_incidents WHERE status IN ('resolved','superseded') AND NOT EXISTS(SELECT 1 FROM alert_deliveries WHERE incident_id=alert_incidents.id) ORDER BY updated_at_ms,id LIMIT 1)", [])?;
     Ok(removed > 0)
 }
 
@@ -528,7 +564,7 @@ fn retire_unassigned(
             || (!rule.node_ids.is_empty() && !rule.node_ids.contains(&node_id))
         {
             tx.execute("DELETE FROM alert_deliveries WHERE incident_id=?1", [&id])?;
-            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1 AND (status!='resolved' OR last_sent_at_ms!=0)", params![id,integer(now)])?;
+            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1 AND status!='superseded' AND (status!='resolved' OR last_sent_at_ms!=0)", params![id,integer(now)])?;
         }
     }
     Ok(())
@@ -592,6 +628,7 @@ mod tests {
             memory: Some(80.0),
             disk: None,
             traffic: Some(99.0),
+            traffic_source: TrafficSource::Local,
             expiry: Some(86_400_000),
         }
     }
@@ -661,7 +698,8 @@ mod tests {
         )
         .unwrap()
             * 1000;
-        let old_cycle = period_start(billing_boundary - 1, options.traffic_reset_day);
+        let old_cycle =
+            crate::control::period_start(billing_boundary - 1, options.traffic_reset_day);
         let db = storage.connection().unwrap();
         db.execute(
             "INSERT INTO traffic_periods(node_id,cycle_start_ms,raw_up,raw_down,used_up,used_down) VALUES(?1,?2,40,50,40,50)",

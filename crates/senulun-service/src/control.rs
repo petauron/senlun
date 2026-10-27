@@ -146,6 +146,27 @@ impl Default for Settings {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TrafficSource {
+    #[default]
+    Local,
+    Provider,
+}
+
+#[derive(Serialize)]
+pub(crate) struct SelectedTraffic {
+    pub source: TrafficSource,
+    pub status: &'static str,
+    pub used_bytes: Option<u64>,
+    pub limit_bytes: Option<u64>,
+    pub up_bytes: Option<u64>,
+    pub down_bytes: Option<u64>,
+    pub percentage: Option<f64>,
+    pub last_success_unix_ms: Option<u64>,
+    pub reset_at: Option<String>,
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct NodeOptions {
@@ -164,6 +185,7 @@ pub(crate) struct NodeOptions {
     pub billing_cycle_days: u32,
     pub expired_at_unix_ms: Option<u64>,
     pub auto_renewal: bool,
+    pub traffic_source: TrafficSource,
     pub traffic_limit_bytes: u64,
     pub traffic_limit_type: String,
     pub traffic_reset_day: u8,
@@ -385,6 +407,7 @@ impl Storage {
     }
 
     pub(crate) fn admin_state(&self) -> Result<Value, StorageError> {
+        let now = crate::storage::unix_time_ms()?;
         let settings = self.settings()?;
         let db = self.connection()?;
         let mut statement = db.prepare("SELECT id,name,region,node_group,disabled_at_ms FROM nodes ORDER BY created_at_ms LIMIT 10000")?;
@@ -410,12 +433,13 @@ impl Storage {
                 traffic_reset_day: 1,
                 ..NodeOptions::default()
             });
-            let mut value = serde_json::to_value(options)
+            let mut value = serde_json::to_value(&options)
                 .map_err(|_| StorageError::InvalidInput("invalid node metadata"))?;
             value["disabled"] = json!(disabled.is_some());
             let (up, down) = period_usage(&db, &id)?;
             value["traffic_used_up"] = json!(up);
             value["traffic_used_down"] = json!(down);
+            value["selected_traffic"] = json!(selected_traffic(&db, &id, Some(&options), now)?);
             nodes.push(value);
         }
         let mut failure_query=db.prepare("SELECT happened_at_ms,subject FROM audit_events WHERE action='notification.failed' ORDER BY id DESC LIMIT 100")?;
@@ -458,6 +482,15 @@ impl Storage {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
+        let old_source =
+            options_or_none(&tx, id)?.map_or(TrafficSource::Local, |old| old.traffic_source);
+        if old_source != options.traffic_source {
+            crate::notifications::retire_traffic_evaluation(
+                &tx,
+                id,
+                crate::storage::unix_time_ms()?,
+            )?;
+        }
         tx.execute("INSERT INTO node_options(node_id,data) VALUES(?1,?2) ON CONFLICT(node_id) DO UPDATE SET data=excluded.data",params![id,encode(options)?])?;
         configuration_audit(&tx, "node.metadata.update", id)?;
         tx.commit()?;
@@ -1085,6 +1118,104 @@ fn period_usage(db: &Connection, node: &str) -> Result<(u64, u64), StorageError>
         .unwrap_or_default())
 }
 
+// One read model feeds display and threshold evaluation; raw local counters stay local.
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn selected_traffic(
+    db: &Connection,
+    node: &str,
+    options: Option<&NodeOptions>,
+    now: u64,
+) -> Result<SelectedTraffic, StorageError> {
+    let source = options.map_or(TrafficSource::Local, |options| options.traffic_source);
+    let mut result = SelectedTraffic {
+        source,
+        status: "unconfigured",
+        used_bytes: None,
+        limit_bytes: None,
+        up_bytes: None,
+        down_bytes: None,
+        percentage: None,
+        last_success_unix_ms: None,
+        reset_at: None,
+    };
+    if source == TrafficSource::Local {
+        let day = options.map_or(1, |options| options.traffic_reset_day);
+        let totals: Option<(i64, i64, i64)> = db
+            .query_row(
+                "SELECT cycle_start_ms,used_up,used_down FROM traffic_periods WHERE node_id=?1",
+                [node],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let limit = options.map_or(0, |options| options.traffic_limit_bytes);
+        result.limit_bytes = Some(limit);
+        let Some((cycle, up, down)) = totals else {
+            result.status = "no_data";
+            return Ok(result);
+        };
+        let (up, down) = if cycle == integer(period_start(now, day)) {
+            (unsigned(up), unsigned(down))
+        } else {
+            // An existing baseline crossed its local billing boundary.
+            (0, 0)
+        };
+        let used = match options.map_or("sum", |options| options.traffic_limit_type.as_str()) {
+            "up" => up,
+            "down" => down,
+            "min" => up.min(down),
+            "max" => up.max(down),
+            _ => up.saturating_add(down),
+        };
+        result.used_bytes = Some(used);
+        result.up_bytes = Some(up);
+        result.down_bytes = Some(down);
+        result.status = if limit > 0 { "ready" } else { "unlimited" };
+    } else {
+        let row: Option<(Option<String>, String, i64, bool)> = db.query_row(
+            "SELECT snapshot,status,last_success_ms,json_extract(config,'$.enabled') FROM external_traffic_sources WHERE node_id=?1",
+            [node], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional()?;
+        let Some((raw, status, success, enabled)) = row else {
+            return Ok(result);
+        };
+        result.last_success_unix_ms = (success > 0).then_some(unsigned(success));
+        if let Some(raw) = raw {
+            let snapshot: crate::external_traffic::TrafficSnapshot = decode(&raw)?;
+            result.used_bytes = Some(snapshot.used_bytes);
+            result.limit_bytes = snapshot.limit_bytes;
+            result.up_bytes = Some(snapshot.up_bytes);
+            result.down_bytes = Some(snapshot.down_bytes);
+            result.reset_at = snapshot.reset_at;
+        }
+        result.status = if !enabled {
+            "disabled"
+        } else if status == "authentication_required" || status == "credential_unavailable" {
+            "authentication_required"
+        } else if status != "ok" && status != "pending" {
+            "sync_failed"
+        } else if result.used_bytes.is_none() {
+            "no_data"
+        } else if status != "ok"
+            || success <= 0
+            || unsigned(success) > now
+            || now.saturating_sub(unsigned(success)) > 90 * 60 * 1_000
+        {
+            "stale"
+        } else if result.limit_bytes.is_none_or(|limit| limit == 0) {
+            "quota_missing"
+        } else {
+            "ready"
+        };
+    }
+    if result.status == "ready" {
+        result.percentage = result
+            .used_bytes
+            .zip(result.limit_bytes)
+            .map(|(used, limit)| used as f64 / limit as f64 * 100.0);
+    }
+    Ok(result)
+}
+
 /// Full-window totals plus a bounded ten-bucket trend for the theme-selected tasks.
 pub(crate) fn dashboard_probes(
     db: &Connection,
@@ -1165,7 +1296,15 @@ pub(crate) fn decorate_client(
             "last_success_unix_ms": unsigned(last_success),
         });
     }
-    if let Some(o) = options_or_none(db, node)? {
+    let options = options_or_none(db, node)?;
+    value["selected_traffic"] = json!(selected_traffic(
+        db,
+        node,
+        options.as_ref(),
+        crate::storage::unix_time_ms()?,
+    )?);
+    if let Some(o) = options {
+        value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);
         if !o.region.is_empty() {
             value["region"] = json!(o.region);
@@ -1212,6 +1351,13 @@ pub(crate) fn decorate_status(
     let (up, down) = period_usage(db, node)?;
     value["net_total_up"] = json!(up);
     value["net_total_down"] = json!(down);
+    let options = options_or_none(db, node)?;
+    value["selected_traffic"] = json!(selected_traffic(
+        db,
+        node,
+        options.as_ref(),
+        crate::storage::unix_time_ms()?,
+    )?);
     let extensions = crate::storage::rollups::latest_extensions(db, node)?;
     if let Some(raw) = extensions {
         let data: Value = decode(&raw)?;

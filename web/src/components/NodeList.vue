@@ -4,14 +4,13 @@ import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
-import TrafficProgress from '@/components/TrafficProgress.vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, getStatus } from '@/utils/helper'
-import { formatOfflineTime, getPriceTags, getRemainingTimeTagClass, getTrafficUsed, getTrafficUsedPercentage, hasRegion, showTrafficProgress } from '@/utils/nodeHelpers'
+import { formatOfflineTime, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
 import { parseTags } from '@/utils/tagHelper'
@@ -95,7 +94,12 @@ const sortedNodes = computed(() => {
       case 'mem': return dir * ((a.ram ?? 0) / (a.mem_total || 1) - (b.ram ?? 0) / (b.mem_total || 1))
       case 'disk': return dir * ((a.disk ?? 0) / (a.disk_total || 1) - (b.disk ?? 0) / (b.disk_total || 1))
       case 'traffic':
-        return dir * (getTrafficUsedPercentage(a) - getTrafficUsedPercentage(b))
+        // Unknown source values always sort last, never as zero usage.
+        if (a.selected_traffic?.percentage === null || a.selected_traffic?.percentage === undefined)
+          return b.selected_traffic?.percentage === null || b.selected_traffic?.percentage === undefined ? 0 : 1
+        if (b.selected_traffic?.percentage === null || b.selected_traffic?.percentage === undefined)
+          return -1
+        return dir * (a.selected_traffic.percentage - b.selected_traffic.percentage)
       case 'rate':
         return dir * (((a.net_out ?? 0) + (a.net_in ?? 0)) - ((b.net_out ?? 0) + (b.net_in ?? 0)))
       default: return 0
@@ -317,35 +321,23 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 </div>
               </div>
 
-              <!-- 流量 -->
-              <div v-else-if="col.key === 'traffic'" class="group">
-                <DataTooltip placement="top" class="flex items-center gap-2" content-class="mb-1.5">
+              <!-- 所选来源的用量与告警使用同一服务端结果。 -->
+              <div v-else-if="col.key === 'traffic'" class="min-w-0">
+                <DataTooltip placement="top" class="block" content-class="mb-1.5">
                   <div class="space-y-1 w-full">
-                    <div class="text-[10px] text-muted-foreground truncate">
-                      <span class="inline group-hover:hidden">
-                        {{ getTrafficUsedPercentage(node).toFixed(1) }}%
-                      </span>
-                      <span class="hidden group-hover:inline">
-                        {{ formatBytes(getTrafficUsed(node)) }} /
-                        <template v-if="showTrafficProgress(node)">{{ formatBytes(node.traffic_limit) }}</template>
-                        <template v-else>∞</template>
-                      </span>
+                    <div class="text-[10px] text-muted-foreground truncate">{{ trafficSourceLabel(node.selected_traffic) }}</div>
+                    <div class="text-[10px] truncate">
+                      {{ node.selected_traffic?.percentage === null || node.selected_traffic?.percentage === undefined ? '--' : `${node.selected_traffic.percentage.toFixed(1)}%` }}
                     </div>
-                    <TrafficProgress
-                      :upload="node.net_total_up ?? 0" :download="node.net_total_down ?? 0"
-                      :traffic-limit="node.traffic_limit" :traffic-limit-type="(node.traffic_limit_type || 'sum')"
-                      height="4px"
-                    />
+                    <ProgressThin v-if="node.selected_traffic?.percentage !== null && node.selected_traffic?.percentage !== undefined" :percentage="Math.min(node.selected_traffic.percentage, 100)" status="success" :height="4" />
+                    <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
+                    <p v-if="trafficSelectionMessage(node.selected_traffic)" role="status" class="text-[10px] text-muted-foreground truncate" :title="trafficSelectionDetails(node.selected_traffic)">{{ trafficSelectionMessage(node.selected_traffic) }}</p>
                   </div>
                   <template #content>
-                    <span class="flex flex-row gap-0.5 items-center whitespace-nowrap">
-                      <Icon icon="tabler:chevron-up" width="12" height="12" />
-                      {{ formatBytes(node.net_total_up ?? 0) }}
-                    </span>
-                    <span class="flex flex-row gap-0.5 items-center whitespace-nowrap">
-                      <Icon icon="tabler:chevron-down" width="12" height="12" />
-                      {{ formatBytes(node.net_total_down ?? 0) }}
-                    </span>
+                    <div class="max-w-xs text-xs">
+                      <p>{{ node.selected_traffic?.used_bytes === null || node.selected_traffic?.used_bytes === undefined ? '暂无用量' : formatBytes(node.selected_traffic.used_bytes) }} / {{ node.selected_traffic?.status === 'unlimited' ? '∞' : node.selected_traffic?.limit_bytes ? formatBytes(node.selected_traffic.limit_bytes) : '额度未知' }}</p>
+                      <p>{{ trafficSelectionDetails(node.selected_traffic) }}</p>
+                    </div>
                   </template>
                 </DataTooltip>
               </div>

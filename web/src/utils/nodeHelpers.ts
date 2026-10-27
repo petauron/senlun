@@ -1,5 +1,5 @@
 import type { NodeData, TrafficLimitType } from '@/stores/nodes'
-import type { NodeProbe } from '@/utils/rpc'
+import type { NodeProbe, SelectedTraffic } from '@/utils/rpc'
 import { formatDateTime } from '@/utils/helper'
 import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, getExpireTextClass } from '@/utils/tagHelper'
 
@@ -26,20 +26,42 @@ export function calculateTrafficUsed(upload: number, download: number, type: Tra
   }
 }
 
-export function showTrafficProgress(node: NodeData): boolean {
-  return node.traffic_limit > 0
-}
-
 export function getTrafficUsed(node: NodeData): number {
   const { net_total_up = 0, net_total_down = 0, traffic_limit_type } = node
   return calculateTrafficUsed(net_total_up, net_total_down, traffic_limit_type)
 }
 
-export function getTrafficUsedPercentage(node: NodeData): number {
-  if (node.traffic_limit <= 0)
-    return 0
-  const used = getTrafficUsed(node)
-  return Math.min((used / node.traffic_limit) * 100, 100)
+export function trafficSourceLabel(selection: SelectedTraffic | undefined): string {
+  if (!selection)
+    return '流量来源不可用'
+  return selection.source === 'provider' ? '服务商流量' : '本地流量'
+}
+
+export function trafficSelectionMessage(selection: SelectedTraffic | undefined): string {
+  if (!selection)
+    return '用量不可判定'
+  const labels: Record<SelectedTraffic['status'], string> = {
+    ready: selection.source === 'provider' ? '周期未知，按服务商快照计费值' : '',
+    unlimited: '本地未设额度',
+    unconfigured: '未配置服务商来源，不回退本地',
+    disabled: '服务商同步已停用，显示上次值',
+    authentication_required: '认证需管理员处理，当前用量不可判定',
+    sync_failed: '同步失败，显示上次成功值',
+    no_data: selection.source === 'provider' ? '尚无服务商快照' : '尚无本地采样',
+    stale: '同步已过期，显示上次成功值',
+    quota_missing: '服务商未提供可用额度',
+  }
+  return labels[selection.status]
+}
+
+export function trafficSelectionDetails(selection: SelectedTraffic | undefined): string {
+  const details = [trafficSourceLabel(selection), trafficSelectionMessage(selection)].filter(Boolean)
+  if (selection?.source === 'provider') {
+    details.push(selection.last_success_unix_ms ? `上次成功：${new Date(selection.last_success_unix_ms).toLocaleString()}` : '尚无成功同步')
+    if (selection.reset_at)
+      details.push(`重置记录：${selection.reset_at}（完整周期未知）`)
+  }
+  return details.join(' · ')
 }
 
 export function getPriceTags(node: NodeData, lang: 'zh-CN' | 'en-US', view: 'card' | 'list' = 'card'): PriceTagItem[] {

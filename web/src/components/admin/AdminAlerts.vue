@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { getSharedApi } from '@/utils/api'
+import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 
 const props = defineProps<{ channels: NotificationChannel[], rules: AlertRule[], incidents: Incident[], failures: { happened_at_unix_ms: number, subject: string }[], nodes: ManagedNode[], refresh: () => Promise<void> }>()
 const emptyChannel = (): NotificationChannel => ({ id: '', name: '', kind: 'webhook', url: '', enabled: false })
@@ -15,11 +16,11 @@ const channel = ref(emptyChannel())
 const rule = ref(emptyRule())
 const removing = ref<{ kind: 'channels' | 'alert-rules', id: string, name: string } | null>(null)
 const { busy, error, success, run } = useAdminAction(props.refresh)
-const metricLabels = { offline: '节点离线', cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', traffic: '本地流量额度使用率', expiry: '到期提醒' }
+const metricLabels = { offline: '节点离线', cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', traffic: '所选来源流量额度使用率', expiry: '到期提醒' }
 const thresholdLabel = computed(() => rule.value.metric === 'expiry' ? '提前提醒（天）' : '阈值（%）')
 const date = (value: number) => new Date(value).toLocaleString()
 const nodeName = (id: string) => props.nodes.find(node => node.id === id)?.name ?? id
-const incidentLabels: Record<string, string> = { pending: '等待持续条件', firing: '告警中', resolved: '已恢复' }
+const incidentLabels: Record<string, string> = { pending: '等待持续条件', firing: '告警中', resolved: '已恢复', superseded: '已结束（不代表恢复）' }
 const incidentStatus = (status: string) => incidentLabels[status] ?? status
 
 async function saveChannel(): Promise<void> {
@@ -93,7 +94,7 @@ async function remove(): Promise<void> {
     </CardX>
     <CardX title="告警规则" content-class="space-y-4">
       <p class="text-sm text-muted-foreground">
-        流量告警按节点本地网卡周期累计和配置额度计算，不含服务商流量。
+        流量告警使用每个节点已保存的流量来源，与卡片和列表一致。服务商数据过期、失败或额度缺失时暂停判定，不切回本地，也不将缺数据当作恢复。
       </p>
       <p v-if="!rules.length" class="text-sm text-muted-foreground">
         尚无告警规则。选择告警条件即可启用站内告警，通知渠道可按需配置。
@@ -180,6 +181,10 @@ async function remove(): Promise<void> {
             <tr v-for="incident in incidents" :key="incident.id" class="border-b">
               <th class="p-2 font-medium">
                 {{ nodeName(incident.node_id) }}
+                <p v-if="rules.some(item => item.id === incident.rule_id && item.metric === 'traffic')" class="mt-1 max-w-xs text-xs font-normal text-muted-foreground">
+                  {{ trafficSelectionDetails(nodes.find(item => item.id === incident.node_id)?.selected_traffic) }}
+                  <span v-if="nodes.find(item => item.id === incident.node_id)?.selected_traffic?.percentage == null"> · 当前不可判定，保留既有事件状态</span>
+                </p>
               </th><td class="p-2">
                 {{ incidentStatus(incident.status) }}
               </td><td class="p-2">
