@@ -368,6 +368,7 @@ const useNodesStore = defineStore('nodes', () => {
           disk: currentNode.disk,
           net_in: currentNode.net_in,
           net_out: currentNode.net_out,
+          selected_traffic: client.selected_traffic,
           net_total_up: currentNode.net_total_up,
           net_total_down: currentNode.net_total_down,
           process: currentNode.process,
