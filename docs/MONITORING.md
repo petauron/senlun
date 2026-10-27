@@ -88,7 +88,10 @@ alerts cover an absent Agent separately.
 ## Alerts and notifications
 
 Rules monitor offline state, CPU/memory/disk utilization, traffic-limit percentage
-or days until expiry. A rule has a duration and a notification cooldown. Missing
+or days until expiry. Traffic uses the node's selected local/provider source,
+shared with its card/list display; unknown provider usage never falls back to
+local or proves recovery. Source/resource changes end the old evaluation without
+recovery notifications (see [external traffic](external-traffic.md)). A rule has a duration and a notification cooldown. Missing
 or stale utilization cannot prove recovery; pending duration is reset until fresh
 data arrives. Empty channel selection keeps the incident inside Senulun.
 The offline timeout is the larger of `SENULUN_OFFLINE_AFTER_SECONDS` and three

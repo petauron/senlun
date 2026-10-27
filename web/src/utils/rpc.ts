@@ -26,6 +26,18 @@ export interface NodeProbe {
   points: { bucket: number, time: number, latency: number | null, loss: number, samples: number, successful_samples: number }[]
 }
 
+export interface SelectedTraffic {
+  source: 'local' | 'provider'
+  status: 'ready' | 'unlimited' | 'unconfigured' | 'disabled' | 'authentication_required' | 'sync_failed' | 'no_data' | 'stale' | 'quota_missing'
+  used_bytes: number | null
+  limit_bytes: number | null
+  up_bytes: number | null
+  down_bytes: number | null
+  percentage: number | null
+  last_success_unix_ms: number | null
+  reset_at: string | null
+}
+
 export interface Client {
   probes?: NodeProbe[]
   uuid: string
@@ -57,6 +69,8 @@ export interface Client {
   hidden: boolean
   traffic_limit: number
   traffic_limit_type: string
+  traffic_source?: 'local' | 'provider'
+  selected_traffic?: SelectedTraffic
   external_traffic?: {
     name: string
     status: string
@@ -75,6 +89,7 @@ export interface Client {
 }
 
 export interface NodeStatus {
+  selected_traffic?: SelectedTraffic
   client: string
   time: string
   collected_time?: string

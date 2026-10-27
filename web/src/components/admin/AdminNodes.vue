@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { nodeMetadata } from '@/utils/admin'
+import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { getSharedApi } from '@/utils/api'
 import { parseTags } from '@/utils/tagHelper'
 
@@ -207,6 +208,13 @@ async function execute(): Promise<void> {
           <legend class="mb-3 font-medium">
             流量周期
           </legend>
+          <label class="grid gap-2 text-sm sm:col-span-3">卡片、列表及额度告警的数据来源
+            <select v-model="draft.traffic_source" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring">
+              <option value="local">本地网卡周期流量</option><option value="provider">服务商记录流量</option>
+            </select>
+          </label>
+          <p class="text-sm text-muted-foreground sm:col-span-3">保存后同时应用于此节点的流量显示与额度告警。服务商未配置、过期或失败时不会切回本地；下列额度、计数方式及重置日只用于本地统计。切换会结束旧来源的阈值评估，不发送恢复通知。</p>
+          <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">当前已保存状态：{{ trafficSelectionDetails(selected.selected_traffic) }}</p>
           <label class="grid gap-2 text-sm">每周期额度（GiB；0 为不限）<Input v-model="quotaGiB" type="number" min="0" :max="Number.MAX_SAFE_INTEGER / 1024 ** 3" step="any" required /></label>
           <label class="grid gap-2 text-sm">流量计数方式<select v-model="draft.traffic_limit_type" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring"><option value="sum">上传 + 下载</option><option value="max">上传、下载中较大值</option><option value="min">上传、下载中较小值</option><option value="up">仅上传</option><option value="down">仅下载</option></select></label>
           <label class="grid gap-2 text-sm">每月重置日（1–28）<Input v-model="draft.traffic_reset_day" type="number" min="1" max="28" step="1" required /></label>

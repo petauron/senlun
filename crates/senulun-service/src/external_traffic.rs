@@ -28,7 +28,7 @@ use uuid::Uuid;
 
 use crate::{
     ApiError, AppState,
-    control::configuration_audit,
+    control::{TrafficSource, configuration_audit, options_or_none},
     ip_info::public_ip,
     storage::{Storage, StorageError},
 };
@@ -410,6 +410,16 @@ impl Storage {
         let config = serde_json::to_string(&input.config)
             .map_err(|_| StorageError::InvalidInput("invalid traffic configuration"))?;
         let sealed = key.encrypt(&credential)?;
+        if changed
+            && options_or_none(&tx, node_id)?
+                .is_some_and(|options| options.traffic_source == TrafficSource::Provider)
+        {
+            crate::notifications::retire_traffic_evaluation(
+                &tx,
+                node_id,
+                crate::storage::unix_time_ms()?,
+            )?;
+        }
         let generation = Uuid::new_v4().to_string();
         tx.execute(
             "INSERT INTO external_traffic_sources(node_id,config,credential,last_attempt_ms,status,generation)
@@ -435,6 +445,15 @@ impl Storage {
         )? == 0
         {
             return Err(StorageError::NotFound);
+        }
+        if options_or_none(&tx, node_id)?
+            .is_some_and(|options| options.traffic_source == TrafficSource::Provider)
+        {
+            crate::notifications::retire_traffic_evaluation(
+                &tx,
+                node_id,
+                crate::storage::unix_time_ms()?,
+            )?;
         }
         configuration_audit(&tx, "traffic_source.delete", node_id)?;
         tx.commit()?;

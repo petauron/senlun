@@ -11,7 +11,7 @@ import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, getStatus } from '@/utils/helper'
-import { getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, getTrafficUsed, getTrafficUsedPercentage, hasRegion, showTrafficProgress } from '@/utils/nodeHelpers'
+import { getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
 import { parseTags } from '@/utils/tagHelper'
@@ -36,8 +36,7 @@ const memStatus = computed(() => getStatus(memPercentage.value))
 const diskPercentage = computed(() => getDiskPercentage(props.node))
 const diskStatus = computed(() => getStatus(diskPercentage.value))
 
-const trafficUsedPercentage = computed(() => getTrafficUsedPercentage(props.node))
-const trafficUsed = computed(() => getTrafficUsed(props.node))
+const selectedTraffic = computed(() => props.node.selected_traffic)
 const externalTraffic = computed(() => props.node.external_traffic)
 const externalTrafficStale = computed(() => {
   const source = externalTraffic.value
@@ -141,40 +140,26 @@ const customTags = computed(() => parseTags(props.node.tags))
             </div>
           </div>
 
-          <!-- 流量进度条 -->
+          <!-- 所选来源的流量进度；未知用量绝不展示成 0%。 -->
           <div class="flex flex-col gap-1">
-            <div class="w-full text-xs flex flex-row justify-between">
-              <span class="text-muted-foreground">
-                本地流量
-              </span>
-              <span>{{ trafficUsedPercentage.toFixed(1) }}%</span>
+            <div class="w-full text-xs flex flex-row justify-between gap-2">
+              <span class="text-muted-foreground">{{ trafficSourceLabel(selectedTraffic) }}</span>
+              <span>{{ selectedTraffic?.percentage === null || selectedTraffic?.percentage === undefined ? '--' : `${selectedTraffic.percentage.toFixed(1)}%` }}</span>
             </div>
-            <ProgressThin :percentage="trafficUsedPercentage" status="success" :height="4" />
+            <ProgressThin v-if="selectedTraffic?.percentage !== null && selectedTraffic?.percentage !== undefined" :percentage="Math.min(selectedTraffic.percentage, 100)" status="success" :height="4" />
+            <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
             <DataTooltip placement="top" class="block">
               <div class="text-[11px] text-muted-foreground truncate">
-                {{ formatBytes(trafficUsed) }} /
-                <template v-if="showTrafficProgress(props.node)">
-                  {{ formatBytes(props.node.traffic_limit) }}
-                </template>
-                <template v-else>
-                  ∞
-                </template>
+                {{ selectedTraffic?.used_bytes === null || selectedTraffic?.used_bytes === undefined ? '暂无用量' : formatBytes(selectedTraffic.used_bytes) }} /
+                {{ selectedTraffic?.status === 'unlimited' ? '∞' : selectedTraffic?.limit_bytes ? formatBytes(selectedTraffic.limit_bytes) : '额度未知' }}
               </div>
               <template #content>
-                <div class="flex items-center justify-between gap-3 whitespace-nowrap">
-                  <div class="text-[11px] flex flex-col">
-                    <div class="flex flex-row items-center gap-1">
-                      <Icon icon="tabler:chevron-up" width="12" height="12" />
-                      {{ formatBytes(props.node.net_total_up ?? 0) }}
-                    </div>
-                    <div class="flex flex-row items-center gap-1">
-                      <Icon icon="tabler:chevron-down" width="12" height="12" />
-                      {{ formatBytes(props.node.net_total_down ?? 0) }}
-                    </div>
-                  </div>
-                </div>
+                <div class="max-w-xs text-xs">{{ trafficSelectionDetails(selectedTraffic) }}</div>
               </template>
             </DataTooltip>
+            <p v-if="trafficSelectionMessage(selectedTraffic)" role="status" class="text-[11px] text-muted-foreground truncate" :title="trafficSelectionDetails(selectedTraffic)">
+              {{ trafficSelectionMessage(selectedTraffic) }}
+            </p>
           </div>
         </div>
         <div v-if="externalTraffic" class="border-t border-border/60 pt-2 text-xs" aria-label="服务商记录流量">
