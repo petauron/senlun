@@ -389,18 +389,7 @@ fn evaluate_node(
     if incident.status == "pending" && ready {
         incident.status = "firing".into();
     }
-    let reason = match rule.metric.as_str() {
-        "offline" => "node is offline",
-        "cpu" => "CPU usage exceeded the configured threshold",
-        "memory" => "memory usage exceeded the configured threshold",
-        "disk" => "disk usage exceeded the configured threshold",
-        "traffic" if node.traffic_source == TrafficSource::Provider => {
-            "provider traffic usage exceeded the configured threshold"
-        }
-        "traffic" => "local traffic usage exceeded the configured threshold",
-        "expiry" => "node expiry is within the configured warning window",
-        _ => "monitoring rule triggered",
-    };
+    let reason = alert_reason(&rule.metric, node.traffic_source);
     let message = format!("{}: {}: {reason}", node.name, rule.name);
     tx.execute("UPDATE alert_incidents SET status=?2,message=?3,opened_at_ms=?4,updated_at_ms=?5,last_sent_at_ms=?6 WHERE id=?1 AND (status!=?2 OR message!=?3 OR opened_at_ms!=?4 OR last_sent_at_ms!=?6)", params![incident.id, incident.status, message, integer(incident.opened_at), integer(now), incident.last_sent_at])?;
     if incident.status == "firing"
@@ -424,6 +413,21 @@ fn evaluate_node(
         )?;
     }
     Ok(())
+}
+
+fn alert_reason(metric: &str, source: TrafficSource) -> &'static str {
+    match metric {
+        "offline" => "node is offline",
+        "cpu" => "CPU usage exceeded the configured threshold",
+        "memory" => "memory usage exceeded the configured threshold",
+        "disk" => "disk usage exceeded the configured threshold",
+        "traffic" if source == TrafficSource::Provider => {
+            "provider traffic usage exceeded the configured threshold"
+        }
+        "traffic" => "local traffic usage exceeded the configured threshold",
+        "expiry" => "node expiry is within the configured warning window",
+        _ => "monitoring rule triggered",
+    }
 }
 
 // Elapsed seconds and fractional days are presentation/threshold values, not stored counters.
