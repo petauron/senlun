@@ -4,6 +4,18 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.30](https://github.com/petauron/senulun/compare/v0.1.0-alpha.29...v0.1.0-alpha.30) (2026-10-27)
+
+
+### Features
+
+* **traffic:** select per-node quota source for display and alerts ([#106](https://github.com/petauron/senulun/issues/106)) ([df5ab82](https://github.com/petauron/senulun/commit/df5ab82062f4443b8d2e89d28287ac9a7d89e57f))
+
+
+### Bug Fixes
+
+* **traffic:** bound authentication recovery attempts ([#104](https://github.com/petauron/senulun/issues/104)) ([1d016ca](https://github.com/petauron/senulun/commit/1d016caf101703e59b39f1f01fe057b0c6404445))
+
 ## [0.1.0-alpha.29](https://github.com/petauron/senulun/compare/v0.1.0-alpha.28...v0.1.0-alpha.29) (2026-10-24)
 
 
