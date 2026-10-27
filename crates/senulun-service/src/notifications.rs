@@ -274,6 +274,45 @@ fn load_nodes(db: &Connection, now_ms: u64) -> Result<HashMap<String, NodeState>
     Ok(nodes)
 }
 
+// Unknown data breaks pending duration and cancels queued traffic transitions,
+// but it cannot prove recovery of an already firing incident.
+fn pause_evaluation(
+    tx: &Transaction<'_>,
+    rule: &AlertRule,
+    incident: Option<&Incident>,
+    now: u64,
+) -> Result<(), StorageError> {
+    let Some(incident) = incident else {
+        return Ok(());
+    };
+    if rule.metric == "traffic" {
+        let removed = tx.execute(
+            "DELETE FROM alert_deliveries WHERE incident_id=?1",
+            [&incident.id],
+        )?;
+        if incident.status == "resolved" && incident.last_sent_at < 0 {
+            tx.execute("UPDATE alert_incidents SET status='superseded',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1", params![incident.id, integer(now)])?;
+        } else if removed > 0 {
+            tx.execute(
+                "UPDATE alert_incidents SET last_sent_at_ms=0 WHERE id=?1",
+                [&incident.id],
+            )?;
+        }
+    }
+    if incident.status == "pending" {
+        let status = if rule.metric == "traffic" {
+            "superseded"
+        } else {
+            "resolved"
+        };
+        tx.execute(
+            "UPDATE alert_incidents SET status=?3,updated_at_ms=?2 WHERE id=?1",
+            params![incident.id, integer(now), status],
+        )?;
+    }
+    Ok(())
+}
+
 fn evaluate_node(
     tx: &Transaction<'_>,
     rule: &AlertRule,
@@ -289,39 +328,7 @@ fn evaluate_node(
     ).optional()?;
     let (breached, _) = condition(rule, node, now, offline_after);
     let Some(breached) = breached else {
-        // Missing/stale metrics break a pending duration; they cannot prove
-        // recovery of an already firing incident. Do not deliver queued traffic
-        // transitions after the selected value becomes unavailable.
-        if rule.metric == "traffic" {
-            if let Some(incident) = old.as_ref() {
-                let removed = tx.execute(
-                    "DELETE FROM alert_deliveries WHERE incident_id=?1",
-                    [&incident.id],
-                )?;
-                if incident.status == "resolved" && incident.last_sent_at < 0 {
-                    tx.execute("UPDATE alert_incidents SET status='superseded',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1", params![incident.id, integer(now)])?;
-                } else if removed > 0 {
-                    tx.execute(
-                        "UPDATE alert_incidents SET last_sent_at_ms=0 WHERE id=?1",
-                        [&incident.id],
-                    )?;
-                }
-            }
-        }
-        if let Some(incident) = old.filter(|incident| incident.status == "pending") {
-            tx.execute(
-                "UPDATE alert_incidents SET status=?3,updated_at_ms=?2 WHERE id=?1",
-                params![
-                    incident.id,
-                    integer(now),
-                    if rule.metric == "traffic" {
-                        "superseded"
-                    } else {
-                        "resolved"
-                    }
-                ],
-            )?;
-        }
+        pause_evaluation(tx, rule, old.as_ref(), now)?;
         return Ok(());
     };
     if !breached {
