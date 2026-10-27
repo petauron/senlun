@@ -277,7 +277,11 @@ fn retire_provider_evaluation(tx: &Transaction<'_>, node_id: &str) -> Result<(),
     if options_or_none(tx, node_id)?
         .is_some_and(|options| options.traffic_source == TrafficSource::Provider)
     {
-        crate::notifications::retire_traffic_evaluation(tx, node_id, crate::storage::unix_time_ms()?)?;
+        crate::notifications::retire_traffic_evaluation(
+            tx,
+            node_id,
+            crate::storage::unix_time_ms()?,
+        )?;
     }
     Ok(())
 }
