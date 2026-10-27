@@ -1775,7 +1775,12 @@ mod tests {
             serde_json::from_value(response_json(response).await).unwrap();
         let node = state.storage.admin_state().unwrap()["nodes"][0].clone();
         let mut node = node.as_object().unwrap().clone();
-        for key in ["disabled", "traffic_used_up", "traffic_used_down"] {
+        for key in [
+            "disabled",
+            "traffic_used_up",
+            "traffic_used_down",
+            "selected_traffic",
+        ] {
             node.remove(key);
         }
         let mut options: control::NodeOptions = serde_json::from_value(json!(node)).unwrap();
