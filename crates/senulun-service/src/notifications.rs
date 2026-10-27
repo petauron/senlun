@@ -314,7 +314,11 @@ fn evaluate_node(
                 params![
                     incident.id,
                     integer(now),
-                    if rule.metric == "traffic" { "superseded" } else { "resolved" }
+                    if rule.metric == "traffic" {
+                        "superseded"
+                    } else {
+                        "resolved"
+                    }
                 ],
             )?;
         }
@@ -683,7 +687,8 @@ mod tests {
         )
         .unwrap()
             * 1000;
-        let old_cycle = crate::control::period_start(billing_boundary - 1, options.traffic_reset_day);
+        let old_cycle =
+            crate::control::period_start(billing_boundary - 1, options.traffic_reset_day);
         let db = storage.connection().unwrap();
         db.execute(
             "INSERT INTO traffic_periods(node_id,cycle_start_ms,raw_up,raw_down,used_up,used_down) VALUES(?1,?2,40,50,40,50)",

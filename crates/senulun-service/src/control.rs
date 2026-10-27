@@ -485,7 +485,11 @@ impl Storage {
         let old_source =
             options_or_none(&tx, id)?.map_or(TrafficSource::Local, |old| old.traffic_source);
         if old_source != options.traffic_source {
-            crate::notifications::retire_traffic_evaluation(&tx, id, crate::storage::unix_time_ms()?)?;
+            crate::notifications::retire_traffic_evaluation(
+                &tx,
+                id,
+                crate::storage::unix_time_ms()?,
+            )?;
         }
         tx.execute("INSERT INTO node_options(node_id,data) VALUES(?1,?2) ON CONFLICT(node_id) DO UPDATE SET data=excluded.data",params![id,encode(options)?])?;
         configuration_audit(&tx, "node.metadata.update", id)?;

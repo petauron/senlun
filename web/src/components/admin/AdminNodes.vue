@@ -11,8 +11,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { nodeMetadata } from '@/utils/admin'
-import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { getSharedApi } from '@/utils/api'
+import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }>()
