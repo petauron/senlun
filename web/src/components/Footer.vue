@@ -46,10 +46,10 @@ const showVisitorInfo = computed(() => appStore.visitorInfoCardEnabled
           :content="formattedServerVersion ?? ''"
         >
           <a
-            href="https://github.com/petauron/senulun" target="_blank" rel="noopener noreferrer"
+            href="https://github.com/petauron/senlun" target="_blank" rel="noopener noreferrer"
             class="transition-opacity hover:opacity-80"
           >
-            <span class="font-medium text-foreground">Senulun</span>
+            <span class="font-medium text-foreground">Senlun</span>
           </a>
         </DataTooltip>
       </div>

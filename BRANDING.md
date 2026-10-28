@@ -1,8 +1,8 @@
-# Senulun product and runtime identity
+# Senlun product and runtime identity
 
-Senulun is the current name of the former Pulse project. New source, Rust
+Senlun is the current name of the former Pulse project. New source, Rust
 crates, executables, release archives, environment variables, standalone units,
-accounts and default paths use Senulun names. There are no binary aliases or
+accounts and default paths use Senlun names. There are no binary aliases or
 dual environment-variable readers.
 
 Read [the technical migration](docs/technical-brand-migration.md) before
@@ -17,7 +17,7 @@ manifests, trust metadata and assets stay immutable. Original catalog IDs,
 persisted task wire IDs and verified backing-resource names remain ownership
 evidence, not parallel implementations or public product branding.
 
-New releases bind exactly `petauron/senulun` and `ghcr.io/petauron/senulun`.
+New releases bind exactly `petauron/senlun` and `ghcr.io/petauron/senlun`.
 Do not accept a former signer as fallback, replace published release bytes,
 renumber the release history or manually bump a version. Use Release Please
 and the protected catalog publication flow. PR creation does not publish or

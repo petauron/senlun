@@ -359,7 +359,7 @@ test('probe analysis switches tasks without changing the selected chart series',
   const csvPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'CSV', exact: true }).click()
   const csvDownload = await csvPromise
-  expect(csvDownload.suggestedFilename()).toMatch(/^senulun-ping-[\w-]+-1h\.csv$/)
+  expect(csvDownload.suggestedFilename()).toMatch(/^senlun-ping-[\w-]+-1h\.csv$/)
   const csv = await readFile(await csvDownload.path(), 'utf8')
   expect(csv).toContain('"e2e-probe 丢包率(%)"')
   expect(csv).toContain('"e2e-probe-2 丢包率(%)"')
@@ -367,7 +367,7 @@ test('probe analysis switches tasks without changing the selected chart series',
   const pngPromise = page.waitForEvent('download')
   await page.getByRole('button', { name: 'PNG', exact: true }).click()
   const pngDownload = await pngPromise
-  expect(pngDownload.suggestedFilename()).toMatch(/^senulun-ping-[\w-]+-1h\.png$/)
+  expect(pngDownload.suggestedFilename()).toMatch(/^senlun-ping-[\w-]+-1h\.png$/)
   expect((await readFile(await pngDownload.path())).subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
   const firstOverview = page.getByRole('button', { name: '分析 e2e-probe', exact: true }).locator('..').locator('..')
   const secondOverview = page.getByRole('button', { name: '分析 e2e-probe-2', exact: true }).locator('..').locator('..')

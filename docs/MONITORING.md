@@ -18,7 +18,7 @@ data. Both actions require confirmation in the UI.
 Enrollment tokens are single-use, valid for 60–86400 seconds, and shown once.
 Existing Agents retain a distinct long-lived credential. Rotation immediately
 invalidates the old credential and displays the replacement once: securely update
-the Agent credential file and restart that Agent yourself. Senulun does not silently
+the Agent credential file and restart that Agent yourself. Senlun does not silently
 deliver the replacement over the invalidated connection.
 
 ## Traffic and assets
@@ -35,7 +35,7 @@ The current dashboard totals show the current billing period. Historical network
 totals remain raw Agent counters. Resetting traffic clears only current-period
 usage and keeps the raw baseline, so the next sample does not re-add old traffic.
 Limits can count upload, download, sum, minimum or maximum. A zero limit is unlimited.
-Asset billing-cycle and auto-renewal fields are descriptive; Senulun does not perform
+Asset billing-cycle and auto-renewal fields are descriptive; Senlun does not perform
 payments, renew servers, or modify provider subscriptions.
 
 ## Probes
@@ -50,7 +50,7 @@ definition; it never silently widens that definition to all nodes. Deleting a
 notification channel removes it from rules without granting any new destination.
 
 Targets are explicit destinations selected by the administrator. Probes never
-carry Senulun credentials, execute shell text, follow HTTP redirects, or use system
+carry Senlun credentials, execute shell text, follow HTTP redirects, or use system
 HTTP proxy environment settings. Private/local destinations are allowed because
 monitoring internal services is a legitimate administrator action. ICMP requires
 a supported system ping executable and OS permission for the service account.
@@ -93,8 +93,8 @@ shared with its card/list display; unknown provider usage never falls back to
 local or proves recovery. Source/resource changes end the old evaluation without
 recovery notifications (see [external traffic](external-traffic.md)). A rule has a duration and a notification cooldown. Missing
 or stale utilization cannot prove recovery; pending duration is reset until fresh
-data arrives. Empty channel selection keeps the incident inside Senulun.
-The offline timeout is the larger of `SENULUN_OFFLINE_AFTER_SECONDS` and three
+data arrives. Empty channel selection keeps the incident inside Senlun.
+The offline timeout is the larger of `SENLUN_OFFLINE_AFTER_SECONDS` and three
 centrally configured report intervals, so a 300-second interval does not falsely
 toggle offline every 90 seconds. Dashboard status and alert evaluation use the
 same effective timeout.
@@ -140,8 +140,8 @@ for the exact distribution version and uses a fixed, two-second
 the fallback. Virtualization auto-detection is best-effort, and explicit
 configuration wins. No shell or PATH lookup is used.
 
-Set `SENULUN_EXTENDED_METRICS=disabled`, `SENULUN_GPU_METRICS=disabled`, or
-`SENULUN_AUTODETECT_VIRTUALIZATION=disabled` to disable the corresponding collection.
+Set `SENLUN_EXTENDED_METRICS=disabled`, `SENLUN_GPU_METRICS=disabled`, or
+`SENLUN_AUTODETECT_VIRTUALIZATION=disabled` to disable the corresponding collection.
 No full-process cache or arbitrary command facility is maintained. The default
 host-reporting interval is three seconds, adjustable centrally within 1–300 seconds.
 Size retention and database capacity for the chosen interval before production use.

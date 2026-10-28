@@ -1,8 +1,8 @@
 # Third-party notices for generated Web icons
 
-`src/generated/icons.ts` contains only the icon glyphs referenced by Senulun. It
+`src/generated/icons.ts` contains only the icon glyphs referenced by Senlun. It
 is generated from `@iconify/json`; the glyphs remain under their original
-licenses. The root `LICENSE` contains the Apache License 2.0 text used by Senulun
+licenses. The root `LICENSE` contains the Apache License 2.0 text used by Senlun
 and IconPark.
 
 Licenses and notices for JavaScript packages actually included in the

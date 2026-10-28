@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-    echo "usage: sudo ./deploy/install-systemd.sh service|agent /absolute/path/to/senulun-BINARY" >&2
+    echo "usage: sudo ./deploy/install-systemd.sh service|agent /absolute/path/to/senlun-BINARY" >&2
     exit 2
 }
 
@@ -12,13 +12,13 @@ usage() {
 component=$1
 binary=$2
 # Preflight only: do not create an empty new installation beside retained data.
-if [ -e "/etc/pulse/$component.env" ] && [ ! -e "/etc/senulun/$component.env" ]; then
+if [ -e "/etc/senulun/$component.env" ] && [ ! -e "/etc/senlun/$component.env" ]; then
     echo "legacy installation found: complete the documented offline brand migration before installing; running services were not changed" >&2
     exit 1
 fi
 case "$component" in
-    service) account=senulun ; state_directory=/var/lib/senulun ;;
-    agent) account=senulun-agent ; state_directory=/var/lib/senulun-agent ;;
+    service) account=senlun ; state_directory=/var/lib/senlun ;;
+    agent) account=senlun-agent ; state_directory=/var/lib/senlun-agent ;;
     *) usage ;;
 esac
 
@@ -27,8 +27,8 @@ esac
 
 version_output=$("$binary" --version)
 case "$version_output" in
-    "senulun-$component "*) ;;
-    *) echo "binary identity does not match senulun-$component" >&2; exit 1 ;;
+    "senlun-$component "*) ;;
+    *) echo "binary identity does not match senlun-$component" >&2; exit 1 ;;
 esac
 version=${version_output#* }
 case "$version" in
@@ -41,17 +41,17 @@ case "$binary_sha256" in
 esac
 
 script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
-release_directory=/opt/senulun/releases/$component/$version-$binary_sha256
-target_binary=$release_directory/senulun-$component
-current_link=/usr/local/bin/senulun-$component
-previous_link=/opt/senulun/previous-$component
-temporary_link=/usr/local/bin/.senulun-$component.new
+release_directory=/opt/senlun/releases/$component/$version-$binary_sha256
+target_binary=$release_directory/senlun-$component
+current_link=/usr/local/bin/senlun-$component
+previous_link=/opt/senlun/previous-$component
+temporary_link=/usr/local/bin/.senlun-$component.new
 
 old_target=
 if [ -L "$current_link" ]; then
     old_target=$(readlink "$current_link")
     case "$old_target" in
-        "/opt/senulun/releases/$component/"*/senulun-"$component") ;;
+        "/opt/senlun/releases/$component/"*/senlun-"$component") ;;
         *) echo "$current_link points outside the managed release directory" >&2; exit 1 ;;
     esac
 elif [ -e "$current_link" ]; then
@@ -61,8 +61,8 @@ fi
 
 if [ "$component" = agent ]; then
     echo "Privacy notice: without a manual region, Agent country discovery defaults to GeoJS."
-    echo "GeoJS sees public egress IP and Agent version, not Senulun credentials or metrics."
-    echo "Set SENULUN_GEOIP_PROVIDER=disabled in /etc/senulun/agent.env before upgrading to opt out."
+    echo "GeoJS sees public egress IP and Agent version, not Senlun credentials or metrics."
+    echo "Set SENLUN_GEOIP_PROVIDER=disabled in /etc/senlun/agent.env before upgrading to opt out."
     echo "Existing configuration is preserved; an active Agent is restarted during upgrade."
 fi
 
@@ -74,7 +74,7 @@ if ! id "$account" >/dev/null 2>&1; then
 fi
 install --directory --owner "$account" --group "$account" --mode 0700 "$state_directory"
 install --directory --owner root --group root --mode 0755 \
-    /etc/senulun /opt/senulun /opt/senulun/releases "/opt/senulun/releases/$component" "$release_directory"
+    /etc/senlun /opt/senlun /opt/senlun/releases "/opt/senlun/releases/$component" "$release_directory"
 if [ -e "$target_binary" ]; then
     cmp -s "$binary" "$target_binary" || {
         echo "$target_binary does not match its content-addressed release path" >&2
@@ -93,16 +93,16 @@ if [ "$old_target" != "$target_binary" ]; then
     mv -Tf "$temporary_link" "$current_link"
 fi
 
-install --owner root --group root --mode 0644 "$script_directory/senulun-$component.service" "/etc/systemd/system/senulun-$component.service"
-if [ ! -e "/etc/senulun/$component.env" ]; then
-    install --owner root --group root --mode 0600 "$script_directory/$component.env.example" "/etc/senulun/$component.env"
+install --owner root --group root --mode 0644 "$script_directory/senlun-$component.service" "/etc/systemd/system/senlun-$component.service"
+if [ ! -e "/etc/senlun/$component.env" ]; then
+    install --owner root --group root --mode 0600 "$script_directory/$component.env.example" "/etc/senlun/$component.env"
 fi
 
 systemctl daemon-reload
-systemctl enable "senulun-$component.service"
-if systemctl is-active --quiet "senulun-$component.service"; then
-    systemctl restart "senulun-$component.service"
+systemctl enable "senlun-$component.service"
+if systemctl is-active --quiet "senlun-$component.service"; then
+    systemctl restart "senlun-$component.service"
 fi
 
-echo "installed senulun-$component $version ($binary_sha256)"
-echo "review /etc/senulun/$component.env, then run: systemctl start senulun-$component"
+echo "installed senlun-$component $version ($binary_sha256)"
+echo "review /etc/senlun/$component.env, then run: systemctl start senlun-$component"

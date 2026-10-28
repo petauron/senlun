@@ -4,8 +4,8 @@ set -eu
 # CI and release archives must use the same libc baseline as the Service image.
 # Bind mounts require a local Linux Docker daemon, not a remote desktop context.
 [ "$(uname -s)" = Linux ] || { echo "requires a local Linux Docker runner" >&2; exit 1; }
-: "${SENULUN_BUILD_GIT_HASH:?set the source revision}"
-: "${SENULUN_BUILD_TARGET:?set the native Rust target}"
+: "${SENLUN_BUILD_GIT_HASH:?set the source revision}"
+: "${SENLUN_BUILD_TARGET:?set the native Rust target}"
 repository=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 builder=rust:1.98-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
 runtime=debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
@@ -16,23 +16,23 @@ mkdir -p "$cargo_home"
 # by the runner. Keep absolute paths stable for Cargo dependency fingerprints.
 docker run --rm \
   --user "$(id -u):$(id -g)" \
-  --env SENULUN_BUILD_GIT_HASH --env SENULUN_BUILD_TARGET \
+  --env SENLUN_BUILD_GIT_HASH --env SENLUN_BUILD_TARGET \
   --env "CARGO_HOME=$cargo_home" \
   --env CARGO_INCREMENTAL=0 --env RUSTUP_TOOLCHAIN=1.98.0 \
   --mount "type=bind,src=$cargo_home,dst=$cargo_home" \
   --mount "type=bind,src=$repository,dst=$repository" --workdir "$repository" \
   "$builder" sh -c '
     set -eu
-    test "$(rustc -vV | sed -n "s/^host: //p")" = "$SENULUN_BUILD_TARGET"
-    cargo build --locked --release -p senulun-service -p senulun-agent
+    test "$(rustc -vV | sed -n "s/^host: //p")" = "$SENLUN_BUILD_TARGET"
+    cargo build --locked --release -p senlun-service -p senlun-agent
   '
 
 # A successful link on a newer runner does not prove compatibility with users.
 docker run --rm --network none --read-only --user 65532:65532 \
   --cap-drop ALL --memory 192m --pids-limit 64 \
-  --mount "type=bind,src=$repository/target/release,dst=/opt/senulun,readonly" \
+  --mount "type=bind,src=$repository/target/release,dst=/opt/senlun,readonly" \
   "$runtime" sh -c '
     set -eu
-    /opt/senulun/senulun-service --version
-    /opt/senulun/senulun-agent --version
+    /opt/senlun/senlun-service --version
+    /opt/senlun/senlun-agent --version
   '

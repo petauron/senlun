@@ -14,7 +14,7 @@ test('private monitoring, setup lockout, administrator CSRF, and logout enforce 
   await expect(page).toHaveURL(/\/login\?redirect=/)
 
   await login(page, '/admin')
-  await expect(page.getByRole('heading', { name: '管理 Senulun' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '管理 Senlun' })).toBeVisible()
   const screenshot = testInfo.outputPath('authenticated-admin.png')
   await page.screenshot({ path: screenshot, fullPage: true })
   await testInfo.attach('authenticated-admin', { path: screenshot, contentType: 'image/png' })
@@ -219,7 +219,7 @@ test('notification channels require an explicit opt-in and remain disabled when 
     const enabled = page.getByLabel('启用渠道并允许发送上述告警信息')
     await expect(enabled).not.toBeChecked()
     await page.getByLabel('渠道名称', { exact: true }).fill(name)
-    await page.getByLabel('Webhook URL', { exact: true }).fill('https://example.invalid/senulun-e2e')
+    await page.getByLabel('Webhook URL', { exact: true }).fill('https://example.invalid/senlun-e2e')
     await page.getByRole('button', { name: '保存渠道' }).click()
     await expect(page.getByRole('listitem').filter({ hasText: name })).toBeVisible()
     const state = await (await page.request.get('/api/admin/state')).json()

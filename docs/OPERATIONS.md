@@ -1,27 +1,27 @@
 # Production operations
 
-Senulun has two deployment roles: run `senulun-service` on the monitoring host, and run one outbound-only `senulun-agent` on every monitored Linux host. The Agent never accepts inbound commands. Run both under dedicated unprivileged accounts.
+Senlun has two deployment roles: run `senlun-service` on the monitoring host, and run one outbound-only `senlun-agent` on every monitored Linux host. The Agent never accepts inbound commands. Run both under dedicated unprivileged accounts.
 
 ## Trust boundary
 
 Alpha.3 includes administrator authentication and defaults to a private dashboard. Until the first administrator is created, all monitoring read APIs fail closed; afterward, only an administrator can deliberately enable public reads. Administrative mutations always require an authenticated session, exact Origin and CSRF protection. Configure the HTTPS browser origin and private bootstrap token before upgrading; see [AUTH.md](AUTH.md). Older Alpha.2 artifacts require external dashboard authentication. Keep the default loopback bind and an HTTPS reverse proxy; do not expose port 8080 directly to the Internet.
 
-Remote Agents accept only HTTPS Service URLs. Senulun has no analytics, telemetry, runtime CDN, or mandatory third-party account. Metrics go only to the configured Service.
+Remote Agents accept only HTTPS Service URLs. Senlun has no analytics, telemetry, runtime CDN, or mandatory third-party account. Metrics go only to the configured Service.
 
 The visitor-information pill obtains the current visitor's public address from
 `/api/me`. A reverse proxy hides the browser's transport address, so this field
-stays unavailable by default. To enable it, set `SENULUN_TRUSTED_PROXY_IP` to
-the **exact IP of the proxy's connection to Senulun** and configure that proxy
+stays unavailable by default. To enable it, set `SENLUN_TRUSTED_PROXY_IP` to
+the **exact IP of the proxy's connection to Senlun** and configure that proxy
 to discard any client-provided `X-Real-IP` and overwrite it with the verified
-client address. Senulun accepts a single public IP in that header only from
+client address. Senlun accepts a single public IP in that header only from
 the exact configured peer; it does not trust `X-Forwarded-For` or
 `CF-Connecting-IP` from arbitrary callers. Keep the Service on a private or
 loopback listener and verify the proxy's overwrite behavior before enabling
 this option. No external IP service is queried by this feature.
 
 **Default outbound request:** Agents with no manual region use GeoJS to discover
-their country. GeoJS sees the public egress IP and Agent version, not Senulun tokens
-or metrics. To prevent this, set `SENULUN_GEOIP_PROVIDER=disabled` in the Agent
+their country. GeoJS sees the public egress IP and Agent version, not Senlun tokens
+or metrics. To prevent this, set `SENLUN_GEOIP_PROVIDER=disabled` in the Agent
 environment **before starting or upgrading**. See [node location](#node-location-and-globe-placement).
 
 ## Verify a release
@@ -30,14 +30,14 @@ Download the archive for the host architecture together with `SHA256SUMS`, its S
 
 ```bash
 sha256sum --check --ignore-missing SHA256SUMS
-gh attestation verify "$ARCHIVE" --repo petauron/senulun
+gh attestation verify "$ARCHIVE" --repo petauron/senlun
 ```
 
-Set `ARCHIVE` to the downloaded `senulun-<tag>-linux-<arch>.tar.gz` from a release
-built in `petauron/senulun`. This policy is for releases after the repository
-rename. Historical artifacts were signed by `petauron/senulun`; retain their
+Set `ARCHIVE` to the downloaded `senlun-<tag>-linux-<arch>.tar.gz` from a release
+built in `petauron/senlun`. This policy is for releases after the repository
+rename. Historical artifacts were signed by `petauron/senlun`; retain their
 original provenance and verification policy instead of treating them as newly
-signed Senulun releases. Published images at `ghcr.io/petauron/senulun` remain
+signed Senlun releases. Published images at `ghcr.io/petauron/senlun` remain
 available under their original immutable digests. Do not overwrite old releases
 or relax the new-source attestation policy to accept both identities.
 
@@ -50,9 +50,9 @@ The release workflow validates binaries, SBOMs, and a multi-architecture contain
 The release archive contains the binaries and `deploy/`. Review the environment example, then install from the extracted, verified archive:
 
 ```bash
-sudo ./deploy/install-systemd.sh service "$PWD/senulun-service"
-sudoedit /etc/senulun/service.env
-sudo systemctl start senulun-service
+sudo ./deploy/install-systemd.sh service "$PWD/senlun-service"
+sudoedit /etc/senlun/service.env
+sudo systemctl start senlun-service
 ```
 
 The installer creates a dedicated account and mode-0700 state directory, records the previous binary, installs a hardened unit, and enables it without starting an unconfigured first installation. An update restarts the unit only if it was already running.
@@ -60,41 +60,41 @@ The installer creates a dedicated account and mode-0700 state directory, records
 Create an enrollment token locally against the Service database. The JSON response contains an ID, the only display of the token, and its expiry time:
 
 ```bash
-sudo -u senulun env SENULUN_DATABASE_PATH=/var/lib/senulun/store/senulun.db \
-  /usr/local/bin/senulun-service enrollment create --ttl-seconds 600
+sudo -u senlun env SENLUN_DATABASE_PATH=/var/lib/senlun/store/senlun.db \
+  /usr/local/bin/senlun-service enrollment create --ttl-seconds 600
 ```
 
 On the Agent host:
 
 ```bash
-sudo ./deploy/install-systemd.sh agent "$PWD/senulun-agent"
-sudoedit /etc/senulun/agent.env
-sudo install -o senulun-agent -g senulun-agent -m 0600 /path/to/securely-transferred-token \
-  /etc/senulun/agent-enrollment-token
-sudo systemctl start senulun-agent
+sudo ./deploy/install-systemd.sh agent "$PWD/senlun-agent"
+sudoedit /etc/senlun/agent.env
+sudo install -o senlun-agent -g senlun-agent -m 0600 /path/to/securely-transferred-token \
+  /etc/senlun/agent-enrollment-token
+sudo systemctl start senlun-agent
 ```
 
-The token file must contain only the token value. It is read only when the Agent has no stored credential. `systemctl start` does not wait for enrollment. Verify that `journalctl -u senulun-agent` reports `agent credentials saved` and that this node appears online before deleting the token:
+The token file must contain only the token value. It is read only when the Agent has no stored credential. `systemctl start` does not wait for enrollment. Verify that `journalctl -u senlun-agent` reports `agent credentials saved` and that this node appears online before deleting the token:
 
 ```bash
-sudo test -s /var/lib/senulun-agent/agent-credentials.json && \
-  sudo rm -f /etc/senulun/agent-enrollment-token
+sudo test -s /var/lib/senlun-agent/agent-credentials.json && \
+  sudo rm -f /etc/senlun/agent-enrollment-token
 ```
 
 ## Node location and globe placement
 
 The globe groups nodes by country/territory, not by group names or individual
-city coordinates. Set `SENULUN_NODE_REGION=US` (or another two-letter country code)
+city coordinates. Set `SENLUN_NODE_REGION=US` (or another two-letter country code)
 for manual placement. A nonempty manual region takes precedence and prevents all
 GeoIP requests, even if a provider is configured.
 
 Country discovery through GeoJS is enabled by default when no manual region is
 set. Upgrade **each Agent binary** to a build containing this feature. The equivalent
-explicit configuration in `/etc/senulun/agent.env` is:
+explicit configuration in `/etc/senlun/agent.env` is:
 
 ```ini
-SENULUN_NODE_REGION=
-SENULUN_GEOIP_PROVIDER=geojs
+SENLUN_NODE_REGION=
+SENLUN_GEOIP_PROVIDER=geojs
 ```
 
 Alternatively select `ipinfo`. The only accepted provider values are `disabled`,
@@ -104,7 +104,7 @@ outbound HTTPS requests from that Agent to
 There is no automatic fallback to a different third party. The provider sees the
 Agent's public egress IP and Agent user-agent/version, but receives no host name,
 node ID, enrollment token, Agent credential, or metrics. Only the country code is
-retained and sent to Senulun; the IP, city, and other response fields are discarded.
+retained and sent to Senlun; the IP, city, and other response fields are discarded.
 
 Upgrades preserve existing configuration files: a previous explicit `disabled`
 setting stays disabled, and a manual region continues to prevent lookups. An old
@@ -123,7 +123,7 @@ permission or visitor geolocation is involved.
 After updating the binary and configuration:
 
 ```bash
-sudo systemctl restart senulun-agent
+sudo systemctl restart senlun-agent
 ```
 
 Keep existing credentials; no new enrollment is required. For this combined
@@ -137,11 +137,11 @@ restarts. Before the first success, the region remains empty and the node can be
 online without a globe marker. After success, the next accepted metric snapshot
 updates the existing node's region. Two US nodes share one US cluster on the globe.
 
-Check `journalctl -u senulun-agent` for `automatic node region updated`, then confirm
+Check `journalctl -u senlun-agent` for `automatic node region updated`, then confirm
 the country's flag on the node card and globe. Disabled discovery with an empty
 manual region emits a warning. Network errors, rate limits, malformed responses,
 and unknown countries leave monitoring operational. To disable further lookups,
-set `SENULUN_GEOIP_PROVIDER=disabled` and restart; set a manual region as well if the
+set `SENLUN_GEOIP_PROVIDER=disabled` and restart; set a manual region as well if the
 node should remain positioned. These options are not implemented in Alpha.2;
 changing only the environment of an old binary will not enable discovery.
 
@@ -150,15 +150,15 @@ and [IPinfo](https://github.com/komari-monitor/komari/blob/main/utils/geoip/ipin
 
 ## Containerized Service
 
-The image runs as UID/GID 65532 and stores its mode-0600 SQLite databases in `/var/lib/senulun`. Persist the entire directory, not a single database file. The Agent should still run directly on each monitored host so its metrics describe that host rather than a container.
+The image runs as UID/GID 65532 and stores its mode-0600 SQLite databases in `/var/lib/senlun`. Persist the entire directory, not a single database file. The Agent should still run directly on each monitored host so its metrics describe that host rather than a container.
 
 ```bash
-sudo install -d -o 65532 -g 65532 -m 0700 /srv/senulun
-docker run --detach --name senulun --restart unless-stopped \
+sudo install -d -o 65532 -g 65532 -m 0700 /srv/senlun
+docker run --detach --name senlun --restart unless-stopped \
   --publish 127.0.0.1:8080:8080 \
-  --volume /srv/senulun:/var/lib/senulun \
-  --env SENULUN_PUBLIC_URL=https://senulun.example.com \
-  "${SENULUN_SERVICE_IMAGE:?Set an image built from this revision}"
+  --volume /srv/senlun:/var/lib/senlun \
+  --env SENLUN_PUBLIC_URL=https://senlun.example.com \
+  "${SENLUN_SERVICE_IMAGE:?Set an image built from this revision}"
 ```
 
 Use an image built from this revision for token-free setup; older releases may require a setup token. Publish to loopback and terminate TLS at the reverse proxy. Open `/login` and create the first administrator before sharing the public address. Later setup attempts are rejected. The [Compose example](../deploy/docker-compose.yml) provides the same configuration. Run local administration with `docker exec`, using the database path already present in the image environment.
@@ -168,23 +168,23 @@ Use an image built from this revision for token-free setup; older releases may r
 Enrollment tokens are single-use, expire after 60 to 86,400 seconds, and can be revoked before use:
 
 ```bash
-senulun-service enrollment revoke ENROLLMENT_ID
+senlun-service enrollment revoke ENROLLMENT_ID
 ```
 
 To rotate an Agent credential without exposing it in a command-line argument:
 
-1. Stop `senulun-agent` on that node.
-2. On the Service host, run `senulun-service node rotate NODE_ID` and redirect its one-time output to a mode-0600 file.
+1. Stop `senlun-agent` on that node.
+2. On the Service host, run `senlun-service node rotate NODE_ID` and redirect its one-time output to a mode-0600 file.
 3. Transfer that file over an authenticated encrypted channel.
-4. On the Agent host, pipe the file to `sudo -u senulun-agent env SENULUN_CREDENTIALS_PATH=/var/lib/senulun-agent/agent-credentials.json senulun-agent credentials replace`.
+4. On the Agent host, pipe the file to `sudo -u senlun-agent env SENLUN_CREDENTIALS_PATH=/var/lib/senlun-agent/agent-credentials.json senlun-agent credentials replace`.
 5. Delete both temporary copies, start the Agent, and confirm a new snapshot arrives.
 
-Rotation invalidates the previous token immediately. If a node is lost or compromised, use `senulun-service node revoke NODE_ID`; this retains its historical rows but excludes it from active views. `senulun-service node delete NODE_ID` permanently deletes the node and its snapshots. Review up to 1,000 local lifecycle events with `senulun-service audit 1000`. These commands must be run with the Service database environment and account.
+Rotation invalidates the previous token immediately. If a node is lost or compromised, use `senlun-service node revoke NODE_ID`; this retains its historical rows but excludes it from active views. `senlun-service node delete NODE_ID` permanently deletes the node and its snapshots. Review up to 1,000 local lifecycle events with `senlun-service audit 1000`. These commands must be run with the Service database environment and account.
 
 If initial enrollment succeeds but the Agent cannot save its credential (or the response is lost), stop the Agent and fix the state directory's ownership, mode, or disk capacity. The single-use enrollment token cannot be reused. When the original enrollment ID is retained, inspect its exact node association on the Service host:
 
 ```bash
-senulun-service enrollment inspect ENROLLMENT_ID
+senlun-service enrollment inspect ENROLLMENT_ID
 ```
 
 This returns JSON with the enrollment ID, expiry, consumption time, associated `node_id` and `node_active`. It returns no token or token hash and does not enroll, rotate, reactivate or delete anything. Expiry does not remove the original association. An unused or deleted-node enrollment has no `node_id`; a revoked node has `node_active: false`. A missing enrollment returns an error. Do not infer the original node from matching names or addresses, and do not treat this read as authorization to reactivate a revoked node.
@@ -192,9 +192,9 @@ This returns JSON with the enrollment ID, expiry, consumption time, associated `
 Use the verified original active node ID to rotate its token as above. On a host with no credential file, import the rotated token from stdin instead of using `replace`:
 
 ```bash
-sudo -u senulun-agent env SENULUN_SERVICE_URL=https://senulun.example.com \
-  SENULUN_CREDENTIALS_PATH=/var/lib/senulun-agent/agent-credentials.json \
-  senulun-agent credentials import NODE_ID < /path/to/mode-0600-rotated-token
+sudo -u senlun-agent env SENLUN_SERVICE_URL=https://senlun.example.com \
+  SENLUN_CREDENTIALS_PATH=/var/lib/senlun-agent/agent-credentials.json \
+  senlun-agent credentials import NODE_ID < /path/to/mode-0600-rotated-token
 ```
 
 Import refuses to overwrite an existing credential. Set the exact original Service URL, delete the temporary token copies, restart the Agent, and verify fresh samples arrive for the same node. The Service uses SQLite WAL with `synchronous=FULL` so confirmed credential changes are durable after a host crash, subject to the storage device honoring fsync.
@@ -203,7 +203,7 @@ To inspect reporting evidence on the Service, supply the current rotated token o
 stdin, keeping it out of process arguments:
 
 ```bash
-senulun-service node reporting NODE_ID < /path/to/mode-0600-rotated-token
+senlun-service node reporting NODE_ID < /path/to/mode-0600-rotated-token
 ```
 
 The read authenticates the exact active node and returns only its ID and
@@ -217,38 +217,38 @@ traffic or authorize release of another application's recovery fence.
 
 The Service uses two paired SQLite files:
 
-- `senulun.db`: accounts, sessions, credentials, node metadata, monitoring configuration, alerts and audit events.
-- `senulun.metrics.db`: raw snapshots, probe results, last-seen times and traffic counters.
+- `senlun.db`: accounts, sessions, credentials, node metadata, monitoring configuration, alerts and audit events.
+- `senlun.metrics.db`: raw snapshots, probe results, last-seen times and traffic counters.
 
-`SENULUN_DATABASE_PATH` selects the control file; the sibling metrics filename is derived by replacing the final `.db` with `.metrics.db` (or appending `.metrics.db` if there is no `.db` suffix). Both files use WAL and `synchronous=FULL`. Successful reports are committed before acknowledgment: there is no lossy in-memory sample buffer or change to raw history precision.
+`SENLUN_DATABASE_PATH` selects the control file; the sibling metrics filename is derived by replacing the final `.db` with `.metrics.db` (or appending `.metrics.db` if there is no `.db` suffix). Both files use WAL and `synchronous=FULL`. Successful reports are committed before acknowledgment: there is no lossy in-memory sample buffer or change to raw history precision.
 
 Run the online backup command as the Service account:
 
 ```bash
-sudo -u senulun env SENULUN_DATABASE_PATH=/var/lib/senulun/senulun.db \
-  /usr/local/bin/senulun-service backup
+sudo -u senlun env SENLUN_DATABASE_PATH=/var/lib/senlun/senlun.db \
+  /usr/local/bin/senlun-service backup
 ```
 
-Senulun briefly reserves both database writers, then uses SQLite's online backup API to copy and integrity-check both files. Backup copies are finalized in DELETE journal mode so they can be read independently without WAL sidecars; the running databases remain in WAL mode. The command prints a mode-0700 **directory**, containing mode-0600 `senulun.db`, `senulun.metrics.db` and `manifest.json`. The complete directory is published only after both copies and the manifest are fsynced. Copy that entire directory to encrypted storage and test restoration periodically. Writers can wait or time out during a large backup; schedule it outside peak ingestion periods. Failed backups may leave an unpublished `.partial` directory, which is not a usable backup.
+Senlun briefly reserves both database writers, then uses SQLite's online backup API to copy and integrity-check both files. Backup copies are finalized in DELETE journal mode so they can be read independently without WAL sidecars; the running databases remain in WAL mode. The command prints a mode-0700 **directory**, containing mode-0600 `senlun.db`, `senlun.metrics.db` and `manifest.json`. The complete directory is published only after both copies and the manifest are fsynced. Copy that entire directory to encrypted storage and test restoration periodically. Writers can wait or time out during a large backup; schedule it outside peak ingestion periods. Failed backups may leave an unpublished `.partial` directory, which is not a usable backup.
 
 The schema-3 to schema-4 split first creates and verifies a **single-file pre-upgrade backup** beside the original control database. Stop the old Service before upgrading. Migration uses a rollback-journal transaction across both files, verifies all copied snapshot/probe/traffic fields, and only then removes the old metric tables. Insufficient space, newer schemas, a mismatched pair or an occupied destination fail closed. An interrupted migration is recovered by SQLite's journals; do not delete journal files manually. Allow extra disk space for the pre-upgrade backup, new metrics file, rollback journals and temporary verification work. Dropping old tables frees reusable pages inside the control file but does not automatically shrink it.
 
 Restore only while the Service is stopped:
 
-1. Stop `senulun-service` and take one final filesystem copy of the state directory.
-2. Restore **both files from the same backup directory**, using the filenames expected by `SENULUN_DATABASE_PATH`. Move the previous database pair and its `-wal`/`-shm` files together into the saved state copy; never mix them into the restore. The pair ID rejects unrelated databases, but it does not prove that two backups of the same installation were taken at the same time: always use one complete backup directory.
-3. Set ownership to `senulun:senulun`, directory mode to 0700, and both database modes to 0600.
+1. Stop `senlun-service` and take one final filesystem copy of the state directory.
+2. Restore **both files from the same backup directory**, using the filenames expected by `SENLUN_DATABASE_PATH`. Move the previous database pair and its `-wal`/`-shm` files together into the saved state copy; never mix them into the restore. The pair ID rejects unrelated databases, but it does not prove that two backups of the same installation were taken at the same time: always use one complete backup directory.
+3. Set ownership to `senlun:senlun`, directory mode to 0700, and both database modes to 0600.
 4. Start the Service and verify `/healthz`, the dashboard, Agent ingestion, and recent history.
 
-Senulun performs forward-only schema migrations and does not automatically downgrade a database. To roll back across the split, restore the single-file pre-upgrade backup with the previous binary, retaining the split pair separately rather than mixing it with the old file. Never replace a missing metrics database with an empty file.
+Senlun performs forward-only schema migrations and does not automatically downgrade a database. To roll back across the split, restore the single-file pre-upgrade backup with the previous binary, retaining the split pair separately rather than mixing it with the old file. Never replace a missing metrics database with an empty file.
 
 ## Upgrade, rollback, and uninstall
 
 Verify and extract the new release, then rerun `install-systemd.sh`. Back up the Service first. The installer keeps the previous executable target:
 
 ```bash
-sudo ./deploy/install-systemd.sh service "$PWD/senulun-service"
-sudo ./deploy/install-systemd.sh agent "$PWD/senulun-agent"
+sudo ./deploy/install-systemd.sh service "$PWD/senlun-service"
+sudo ./deploy/install-systemd.sh agent "$PWD/senlun-agent"
 ```
 
 For a binary-only rollback with a compatible database and protocol:
@@ -267,24 +267,24 @@ sudo ./deploy/uninstall-systemd.sh agent
 sudo ./deploy/uninstall-systemd.sh service
 ```
 
-Take a backup before manually deleting preserved paths under `/var/lib/senulun`, `/var/lib/senulun-agent`, or `/etc/senulun`.
+Take a backup before manually deleting preserved paths under `/var/lib/senlun`, `/var/lib/senlun-agent`, or `/etc/senlun`.
 
 ## Capacity and metric selection
 
-`SENULUN_RETENTION_DAYS`, `SENULUN_MAX_NODES`, and `SENULUN_MAX_DATABASE_BYTES` form hard Service bounds. The defaults are 7 days, 100 active nodes, and **2 GiB per database file** (up to 4 GiB across the pair, excluding WAL files, backups and migration scratch space). The size limit is checked and enforced independently on both files. Expired history is removed in bounded batches at startup, by hourly maintenance even without Agents, and at most once per minute on the ingestion path. A failed write is not acknowledged; Agents retry while retention can reclaim space. The Service also limits request concurrency, request bodies, history responses, its statement cache (32 entries), and SQLite page caches (1 MiB control + 3 MiB metrics; authentication has its own existing 1 MiB cache). Monitor filesystem free space independently and alert before limits are reached.
+`SENLUN_RETENTION_DAYS`, `SENLUN_MAX_NODES`, and `SENLUN_MAX_DATABASE_BYTES` form hard Service bounds. The defaults are 7 days, 100 active nodes, and **2 GiB per database file** (up to 4 GiB across the pair, excluding WAL files, backups and migration scratch space). The size limit is checked and enforced independently on both files. Expired history is removed in bounded batches at startup, by hourly maintenance even without Agents, and at most once per minute on the ingestion path. A failed write is not acknowledged; Agents retry while retention can reclaim space. The Service also limits request concurrency, request bodies, history responses, its statement cache (32 entries), and SQLite page caches (1 MiB control + 3 MiB metrics; authentication has its own existing 1 MiB cache). Monitor filesystem free space independently and alert before limits are reached.
 
-The Agent interval is bounded to 1–300 seconds, defaulting to three seconds. The administrator can change it centrally; each Agent refreshes authenticated configuration every 30 seconds. Faster intervals increase disk usage; adjust capacity and retention together. By default, disks are deduplicated by device identity and Komari's loopback, bridge, and container-interface prefixes are excluded from network totals. An explicit `SENULUN_NETWORK_INTERFACES` allowlist overrides that default. Container mounts, interface aliases, or other virtual interfaces can still make aggregate metrics misleading; set exact comma-separated `SENULUN_DISK_MOUNT_POINTS` and `SENULUN_NETWORK_INTERFACES` allowlists when required.
+The Agent interval is bounded to 1–300 seconds, defaulting to three seconds. The administrator can change it centrally; each Agent refreshes authenticated configuration every 30 seconds. Faster intervals increase disk usage; adjust capacity and retention together. By default, disks are deduplicated by device identity and Komari's loopback, bridge, and container-interface prefixes are excluded from network totals. An explicit `SENLUN_NETWORK_INTERFACES` allowlist overrides that default. Container mounts, interface aliases, or other virtual interfaces can still make aggregate metrics misleading; set exact comma-separated `SENLUN_DISK_MOUNT_POINTS` and `SENLUN_NETWORK_INTERFACES` allowlists when required.
 
-For server traffic quotas, explicitly select the provider-facing interfaces with `SENULUN_NETWORK_INTERFACES`; including bridges, container interfaces or tunnels can count the same traffic more than once. Monthly usage accumulates positive counter differences. When either counter decreases, that direction starts a new baseline without adding its remaining lifetime total. Traffic across that discontinuity is unknown, including the first sample after a reboot. Changing the interface selection changes the measurement scope: record the change and explicitly reset the usage baseline if needed. Existing inflated totals are not automatically rewritten, and provider billing remains authoritative.
+For server traffic quotas, explicitly select the provider-facing interfaces with `SENLUN_NETWORK_INTERFACES`; including bridges, container interfaces or tunnels can count the same traffic more than once. Monthly usage accumulates positive counter differences. When either counter decreases, that direction starts a new baseline without adding its remaining lifetime total. Traffic across that discontinuity is unknown, including the first sample after a reboot. Changing the interface selection changes the measurement scope: record the change and explicitly reset the usage baseline if needed. Existing inflated totals are not automatically rewritten, and provider billing remains authoritative.
 
 ## Diagnostics
 
-Use `systemctl status`, `journalctl -u senulun-service`, and `journalctl -u senulun-agent`. Logs intentionally omit enrollment and Agent tokens. The health endpoint reports only process health and version. History responses include requested/actual coverage, source count, returned count, bucket width, and whether the window was downsampled. Agent collection timestamps and clock skew remain diagnostic fields; server receipt time controls online state and retention.
+Use `systemctl status`, `journalctl -u senlun-service`, and `journalctl -u senlun-agent`. Logs intentionally omit enrollment and Agent tokens. The health endpoint reports only process health and version. History responses include requested/actual coverage, source count, returned count, bucket width, and whether the window was downsampled. Agent collection timestamps and clock skew remain diagnostic fields; server receipt time controls online state and retention.
 
 
 ### Correcting current-cycle traffic after migration
 
-`senulun-service node correct-traffic NODE_ID` accepts one JSON object on stdin
+`senlun-service node correct-traffic NODE_ID` accepts one JSON object on stdin
 (maximum 4096 bytes): `cycle_start_ms`, `sampled_at_ms`, `raw_up`, `raw_down`,
 `used_up`, and `used_down`. All counters are bytes. The supplied usage is an
 absolute total for the current UTC billing cycle at the supplied raw-counter

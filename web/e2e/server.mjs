@@ -9,17 +9,17 @@ import { testPassword, testUsername } from './credentials.mjs'
 const webDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repository = resolve(webDirectory, '..')
 const binarySuffix = process.platform === 'win32' ? '.exe' : ''
-const serviceBinary = join(repository, 'target', 'debug', `senulun-service${binarySuffix}`)
-const agentBinary = join(repository, 'target', 'debug', `senulun-agent${binarySuffix}`)
-const stateDirectory = mkdtempSync(join(tmpdir(), 'senulun-e2e-'))
-const databasePath = join(stateDirectory, 'senulun.db')
+const serviceBinary = join(repository, 'target', 'debug', `senlun-service${binarySuffix}`)
+const agentBinary = join(repository, 'target', 'debug', `senlun-agent${binarySuffix}`)
+const stateDirectory = mkdtempSync(join(tmpdir(), 'senlun-e2e-'))
+const databasePath = join(stateDirectory, 'senlun.db')
 const tokenPath = join(stateDirectory, 'enrollment-token')
 const credentialsPath = join(stateDirectory, 'agent-credentials.json')
 const serviceUrl = 'http://127.0.0.1:18080/'
 const baseEnvironment = {
   ...process.env,
   PATH: `${dirname(serviceBinary)}${delimiter}${process.env.PATH ?? ''}`,
-  SENULUN_DATABASE_PATH: databasePath,
+  SENLUN_DATABASE_PATH: databasePath,
 }
 
 const enrollment = spawnSync(
@@ -40,12 +40,12 @@ const children = [
     cwd: repository,
     env: {
       ...baseEnvironment,
-      SENULUN_LISTEN: '127.0.0.1:18080',
-      SENULUN_PUBLIC_URL: 'http://127.0.0.1:18080',
-      SENULUN_RETENTION_DAYS: '7',
-      SENULUN_OFFLINE_AFTER_SECONDS: '20',
-      SENULUN_MAX_NODES: '10',
-      SENULUN_MAX_DATABASE_BYTES: '67108864',
+      SENLUN_LISTEN: '127.0.0.1:18080',
+      SENLUN_PUBLIC_URL: 'http://127.0.0.1:18080',
+      SENLUN_RETENTION_DAYS: '7',
+      SENLUN_OFFLINE_AFTER_SECONDS: '20',
+      SENLUN_MAX_NODES: '10',
+      SENLUN_MAX_DATABASE_BYTES: '67108864',
     },
     stdio: 'inherit',
   }),
@@ -56,14 +56,14 @@ function startAgent() {
     cwd: repository,
     env: {
       ...process.env,
-      SENULUN_SERVICE_URL: serviceUrl,
-      SENULUN_ENROLLMENT_TOKEN_FILE: tokenPath,
-      SENULUN_CREDENTIALS_PATH: credentialsPath,
-      SENULUN_NODE_NAME: 'e2e-node',
-      SENULUN_NODE_REGION: 'SG',
-      SENULUN_NODE_GROUP: 'e2e',
-      SENULUN_INTERVAL_SECONDS: '5',
-      SENULUN_GEOIP_PROVIDER: 'disabled',
+      SENLUN_SERVICE_URL: serviceUrl,
+      SENLUN_ENROLLMENT_TOKEN_FILE: tokenPath,
+      SENLUN_CREDENTIALS_PATH: credentialsPath,
+      SENLUN_NODE_NAME: 'e2e-node',
+      SENLUN_NODE_REGION: 'SG',
+      SENLUN_NODE_GROUP: 'e2e',
+      SENLUN_INTERVAL_SECONDS: '5',
+      SENLUN_GEOIP_PROVIDER: 'disabled',
     },
     stdio: 'inherit',
   })

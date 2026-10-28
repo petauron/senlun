@@ -1,16 +1,16 @@
 # Monitoring storage
 
-Senulun follows Komari's short exact window plus sealed-minute storage model.
+Senlun follows Komari's short exact window plus sealed-minute storage model.
 The first implementation has two levels: exact samples for ten minutes in a
 bounded in-memory SQLite database, and persisted UTC-minute summaries for the
-configured history retention. `SENULUN_RETENTION_DAYS` is unchanged; this change
+configured history retention. `SENLUN_RETENTION_DAYS` is unchanged; this change
 does not silently replace the existing retention with a new default.
 
 The reference is Komari 1.6.0 at
 [`1b76b7ad`](https://github.com/komari-monitor/komari/tree/1b76b7ad5bc3de6529bb7f0577069b4ac241fec3):
 its [rollup implementation](https://github.com/komari-monitor/komari/blob/1b76b7ad5bc3de6529bb7f0577069b4ac241fec3/pkg/metric/rollup.go)
 and [storage configuration](https://github.com/komari-monitor/komari/blob/1b76b7ad5bc3de6529bb7f0577069b4ac241fec3/internal/metricstore/config.go).
-Senulun implements the hot/minute slice first, retains its existing retention
+Senlun implements the hot/minute slice first, retains its existing retention
 policy and durable traffic ledger, and preserves exact latency quantiles using
 bounded counted distributions instead of introducing approximate sketches.
 

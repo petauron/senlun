@@ -386,7 +386,7 @@ function download(filename: string, href: string): void {
   link.remove()
 }
 
-const exportFilename = (extension: string) => `senulun-ping-${props.uuid.replace(filenameUnsafeChars, '_')}-${hours.value}h.${extension}`
+const exportFilename = (extension: string) => `senlun-ping-${props.uuid.replace(filenameUnsafeChars, '_')}-${hours.value}h.${extension}`
 
 function exportCsv(): void {
   if (!data.value || !selectedTasks.value.length)

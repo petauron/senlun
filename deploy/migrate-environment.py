@@ -20,8 +20,8 @@ def convert(raw: bytes) -> bytes:
         if not match or "\x00" in line:
             raise ValueError("unsupported environment syntax; source is unchanged")
         key, value, newline = match.groups()
-        if key.startswith("PULSE_"):
-            key = "SENULUN_" + key[len("PULSE_"):]
+        if key.startswith("SENULUN_"):
+            key = "SENLUN_" + key[len("SENULUN_"):]
         if key in seen:
             raise ValueError("conflicting environment assignments")
         seen.add(key)
@@ -44,7 +44,7 @@ def migrate(source: Path, target: Path) -> None:
     converted = convert(source.read_bytes())
     # The original remains the exact private backup. Link publishes the fully
     # synced new file without overwriting an existing target, even under races.
-    descriptor, temporary = tempfile.mkstemp(prefix=".senulun-env-", dir=target.parent)
+    descriptor, temporary = tempfile.mkstemp(prefix=".senlun-env-", dir=target.parent)
     try:
         with os.fdopen(descriptor, "wb") as output:
             os.fchmod(output.fileno(), 0o600)

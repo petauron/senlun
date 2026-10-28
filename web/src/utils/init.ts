@@ -73,7 +73,7 @@ class InitManager {
         return
       }
       const message = error instanceof RpcError ? error.message : String(error)
-      console.warn('[Senulun] Connection failed; retrying:', message)
+      console.warn('[Senlun] Connection failed; retrying:', message)
       this.appStore.connectionError = true
     }
     finally {

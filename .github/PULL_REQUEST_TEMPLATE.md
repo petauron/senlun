@@ -1,6 +1,6 @@
 ## Summary
 
-Describe the user-visible change and why it belongs in Senulun.
+Describe the user-visible change and why it belongs in Senlun.
 
 ## Security and resource impact
 
