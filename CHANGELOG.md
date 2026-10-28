@@ -4,6 +4,18 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.31](https://github.com/petauron/senlun/compare/v0.1.0-alpha.30...v0.1.0-alpha.31) (2026-10-28)
+
+
+### Features
+
+* rename Senulun to Senlun with retained storage migration ([#108](https://github.com/petauron/senlun/issues/108)) ([60c7eea](https://github.com/petauron/senlun/commit/60c7eeabc7ea8a9b1e0e496171a7e10fe5d94e56))
+
+
+### Bug Fixes
+
+* retain installed themes during Senlun storage rename ([#109](https://github.com/petauron/senlun/issues/109)) ([5b54bf5](https://github.com/petauron/senlun/commit/5b54bf53a6edd73f4300d1c963fd775d0ba8d51c))
+
 ## [0.1.0-alpha.30](https://github.com/petauron/senulun/compare/v0.1.0-alpha.29...v0.1.0-alpha.30) (2026-10-27)
 
 
