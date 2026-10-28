@@ -22,7 +22,7 @@ USER 65532:65532
 WORKDIR /var/lib/senlun
 ENV SENLUN_LISTEN=0.0.0.0:8080 \
     SENLUN_ALLOW_PUBLIC_LISTEN=true \
-    SENLUN_DATABASE_PATH=/var/lib/senlun/store/senlun.db
+    SENLUN_DATABASE_PATH=/var/lib/senlun/senlun-store/senlun.db
 VOLUME ["/var/lib/senlun"]
 EXPOSE 8080
 STOPSIGNAL SIGTERM

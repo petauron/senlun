@@ -9,7 +9,7 @@ services:
     environment:
       SENLUN_LISTEN: "0.0.0.0:8080"
       SENLUN_ALLOW_PUBLIC_LISTEN: "true"
-      SENLUN_DATABASE_PATH: /var/lib/senlun/store/senlun.db
+      SENLUN_DATABASE_PATH: /var/lib/senlun/senlun-store/senlun.db
       SENLUN_PUBLIC_URL: ${SENLUN_PUBLIC_URL:?Set the exact browser-facing HTTPS origin}
       SENLUN_TRUSTED_PROXY_IP: ${SENLUN_TRUSTED_PROXY_IP:-}
       # Optional GitHub OAuth: uncomment these and the two secret entries below together.
