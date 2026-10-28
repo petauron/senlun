@@ -14,6 +14,7 @@ mounts the retained data at `/var/lib/senlun`. Its explicit `migrate-and-serve`
 command reads the previous `store/senulun.db` and its matched metrics database,
 uses the existing SQLite paired backup operation, and atomically publishes
 `senlun-store/senlun.db` and `senlun.metrics.db` with an identity receipt.
+The selected theme, theme assets and settings are copied with the database pair.
 Missing or mismatched halves fail closed; never initialize a replacement store.
 Original files and the matched backup remain recovery evidence, not live writers.
 Retain external traffic encryption keys and configured file values.
