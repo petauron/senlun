@@ -59,7 +59,7 @@ test('provenance fails closed outside the checked main workflow', () => {
 });
 
 test('renamed repository binds new provenance and keeps stable distribution names', () => {
-  const repository = 'petauron/senulun';
+  const repository = 'petauron/senlun';
   const renamed = { ...env, GITHUB_REPOSITORY: repository,
     GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/release.yml@refs/heads/main` };
   const proof = provenanceFor({ tag, sha: sourceSha }, renamed);
@@ -75,7 +75,7 @@ test('renamed repository binds new provenance and keeps stable distribution name
   const workflow = readFileSync('.github/workflows/release.yml', 'utf8');
   assert.ok(workflow.includes('ghcr.io/${{ github.repository }}'));
   const config = JSON.parse(readFileSync('release-please-config.json', 'utf8'));
-  assert.equal(config.packages['.']['package-name'], 'senulun');
+  assert.equal(config.packages['.']['package-name'], 'senlun');
 });
 
 test('release workflow retains draft permissions, identity gates and one publication path', () => {

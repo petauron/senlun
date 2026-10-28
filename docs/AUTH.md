@@ -1,15 +1,15 @@
 # Administrator authentication
 
-Senulun keeps browser administrator sessions separate from Agent bearer credentials.
+Senlun keeps browser administrator sessions separate from Agent bearer credentials.
 The dashboard's read APIs are private by default. Even if `private_site` is later
 disabled by an administrator, no monitoring data is exposed before initial setup.
 Administration APIs always require a complete administrator session.
 
 ## First setup
 
-Set `SENULUN_PUBLIC_URL` to the exact browser-facing origin, for example
-`https://senulun.example.com`. It must be HTTPS except for HTTP loopback development.
-Subpath deployments are not supported. Senulun uses this configured origin for
+Set `SENLUN_PUBLIC_URL` to the exact browser-facing origin, for example
+`https://senlun.example.com`. It must be HTTPS except for HTTP loopback development.
+Subpath deployments are not supported. Senlun uses this configured origin for
 Origin checks, OAuth callbacks, and cookie security; forwarded headers do not
 change these decisions.
 
@@ -79,12 +79,12 @@ as an Agent credential.
 ## Two-factor authentication
 
 Enabling TOTP requires a valid administrator session and the current password.
-Senulun returns a Base32 secret and an `otpauth://` URI. Store the secret securely
+Senlun returns a Base32 secret and an `otpauth://` URI. Store the secret securely
 in an authenticator or password manager; it is not sent to a QR-code service.
 The pending enrollment expires after ten minutes and is bound to the session
 that started it. A valid six-digit code confirms enrollment.
 
-TOTP uses a 30-second period and allows one period of clock drift. Senulun records
+TOTP uses a 30-second period and allows one period of clock drift. Senlun records
 the last accepted step inside the authentication transaction and refuses replay.
 Wait for the next code after login before changing sensitive account settings.
 TOTP secrets must remain recoverable by the Service for verification and are
@@ -101,25 +101,25 @@ these operations.
 ## Optional GitHub OAuth
 
 GitHub OAuth is disabled unless an administrator explicitly configures
-`SENULUN_GITHUB_CLIENT_ID`, `SENULUN_GITHUB_CLIENT_SECRET_FILE`, and
-`SENULUN_GITHUB_ALLOWED_USER_ID` together. The last setting is the allowed account's
+`SENLUN_GITHUB_CLIENT_ID`, `SENLUN_GITHUB_CLIENT_SECRET_FILE`, and
+`SENLUN_GITHUB_ALLOWED_USER_ID` together. The last setting is the allowed account's
 immutable numeric GitHub user ID.
 Use a dedicated GitHub OAuth application with callback URL
-`SENULUN_PUBLIC_URL/api/auth/oauth/callback`. Client secrets must be supplied through
+`SENLUN_PUBLIC_URL/api/auth/oauth/callback`. Client secrets must be supplied through
 the deployment's secret configuration, never committed to Git.
 
 Initial password setup remains required. OAuth authenticates only that existing
 administrator, never creates accounts, and validates the numeric account ID on
 every login. A mutable GitHub login name is not an access-control identifier.
 The flow uses a ten-minute, single-use state record, browser binding cookie,
-PKCE S256, exact callback URL, HTTPS, and no requested OAuth scopes. Senulun accesses
+PKCE S256, exact callback URL, HTTPS, and no requested OAuth scopes. Senlun accesses
 only GitHub's token endpoint and current-user identity API when OAuth is used.
 It neither stores the GitHub access token nor requests repository access.
 
 At most 32 pending OAuth records are retained. OAuth HTTP requests have bounded
 timeouts, disable redirects, and read at most 64 KiB per response. If local TOTP is
 enabled, the GitHub callback grants only a ten-minute incomplete session. That
-session cannot read private data or administer Senulun until the local TOTP code is
+session cannot read private data or administer Senlun until the local TOTP code is
 verified. A completed login rotates the temporary session credential.
 
 ## API contract

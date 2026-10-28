@@ -22,7 +22,7 @@ const router = useRouter()
 const auth = useAuthStore()
 const app = useAppStore()
 const state = shallowRef<AdminState | null>(null)
-const settings = ref<SiteSettings>({ site_name: 'Senulun', private_site: true, agent_interval_seconds: 3, earth_view_mode: 'earth' })
+const settings = ref<SiteSettings>({ site_name: 'Senlun', private_site: true, agent_interval_seconds: 3, earth_view_mode: 'earth' })
 const loading = ref(false)
 const loadError = ref('')
 let controller: AbortController | null = null
@@ -82,7 +82,7 @@ async function logout(): Promise<void> {
     <div class="flex flex-wrap items-center justify-between gap-3">
       <div>
         <h1 class="text-xl font-semibold">
-          管理 Senulun
+          管理 Senlun
         </h1><p class="text-sm text-muted-foreground">
           {{ auth.status?.username }}
         </p>
@@ -135,10 +135,10 @@ async function logout(): Promise<void> {
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.ip_info_enabled" type="checkbox" class="size-4 accent-primary" aria-describedby="ip-info-privacy">启用 IP 信息查询（仅管理员）</label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.daily_exchange_rates" type="checkbox" class="size-4 accent-primary">每日汇率（Frankfurter）</label>
             <p class="text-sm text-muted-foreground">
-              启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senulun 凭据；第三方会看到访客 IP。保存后刷新首页生效。
+              启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；第三方会看到访客 IP。保存后刷新首页生效。
             </p>
             <p id="ip-info-privacy" class="text-sm text-muted-foreground">
-              默认关闭。启用后，管理员查看 IP 信息时会将已登记的节点公网 IP 发送给 Net.Coffee，查询归属、原生性与全球延迟。不发送 Senulun 凭据或主机指标；第三方结果可能不准确或暂时不可用。节点地址请在“节点”中登记，中国大陆节点不查询。
+              默认关闭。启用后，管理员查看 IP 信息时会将已登记的节点公网 IP 发送给 Net.Coffee，查询归属、原生性与全球延迟。不发送 Senlun 凭据或主机指标；第三方结果可能不准确或暂时不可用。节点地址请在“节点”中登记，中国大陆节点不查询。
             </p>
             <p class="text-sm text-muted-foreground">
               关闭私有站点后，未隐藏节点的监控数据对访客公开。

@@ -1,8 +1,8 @@
 [workspace]
 members = [
-  "crates/senulun-agent",
-  "crates/senulun-protocol",
-  "crates/senulun-service",
+  "crates/senlun-agent",
+  "crates/senlun-protocol",
+  "crates/senlun-service",
 ]
 resolver = "3"
 
@@ -11,7 +11,7 @@ version = "0.1.0-alpha.30"
 edition = "2024"
 rust-version = "1.98"
 license = "Apache-2.0"
-repository = "https://github.com/petauron/senulun"
+repository = "https://github.com/petauron/senlun"
 authors = ["Petauron"]
 
 [workspace.dependencies]

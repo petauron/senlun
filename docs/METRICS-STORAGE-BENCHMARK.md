@@ -106,7 +106,7 @@ minutes split into bounded contributions rather than failing or losing values.
 - Recent exact samples and the unflushed minute are volatile, as in Komari.
   Abrupt exits may lose them; the independently committed traffic ledger retains
   its existing durability. Clean shutdown persists the partial minute.
-- These results compare two Senulun implementations under fixed synthetic load.
+- These results compare two Senlun implementations under fixed synthetic load.
   They do not establish production savings, memory superiority over Komari,
   identical cross-product durability, or rendered frontend acceptance.
 

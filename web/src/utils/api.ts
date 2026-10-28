@@ -49,13 +49,13 @@ export class ApiError extends Error {
   }
 }
 
-export class SenulunApi {
+export class SenlunApi {
   private readonly baseUrl: URL
 
   constructor(baseUrl = import.meta.env.VITE_API_BASE || DEFAULT_API_BASE) {
     this.baseUrl = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`, window.location.origin)
     if (this.baseUrl.origin !== window.location.origin)
-      throw new ApiError('Senulun Web API must be served from the same origin')
+      throw new ApiError('Senlun Web API must be served from the same origin')
   }
 
   private async request<T>(path: string, wrapped: boolean, body?: unknown, signal?: AbortSignal): Promise<T> {
@@ -198,10 +198,10 @@ export class SenulunApi {
   }
 }
 
-let sharedApiInstance: SenulunApi | null = null
+let sharedApiInstance: SenlunApi | null = null
 
-export function getSharedApi(): SenulunApi {
-  sharedApiInstance ??= new SenulunApi()
+export function getSharedApi(): SenlunApi {
+  sharedApiInstance ??= new SenlunApi()
   return sharedApiInstance
 }
 

@@ -1,9 +1,9 @@
-# Senulun
+# Senlun
 
 Formerly Pulse. See [the in-place brand migration](BRANDING.md) before upgrading
 an existing installation. Names change; node identity and history stay intact.
 
-Senulun is a focused, self-hosted server health monitor built for low and predictable memory usage.
+Senlun is a focused, self-hosted server health monitor built for low and predictable memory usage.
 
 The project consists of a Rust Service, a Rust Agent, a shared versioned protocol, and a static Web interface derived directly from Komari Theme Emerald. Its scope intentionally excludes general server administration.
 
@@ -29,16 +29,16 @@ The project consists of a Rust Service, a Rust Agent, a shared versioned protoco
 ## Repository layout
 
 ```text
-crates/senulun-protocol  Shared wire types and protocol version
-crates/senulun-service   HTTP API and monitoring service
-crates/senulun-agent     Low-memory host metrics collector
+crates/senlun-protocol  Shared wire types and protocol version
+crates/senlun-service   HTTP API and monitoring service
+crates/senlun-agent     Low-memory host metrics collector
 web/                   Embedded Emerald-based Web dashboard
 docs/                  Architecture and roadmap
 ```
 
 ## Current basic monitoring slice
 
-Senulun now provides an end-to-end monitoring path:
+Senlun now provides an end-to-end monitoring path:
 
 - one-time Agent enrollment and per-node credentials;
 - outbound-only periodic host collection;
@@ -60,14 +60,14 @@ a bounded read-only monitoring API compatibility layer; see [theme support](docs
 Create a short-lived, single-use enrollment token in the same database, then start the Service:
 
 ```bash
-export SENULUN_DATABASE_PATH=./senulun.db
-export SENULUN_PUBLIC_URL=http://127.0.0.1:8080
+export SENLUN_DATABASE_PATH=./senlun.db
+export SENLUN_PUBLIC_URL=http://127.0.0.1:8080
 umask 077
-cargo run -p senulun-service -- enrollment create
-cargo run -p senulun-service -- serve
+cargo run -p senlun-service -- enrollment create
+cargo run -p senlun-service -- serve
 ```
 
-Open `http://127.0.0.1:8080/login` and choose the first administrator username and password. Setup closes after the first successful registration; the dashboard is private by default. Complete setup before sharing the public address. The Service defaults to `senulun.db`, seven days of history, a 90-second offline threshold, and a maximum of 100 nodes. See [.env.example](.env.example) for all current settings.
+Open `http://127.0.0.1:8080/login` and choose the first administrator username and password. Setup closes after the first successful registration; the dashboard is private by default. Complete setup before sharing the public address. The Service defaults to `senlun.db`, seven days of history, a 90-second offline threshold, and a maximum of 100 nodes. See [.env.example](.env.example) for all current settings.
 
 ### Enroll and run an Agent
 
@@ -76,21 +76,21 @@ In another terminal, place the returned `token` in a mode-0600 file and start th
 ```bash
 umask 077
 printf '%s\n' 'replace-with-the-returned-token' > ./enrollment-token
-SENULUN_ENROLLMENT_TOKEN_FILE=./enrollment-token \
-SENULUN_NODE_NAME=example-node \
-SENULUN_NODE_REGION='' \
-SENULUN_NODE_GROUP=default \
-  cargo run -p senulun-agent
+SENLUN_ENROLLMENT_TOKEN_FILE=./enrollment-token \
+SENLUN_NODE_NAME=example-node \
+SENLUN_NODE_REGION='' \
+SENLUN_NODE_GROUP=default \
+  cargo run -p senlun-agent
 ```
 
-One enrollment token enrolls exactly one Agent and expires after ten minutes by default. Remove the token file after enrollment. The Agent stores its per-node credential at `$XDG_STATE_HOME/senulun/agent-credentials.json` or `~/.local/state/senulun/agent-credentials.json`; subsequent starts do not need an enrollment token. Create another token with the admin CLI to enroll another node—no Service restart is needed. Set `SENULUN_CREDENTIALS_PATH` to choose a different protected credential file.
+One enrollment token enrolls exactly one Agent and expires after ten minutes by default. Remove the token file after enrollment. The Agent stores its per-node credential at `$XDG_STATE_HOME/senlun/agent-credentials.json` or `~/.local/state/senlun/agent-credentials.json`; subsequent starts do not need an enrollment token. Create another token with the admin CLI to enroll another node—no Service restart is needed. Set `SENLUN_CREDENTIALS_PATH` to choose a different protected credential file.
 
 Remote Service URLs must use HTTPS. Plain HTTP is accepted only for loopback development.
 
 Automatic globe placement is enabled by default through GeoJS when
-`SENULUN_NODE_REGION` is empty. The provider sees the Agent's public egress IP and
-Agent version, but receives no metrics or Senulun credentials. Set
-`SENULUN_GEOIP_PROVIDER=disabled` to opt out before starting/upgrading the Agent, or
+`SENLUN_NODE_REGION` is empty. The provider sees the Agent's public egress IP and
+Agent version, but receives no metrics or Senlun credentials. Set
+`SENLUN_GEOIP_PROVIDER=disabled` to opt out before starting/upgrading the Agent, or
 `ipinfo` to select IPinfo. A manual country code (for example `US`) always takes
 priority and prevents GeoIP requests. Existing explicit `disabled` settings are preserved.
 See [node location](docs/OPERATIONS.md#node-location-and-globe-placement) for refresh,
@@ -107,11 +107,11 @@ The visual implementation is derived from [Komari Theme Emerald](https://github.
 
 ## Production operation
 
-Senulun installs and runs independently of Vastora. Use the published binaries
+Senlun installs and runs independently of Vastora. Use the published binaries
 with the bundled systemd installer, or the Service image with Docker Compose.
 Follow [the standalone installation guide](docs/STANDALONE.md) for the complete
 Service → administrator → Agent flow. Vastora is an optional package manager:
-it installs and upgrades artifacts and publishes access entries; Senulun owns
+it installs and upgrades artifacts and publishes access entries; Senlun owns
 its accounts, enrollment, monitoring settings, themes and data.
 
 Official Linux binary archives use a Debian 12 (glibc 2.36) runtime baseline. Both the Service and Agent must start in a clean Debian 12 runtime in CI and release jobs. For musl-based distributions or older runtimes, use the container or build from source.

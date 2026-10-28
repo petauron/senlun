@@ -1,6 +1,6 @@
-# Senulun legacy-name audit
+# Senlun legacy-name audit
 
-The source audit covers Senulun, Vastora, catalog, Glivela and the website.
+The source audit covers Senlun, Vastora, catalog, Glivela and the website.
 Before cleanup, case-insensitive matches appeared in 69, 112, 14, one and zero
 tracked files respectively, excluding changelogs and dependency lockfiles.
 Matching-file counts include history and immutable identities, not only defects.

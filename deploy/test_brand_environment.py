@@ -13,18 +13,18 @@ class EnvironmentMigrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             source, target = root / "old.env", root / "new.env"
-            raw = b'# keep comment\nPULSE_NODE_REGION="JP"\nPULSE_GEOIP_PROVIDER=disabled\nPULSE_CREDENTIALS_PATH=/existing/private/identity.json\nPULSE_TRAFFIC_KEY_FILE=/existing/private/key\nPULSE_INTERVAL_SECONDS=30\n'
+            raw = b'# keep comment\nSENULUN_NODE_REGION="JP"\nSENULUN_GEOIP_PROVIDER=disabled\nSENULUN_CREDENTIALS_PATH=/existing/private/identity.json\nSENULUN_TRAFFIC_KEY_FILE=/existing/private/key\nSENULUN_INTERVAL_SECONDS=30\n'
             source.write_bytes(raw)
             source.chmod(0o600)
             migration.migrate(source, target)
             self.assertEqual(source.read_bytes(), raw)
-            self.assertEqual(target.read_bytes(), raw.replace(b"PULSE_", b"SENULUN_"))
+            self.assertEqual(target.read_bytes(), raw.replace(b"SENULUN_", b"SENLUN_"))
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
             with self.assertRaises(FileExistsError):
                 migration.migrate(source, target)
 
     def test_conflicts_and_shell_directives_are_not_executed(self):
-        for raw in [b'PULSE_NODE_REGION=JP\nSENULUN_NODE_REGION=US\n', b'export PULSE_NODE_REGION=JP\n', b'source /private/file\n']:
+        for raw in [b'SENULUN_NODE_REGION=JP\nSENLUN_NODE_REGION=US\n', b'export SENULUN_NODE_REGION=JP\n', b'source /private/file\n']:
             with self.assertRaises(ValueError):
                 migration.convert(raw)
 

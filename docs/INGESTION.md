@@ -53,5 +53,5 @@ apart from this change. Include warm-up and WAL checkpoint/shutdown writes,
 verify accepted/stored counts and traffic totals, and report acknowledgement
 latency as well as write volume. Fresh-database comparisons with Komari do not
 establish equal crash durability: Komari may acknowledge an in-memory queue,
-whereas Senulun waits for the SQLite commit. Historical-store tests must compare
-the same Senulun database pair and preserve both runtime durability settings.
+whereas Senlun waits for the SQLite commit. Historical-store tests must compare
+the same Senlun database pair and preserve both runtime durability settings.

@@ -1,6 +1,6 @@
 # Architecture
 
-Senulun is one repository with four bounded components.
+Senlun is one repository with four bounded components.
 
 ## Agent
 
@@ -13,7 +13,7 @@ monitored host's egress rather than a reverse proxy in front of the Service. It
 reuses reqwest, serde, and Tokio; no new dependency, IP storage, protocol field, or
 database migration is needed. The existing snapshot `region` field carries the
 result into the existing country-cluster rendering. Manual region wins; an unset
-or empty `SENULUN_GEOIP_PROVIDER` selects GeoJS, and `disabled` prevents requests.
+or empty `SENLUN_GEOIP_PROVIDER` selects GeoJS, and `disabled` prevents requests.
 This documented GeoIP exception does not authorize other default third-party calls. One cancellable task
 retains one country value in a watch channel, with one five-second/8 KiB request
 at a time, a 24-hour success refresh, and a 15-minute failure retry. Lookups never
@@ -21,7 +21,7 @@ block the metric loop, and failures keep the latest successful country in memory
 
 ## Protocol
 
-`senulun-protocol` owns versioned request and response types. Protocol changes must be deliberate and covered by compatibility tests once the first stable protocol ships.
+`senlun-protocol` owns versioned request and response types. Protocol changes must be deliberate and covered by compatibility tests once the first stable protocol ships.
 
 ## Service
 
@@ -33,12 +33,12 @@ The dashboard and administrative API are distinct authorization surfaces. Browse
 
 ## Web
 
-The Web interface is a Vue static client derived from Komari Emerald and embedded in the Service binary. Senulun supplies its read model through the versioned native API plus a narrow Emerald data adapter. The same components and visual tokens power login and administration. Node details show bounded, time-bucketed ICMP/TCP/HTTP charts across the requested range, the latest 100 raw results, and a whole-requested-window summary, separately from downsampled host history. Missing metrics are unavailable, never synthesized measurements.
+The Web interface is a Vue static client derived from Komari Emerald and embedded in the Service binary. Senlun supplies its read model through the versioned native API plus a narrow Emerald data adapter. The same components and visual tokens power login and administration. Node details show bounded, time-bucketed ICMP/TCP/HTTP charts across the requested range, the latest 100 raw results, and a whole-requested-window summary, separately from downsampled host history. Missing metrics are unavailable, never synthesized measurements.
 
 ## Current data flow
 
 ```text
-host metrics -> Senulun Agent -> authenticated HTTPS -> Senulun Service -> SQLite
+host metrics -> Senlun Agent -> authenticated HTTPS -> Senlun Service -> SQLite
                                                            |
                                                            +-> embedded Emerald dashboard
 ```
@@ -47,10 +47,10 @@ Public dashboard reads are separate from authenticated Agent ingestion. The defa
 
 ## Privacy boundary
 
-Senulun has no mandatory cloud dependency or analytics. Agent metrics go only to the administrator-configured Service. Administrator-configured probes contact only their specified targets with no Senulun credentials. Optional HTTPS webhook channels are disabled until explicitly enabled; payloads contain only node/rule identity, status, time and a short reason, not IPs, credentials or raw snapshots. At most four deliveries run at once, each with a five-second timeout and five durable attempts. Exhausted delivery failures are audited; monitoring collection never waits for notifications.
+Senlun has no mandatory cloud dependency or analytics. Agent metrics go only to the administrator-configured Service. Administrator-configured probes contact only their specified targets with no Senlun credentials. Optional HTTPS webhook channels are disabled until explicitly enabled; payloads contain only node/rule identity, status, time and a short reason, not IPs, credentials or raw snapshots. At most four deliveries run at once, each with a five-second timeout and five durable attempts. Exhausted delivery failures are audited; monitoring collection never waits for notifications.
 
 Unless disabled or overridden by a manual region, the GeoIP provider observes
-the Agent's public egress IP and HTTP user-agent/version, but never receives Senulun
+the Agent's public egress IP and HTTP user-agent/version, but never receives Senlun
 credentials or host metrics. The response's IP and city are discarded. GeoIP uses
 a separate HTTPS client with redirects, automatic retries, and HTTP proxies
 disabled; there is no automatic fallback to a different third party.

@@ -25,9 +25,9 @@ CI and release checks still gate publication; no production restart is implied.
 - [x] Required local Rust formatting, Clippy and complete workspace regression tests
 - [x] Regenerate checked-in Web distribution and Rust license bundle, then verify
 - Browser tests and protected GitHub CI are required before merge; see the
-  [integration PR checks](https://github.com/petauron/senulun/pull/12/checks) for the
+  [integration PR checks](https://github.com/petauron/senlun/pull/12/checks) for the
   final revision's live result.
-- Alpha.3 publication is tracked on the [release page](https://github.com/petauron/senulun/releases/tag/v0.1.0-alpha.3).
+- Alpha.3 publication is tracked on the [release page](https://github.com/petauron/senlun/releases/tag/v0.1.0-alpha.3).
 - [ ] Separately completed Vastora program integration and signed catalog publication
 
 The Web license check, lint, 24 unit tests, Vue type check and production build
@@ -44,8 +44,8 @@ administrator access during delayed OAuth identity lookup, and rejecting a stale
 OAuth flow after credential revocation.
 
 Vastora changes remain isolated in [PR #405](https://github.com/petauron/vastora/pull/405);
-its unrelated working-tree changes are not part of Senulun's release. The new
+its unrelated working-tree changes are not part of Senlun's release. The new
 initialization/configuration semantics require updated compiled Vastora executor
 contracts and a compatible program release, followed by the independently signed
-catalog with verified Senulun artifact pins. A catalog refresh only advertises
+catalog with verified Senlun artifact pins. A catalog refresh only advertises
 versions; it never upgrades an installed application automatically.

@@ -5,10 +5,10 @@
 /web/test-results/
 /agent-credentials.json
 /agent-credentials.tmp-*
-/senulun.db
-/senulun.db-shm
-/senulun.db-wal
-/senulun.db.backup-*
+/senlun.db
+/senlun.db-shm
+/senlun.db-wal
+/senlun.db.backup-*
 # Pre-migration copies, paired backup directories and unpublished partial backups.
 *.backup-*
 .DS_Store

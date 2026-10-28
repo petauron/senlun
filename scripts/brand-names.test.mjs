@@ -12,16 +12,16 @@ function sourceFiles(path) {
   });
 }
 
-test('external traffic configuration uses the Senulun environment key end to end', () => {
+test('external traffic configuration uses the Senlun environment key end to end', () => {
   for (const path of [
-    'crates/senulun-service/src/main.rs',
-    'crates/senulun-service/src/lib.rs',
+    'crates/senlun-service/src/main.rs',
+    'crates/senlun-service/src/lib.rs',
     'web/src/components/admin/AdminTrafficSources.vue',
     '.env.example',
     'docs/external-traffic.md',
   ]) {
     const text = read(path);
-    assert.ok(text.includes('SENULUN_TRAFFIC_KEY_FILE'), path);
+    assert.ok(text.includes('SENLUN_TRAFFIC_KEY_FILE'), path);
     assert.ok(!text.includes('PULSE_TRAFFIC_KEY_FILE'), path);
   }
 });
@@ -32,7 +32,7 @@ test('Web sources do not reintroduce old product symbols or browser namespaces',
   }
 });
 
-test('runtime source uses only the Senulun environment namespace', () => {
+test('runtime source uses only the Senlun environment namespace', () => {
   for (const path of sourceFiles('crates')) {
     assert.doesNotMatch(read(path), /\bPULSE_[A-Z0-9_]+\b/, path);
   }

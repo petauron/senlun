@@ -1,9 +1,9 @@
 # Version releases
 
-The canonical repository is `petauron/senulun`. Release jobs derive source,
-workflow, attestation and new `ghcr.io/petauron/senulun` image coordinates from
+The canonical repository is `petauron/senlun`. Release jobs derive source,
+workflow, attestation and new `ghcr.io/petauron/senlun` image coordinates from
 `github.repository`; OCI source labels use the same canonical URL. Existing
-New releases use `senulun-*` archives, binaries and crates, with the Senulun
+New releases use `senlun-*` archives, binaries and crates, with the Senlun
 Release Please component; the root manifest key and version history stay intact.
 Do not retag, republish or delete historical images or rewrite their provenance.
 The paired catalog/Vastora changes must land before operators upgrade retained
@@ -14,7 +14,7 @@ Like Vastora, it uses only the built-in GITHUB_TOKEN; no extra release secret or
 personal token is needed. Repository settings must allow Actions to create pull
 requests. Existing branch protection and required CI remain mandatory.
 
-Senulun is one release unit: its virtual Rust workspace uses
+Senlun is one release unit: its virtual Rust workspace uses
 `workspace.package.version`, and all three crates inherit that version. The
 pinned action bundles release-please 17.6.0, whose native Rust strategy expects
 literal `package.version` values and cannot update this layout. Use the native
