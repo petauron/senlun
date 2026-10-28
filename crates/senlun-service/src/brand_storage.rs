@@ -243,7 +243,11 @@ mod tests {
         original
             .execute(
                 "ATTACH DATABASE ?1 AS metrics",
-                [directory.path().join("store/senulun.metrics.db").to_str().unwrap()],
+                [directory
+                    .path()
+                    .join("store/senulun.metrics.db")
+                    .to_str()
+                    .unwrap()],
             )
             .unwrap();
         original

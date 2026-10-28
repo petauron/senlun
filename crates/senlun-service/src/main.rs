@@ -10,9 +10,8 @@ const DEFAULT_MAX_DATABASE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt().compact().init();
-    let database_path = PathBuf::from(
-        env::var("SENLUN_DATABASE_PATH").unwrap_or_else(|_| "senlun.db".to_owned()),
-    );
+    let database_path =
+        PathBuf::from(env::var("SENLUN_DATABASE_PATH").unwrap_or_else(|_| "senlun.db".to_owned()));
     let max_database_bytes = parse_env("SENLUN_MAX_DATABASE_BYTES", DEFAULT_MAX_DATABASE_BYTES)?;
     let arguments: Vec<String> = env::args().skip(1).collect();
     if arguments.as_slice() == ["--version"] {
@@ -40,10 +39,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     if arguments.as_slice() == ["migrate-and-serve"] {
-        senlun_service::brand_storage::prepare_managed_storage(
-            &database_path,
-            max_database_bytes,
-        )?;
+        senlun_service::brand_storage::prepare_managed_storage(&database_path, max_database_bytes)?;
     }
 
     let listen_address: SocketAddr = env::var("SENLUN_LISTEN")
@@ -59,10 +55,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let mut config = ServiceConfig::with_database(database_path);
     config.retention_days = parse_env("SENLUN_RETENTION_DAYS", config.retention_days)?;
-    config.offline_after_seconds = parse_env(
-        "SENLUN_OFFLINE_AFTER_SECONDS",
-        config.offline_after_seconds,
-    )?;
+    config.offline_after_seconds =
+        parse_env("SENLUN_OFFLINE_AFTER_SECONDS", config.offline_after_seconds)?;
     config.max_nodes = parse_env("SENLUN_MAX_NODES", config.max_nodes)?;
     config.max_database_bytes = max_database_bytes;
     config.auth = senlun_service::AuthConfig::from_env()?;
