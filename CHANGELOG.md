@@ -4,6 +4,23 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.37](https://github.com/petauron/senlun/compare/v0.1.0-alpha.36...v0.1.0-alpha.37) (2026-10-29)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump vite from 8.3.3 to 8.3.5 ([4a38185](https://github.com/petauron/senlun/commit/4a38185677000e036faf441ed635573ca9a27753))
+* **deps-dev:** update eslint config to 10.0.0 ([5c4a476](https://github.com/petauron/senlun/commit/5c4a4764840d8504288345b2b5afd6536943cb85))
+* **deps-dev:** update vite-plugin-static-copy to 4.1.1 ([717e735](https://github.com/petauron/senlun/commit/717e7352822d32b443bbd18768a071fbaa07e41b))
+* **deps:** bump actions/setup-node from 7.0.0 to 7.1.0 ([195c10d](https://github.com/petauron/senlun/commit/195c10d8a345a1ce3d1f3ee35ae09199d2ab1585))
+* **deps:** bump reka-ui from 2.10.4 to 2.11.0 ([1e7f655](https://github.com/petauron/senlun/commit/1e7f65586971de3173ca30e18e79cde2fdf123f5))
+* **deps:** bump tailwind-merge from 3.6.0 to 3.7.0 ([e72103d](https://github.com/petauron/senlun/commit/e72103dfa1456a511e0f84ceb198f5a43afa6dd2))
+* **deps:** update rust-embed to 8.13.0 ([b07e6ec](https://github.com/petauron/senlun/commit/b07e6ec8bb7dfcae715222fc990c6490d30bb014))
+* **deps:** update rustix to 1.1.6 ([ca81cd5](https://github.com/petauron/senlun/commit/ca81cd55be0f660319540bd72e87b053ce77558a))
+* **deps:** update serde_json to 1.0.154 ([cbbbaf2](https://github.com/petauron/senlun/commit/cbbbaf29bccffd81362f0d9431a6faca54184764))
+* **deps:** update sha2 to 0.11.1 ([e115c6f](https://github.com/petauron/senlun/commit/e115c6f57a25165b1e85f18597431f6058cbee68))
+* **deps:** update zip to 9.1.3 ([e3567f4](https://github.com/petauron/senlun/commit/e3567f4f8c9004f3b593f19bdf77fe1be8180c03))
+
 ## [0.1.0-alpha.36](https://github.com/petauron/senlun/compare/v0.1.0-alpha.35...v0.1.0-alpha.36) (2026-10-29)
 
 
