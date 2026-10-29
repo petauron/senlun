@@ -6,14 +6,21 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
+import { selectHomeProbes } from '@/utils/nodeHelpers'
 import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
 const app = useAppStore()
 const probeIPVersions = ['ipv4', 'ipv6'] as const
+const hasIPv6Probes = computed(() => selectHomeProbes(
+  props.node.probes ?? [],
+  props.node.uuid,
+  app.publicSettings?.theme_settings,
+  'ipv6',
+).some(probe => probe !== null))
 const probeIPVersion = computed<'ipv4' | 'ipv6'>({
-  get: () => app.getHomeProbeIPVersion(props.node.uuid),
+  get: () => hasIPv6Probes.value ? app.getHomeProbeIPVersion(props.node.uuid) : 'ipv4',
   set: value => app.setHomeProbeIPVersion(props.node.uuid, value),
 })
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
@@ -23,7 +30,7 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 
 <template>
   <div @click.stop>
-    <div role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="mb-1 flex justify-end gap-0.5">
+    <div v-if="hasIPv6Probes" role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="mb-1 flex justify-end gap-0.5">
       <Button
         v-for="version in probeIPVersions" :key="version"
         variant="ghost" size="xs" class="rounded-sm px-2"
