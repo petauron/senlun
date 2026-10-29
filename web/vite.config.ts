@@ -28,6 +28,7 @@ export default defineConfig({
         {
           src: resolve(__dirname, 'node_modules/flag-icons/flags/4x3/*.svg'),
           dest: 'assets/flags',
+          rename: { stripBase: true },
         },
       ],
     }),
