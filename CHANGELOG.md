@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.33](https://github.com/petauron/senlun/compare/v0.1.0-alpha.32...v0.1.0-alpha.33) (2026-10-29)
+
+
+### Bug Fixes
+
+* apply traffic reset day immediately ([63001e4](https://github.com/petauron/senlun/commit/63001e48cdfc6e43254f3cffb6c8e1567d3b8cfe)), closes [#111](https://github.com/petauron/senlun/issues/111)
+
 ## [0.1.0-alpha.32](https://github.com/petauron/senlun/compare/v0.1.0-alpha.31...v0.1.0-alpha.32) (2026-10-29)
 
 
