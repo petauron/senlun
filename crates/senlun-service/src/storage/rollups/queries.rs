@@ -133,19 +133,42 @@ pub(crate) fn probe_summaries<F>(
 where
     F: FnMut(ProbeMinute, u64) -> Result<(), StorageError>,
 {
-    let mut statement=db.prepare(&format!("SELECT node_id,task_id,collected_at_ms,received_at_ms,latency_ms,success,error
-        FROM hot.probe_results s WHERE (?1 IS NULL OR node_id=?1) AND (?2 IS NULL OR task_id=?2)
-        AND received_at_ms BETWEEN ?3 AND ?4 AND (persisted=0 OR NOT EXISTS(
+    // Fixed predicates let SQLite seek by node and task when provided.
+    let hot_node = if node.is_some() {
+        " AND s.node_id=?1"
+    } else {
+        ""
+    };
+    let hot_task = if task.is_some() {
+        " AND s.task_id=?2"
+    } else {
+        ""
+    };
+    let mut statement = db.prepare(&format!(
+        "SELECT s.node_id,s.task_id,s.collected_at_ms,s.received_at_ms,s.latency_ms,s.success,s.error
+        FROM hot.probe_results s WHERE s.received_at_ms BETWEEN ?3 AND ?4{hot_node}{hot_task}
+        AND (s.persisted=0 OR NOT EXISTS(
         SELECT 1 FROM metrics.probe_minutes m WHERE m.node_id=s.node_id AND m.task_id=s.task_id
-        AND m.bucket_ms=(s.received_at_ms/60000)*60000 AND NOT ({PROBE_COVERED}))) ORDER BY received_at_ms,id"))?;
+        AND m.bucket_ms=(s.received_at_ms/60000)*60000 AND NOT ({PROBE_COVERED}))) ORDER BY s.received_at_ms,s.id"
+    ))?;
     let mut rows = statement.query(params![node, task, to_i64(start)?, to_i64(end)?])?;
     while let Some(row) = rows.next()? {
         visit(ProbeMinute::from_row(row)?, 0)?;
     }
+    let minute_node = if node.is_some() {
+        " AND m.node_id=?1"
+    } else {
+        ""
+    };
+    let minute_task = if task.is_some() {
+        " AND m.task_id=?2"
+    } else {
+        ""
+    };
     let mut statement = db.prepare(&format!(
         "SELECT data FROM metrics.probe_minutes m
-        WHERE (?1 IS NULL OR node_id=?1) AND (?2 IS NULL OR task_id=?2)
-        AND bucket_ms BETWEEN ?3 AND ?4 AND NOT ({PROBE_COVERED}) ORDER BY bucket_ms"
+        WHERE m.bucket_ms BETWEEN ?3 AND ?4{minute_node}{minute_task}
+        AND NOT ({PROBE_COVERED}) ORDER BY m.bucket_ms"
     ))?;
     let mut rows = statement.query(params![
         node,
@@ -304,23 +327,36 @@ pub(crate) fn probe_history(
     let mut chart = BTreeMap::<(String, u64), ProbeTotals>::new();
     let mut records = BTreeMap::new();
     let mut ordinal = 0_u64;
-    probe_summaries(db, Some(node), None, start, end, |p, resolution| {
-        if !ids.contains(p.task.as_str()) {
-            return Ok(());
-        }
-        let bucket = p.last_received / width * width;
-        chart.entry((p.task.clone(), bucket)).or_default().add(&p);
-        records.insert(
-            (p.last_received, p.task.clone(), ordinal),
-            recent(&p, resolution),
-        );
-        ordinal += 1;
-        if records.len() > 100 {
-            records.pop_first();
-        }
-        summaries.entry(p.task.clone()).or_default().add(&p);
-        Ok(())
-    })?;
+    // A single-task detail view can use the existing node/task/time index.
+    // Multiple tasks still share one scan so their existing ordering is kept.
+    let selected_task = match tasks {
+        [task] => Some(task.id.as_str()),
+        _ => None,
+    };
+    probe_summaries(
+        db,
+        Some(node),
+        selected_task,
+        start,
+        end,
+        |p, resolution| {
+            if !ids.contains(p.task.as_str()) {
+                return Ok(());
+            }
+            let bucket = p.last_received / width * width;
+            chart.entry((p.task.clone(), bucket)).or_default().add(&p);
+            records.insert(
+                (p.last_received, p.task.clone(), ordinal),
+                recent(&p, resolution),
+            );
+            ordinal += 1;
+            if records.len() > 100 {
+                records.pop_first();
+            }
+            summaries.entry(p.task.clone()).or_default().add(&p);
+            Ok(())
+        },
+    )?;
     let mut summary = Vec::new();
     for (task, p) in &summaries {
         let [min, max, p50, p95, p99] = quantiles(db, node, task, start, end, p.total.successful)?;
@@ -356,8 +392,22 @@ pub(crate) fn probe_comparison(
 ) -> Result<Vec<Value>, StorageError> {
     let assigned: HashSet<_> = task.node_ids.iter().map(String::as_str).collect();
     let mut totals = BTreeMap::<String, ProbeTotals>::new();
+    let mut visibility = BTreeMap::new();
     probe_summaries(db, None, Some(&task.id), start, end, |p, _| {
-        if (assigned.is_empty() || assigned.contains(p.node.as_str())) && visible(db, &p.node)? {
+        if !assigned.is_empty() && !assigned.contains(p.node.as_str()) {
+            return Ok(());
+        }
+        let allowed = if let Some(value) = visibility.get(&p.node) {
+            *value
+        } else {
+            if visibility.len() >= 10000 {
+                return Err(StorageError::InvalidInput("comparison node limit exceeded"));
+            }
+            let value = visible(db, &p.node)?;
+            visibility.insert(p.node.clone(), value);
+            value
+        };
+        if allowed {
             if totals.len() >= 10000 && !totals.contains_key(&p.node) {
                 return Err(StorageError::InvalidInput("node comparison limit exceeded"));
             }

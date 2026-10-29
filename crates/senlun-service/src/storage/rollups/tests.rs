@@ -213,6 +213,65 @@ fn probe(task: &str, now: u64, latency: Option<f64>) -> ProbeResult {
 }
 
 #[test]
+fn single_task_history_and_comparison_preserve_results_and_visibility() {
+    let (_dir, storage, node) = fixture();
+    let start = minute();
+    let first = task(&storage, &node.node_id);
+    let second = task(&storage, &node.node_id);
+    for (offset, first_latency, second_latency) in
+        [(1000, Some(10.0), Some(30.0)), (61_000, None, Some(50.0))]
+    {
+        let now = start + offset;
+        storage
+            .ingest_probes(
+                &node.agent_token,
+                &ProbeBatch {
+                    schema_version: 1,
+                    results: vec![
+                        probe(&first.id, now, first_latency),
+                        probe(&second.id, now, second_latency),
+                    ],
+                },
+                now,
+            )
+            .unwrap();
+    }
+    let now = start + 2 * MINUTE;
+    storage.flush_monitoring(now, false).unwrap();
+    let all = storage.probe_history(&node.node_id, None, 1, now).unwrap();
+    let selected = storage
+        .probe_history(&node.node_id, Some(&first.id), 1, now)
+        .unwrap();
+    let expected = all["summary"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == first.id)
+        .unwrap();
+    assert_eq!(&selected["summary"][0], expected);
+    assert_eq!(selected["summary"][0]["samples"], 2);
+    assert_eq!(selected["summary"][0]["loss_percent"], 50.0);
+    assert_eq!(
+        storage.probe_comparison(&first.id, 1, now).unwrap().len(),
+        1
+    );
+    storage
+        .connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO node_options(node_id,data) VALUES(?1,'{\"hidden\":true}')",
+            [&node.node_id],
+        )
+        .unwrap();
+    assert!(
+        storage
+            .probe_comparison(&first.id, 1, now)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn distinct_latencies_and_reverse_source_times_keep_exact_percentiles_and_failures() {
     let (_dir, storage, node) = fixture();
     let start = minute();

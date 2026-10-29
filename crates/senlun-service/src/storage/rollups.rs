@@ -293,10 +293,10 @@ pub(crate) fn latest_extensions(
 pub(crate) fn latest_minutes(
     db: &Connection,
 ) -> Result<Vec<(SnapshotMinute, Option<u64>)>, StorageError> {
-    let mut statement=db.prepare("SELECT m.data,ns.last_seen_at_ms FROM metrics.snapshot_minutes m JOIN nodes n ON n.id=m.node_id
+    let mut statement=db.prepare("SELECT m.data,ns.last_seen_at_ms FROM nodes n
+        JOIN metrics.snapshot_minutes m ON m.id=(SELECT id FROM metrics.snapshot_minutes x WHERE x.node_id=n.id ORDER BY bucket_ms DESC,json_extract(data,'$.last_received') DESC,id DESC LIMIT 1)
         LEFT JOIN node_state ns ON ns.node_id=m.node_id
-        WHERE n.disabled_at_ms IS NULL AND m.id=(SELECT id FROM metrics.snapshot_minutes x WHERE x.node_id=m.node_id ORDER BY bucket_ms DESC,json_extract(data,'$.last_received') DESC,id DESC LIMIT 1)
-        AND NOT EXISTS(SELECT 1 FROM hot.snapshots h WHERE h.node_id=m.node_id)")?;
+        WHERE n.disabled_at_ms IS NULL AND NOT EXISTS(SELECT 1 FROM hot.snapshots h WHERE h.node_id=n.id)")?;
     let mut rows = statement.query([])?;
     let mut records = Vec::new();
     while let Some(row) = rows.next()? {

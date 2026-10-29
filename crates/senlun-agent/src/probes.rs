@@ -3,7 +3,7 @@
 //! separate credential-free client with redirects, retries and proxies disabled.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet, VecDeque},
     net::IpAddr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -28,6 +28,7 @@ const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const TCP_HIGH_LATENCY_MS: f64 = 1000.0;
 const TCP_RETRANSMISSION_DROP_MS: f64 = 800.0;
 const TCP_HIGH_LATENCY_RETRIES: usize = 3;
+const MAX_PENDING_RESULTS_PER_TASK: usize = 4;
 
 pub struct ProbeRunner {
     pub interval: watch::Receiver<Duration>,
@@ -65,6 +66,226 @@ struct ScheduledProbe {
     next_run: Instant,
 }
 
+async fn stop_active_probes(active: &mut JoinSet<ProbeResult>, in_flight: &mut HashSet<String>) {
+    active.abort_all();
+    while active.join_next().await.is_some() {}
+    in_flight.clear();
+}
+
+enum TransportResult {
+    Configuration(Result<AgentRuntimeConfig, &'static str>),
+    Delivery(Result<(), &'static str>, Vec<String>),
+}
+
+async fn apply_configuration(
+    config: AgentRuntimeConfig,
+    interval: &watch::Sender<Duration>,
+    schedules: &mut Vec<ScheduledProbe>,
+    active: &mut JoinSet<ProbeResult>,
+    in_flight: &mut HashSet<String>,
+    pending: &mut BTreeMap<String, VecDeque<ProbeResult>>,
+) {
+    interval.send_replace(Duration::from_secs(config.interval_seconds));
+    let enabled_tasks: Vec<_> = config
+        .probes
+        .into_iter()
+        .filter(|task| task.enabled)
+        .collect();
+    if schedules.len() != enabled_tasks.len()
+        || schedules
+            .iter()
+            .any(|scheduled| !enabled_tasks.contains(&scheduled.task))
+    {
+        stop_active_probes(active, in_flight).await;
+        pending.retain(|id, _| {
+            schedules.iter().any(|scheduled| {
+                scheduled.task.id == *id && enabled_tasks.contains(&scheduled.task)
+            })
+        });
+    }
+    let old_schedules = std::mem::take(schedules);
+    for task in enabled_tasks {
+        let next_run = old_schedules
+            .iter()
+            .find(|old| old.task == task)
+            .map_or_else(Instant::now, |old| old.next_run);
+        schedules.push(ScheduledProbe { task, next_run });
+    }
+}
+
+fn launch_due_probes(
+    schedules: &mut [ScheduledProbe],
+    in_flight: &mut HashSet<String>,
+    active: &mut JoinSet<ProbeResult>,
+    client: &Client,
+) {
+    // Oldest due task gets the next slot, so slow targets cannot starve
+    // later schedules when all 16 tasks compete for four slots.
+    schedules.sort_by_key(|scheduled| scheduled.next_run);
+    for scheduled in schedules {
+        if active.len() >= MAX_PROBE_CONCURRENCY {
+            break;
+        }
+        if scheduled.next_run <= Instant::now() && !in_flight.contains(&scheduled.task.id) {
+            scheduled.next_run =
+                Instant::now() + Duration::from_secs(scheduled.task.interval_seconds);
+            in_flight.insert(scheduled.task.id.clone());
+            active.spawn(run_probe(client.clone(), scheduled.task.clone()));
+        }
+    }
+}
+
+fn queue_result(pending: &mut BTreeMap<String, VecDeque<ProbeResult>>, result: ProbeResult) {
+    let queue = pending.entry(result.task_id.clone()).or_default();
+    if queue.len() == MAX_PENDING_RESULTS_PER_TASK {
+        queue.pop_front();
+        tracing::warn!("probe result delivery lagged; older pending sample replaced");
+    }
+    queue.push_back(result);
+}
+
+fn take_pending_results(
+    pending: &mut BTreeMap<String, VecDeque<ProbeResult>>,
+    schedules: &[ScheduledProbe],
+    last_delivery: &BTreeMap<String, VecDeque<Instant>>,
+    now: Instant,
+) -> (Vec<ProbeResult>, Option<Instant>) {
+    let mut results = Vec::with_capacity(MAX_PROBE_TASKS);
+    let mut next_delivery: Option<Instant> = None;
+    for scheduled in schedules {
+        let Some(queue) = pending.get_mut(&scheduled.task.id) else {
+            continue;
+        };
+        // The Service accepts at most two results per task in its configured
+        // interval. Space catch-up reports even when the network recovers.
+        if let Some(first) = last_delivery
+            .get(&scheduled.task.id)
+            .filter(|times| times.len() == 2)
+            .and_then(VecDeque::front)
+        {
+            let ready = *first
+                + Duration::from_secs(scheduled.task.interval_seconds)
+                + Duration::from_millis(1);
+            if ready > now {
+                next_delivery = Some(next_delivery.map_or(ready, |next| next.min(ready)));
+                continue;
+            }
+        }
+        if let Some(result) = queue.pop_front() {
+            results.push(result);
+        }
+    }
+    pending.retain(|_, queue| !queue.is_empty());
+    (results, next_delivery)
+}
+
+fn start_delivery(
+    pending: &mut BTreeMap<String, VecDeque<ProbeResult>>,
+    schedules: &[ScheduledProbe],
+    last_delivery: &BTreeMap<String, VecDeque<Instant>>,
+    transport: &mut JoinSet<TransportResult>,
+    service_client: &Client,
+    service_url: &Url,
+    token: &str,
+) -> (bool, Option<Instant>) {
+    let (results, next_delivery) =
+        take_pending_results(pending, schedules, last_delivery, Instant::now());
+    if results.is_empty() {
+        return (false, next_delivery);
+    }
+    let batch = ProbeBatch {
+        schema_version: PROBE_SCHEMA_VERSION,
+        results,
+    };
+    let task_ids = batch
+        .results
+        .iter()
+        .map(|result| result.task_id.clone())
+        .collect();
+    let (client, url, token) = (
+        service_client.clone(),
+        service_url.clone(),
+        token.to_owned(),
+    );
+    transport.spawn(async move {
+        TransportResult::Delivery(send_results(&client, &url, &token, &batch).await, task_ids)
+    });
+    (true, None)
+}
+
+fn record_deliveries(
+    schedules: &[ScheduledProbe],
+    last_delivery: &mut BTreeMap<String, VecDeque<Instant>>,
+    task_ids: Vec<String>,
+) {
+    let completed_at = Instant::now();
+    for id in task_ids {
+        if schedules.iter().any(|scheduled| scheduled.task.id == id) {
+            let times = last_delivery.entry(id).or_default();
+            if times.len() == 2 {
+                times.pop_front();
+            }
+            times.push_back(completed_at);
+        }
+    }
+}
+
+fn start_configuration(
+    next_config: &mut Instant,
+    config_pending: &mut bool,
+    transport: &mut JoinSet<TransportResult>,
+    service_client: &Client,
+    service_url: &Url,
+    token: &str,
+) {
+    let now = Instant::now();
+    if now < *next_config || *config_pending {
+        return;
+    }
+    *next_config = now + CONFIG_REFRESH;
+    *config_pending = true;
+    let (client, url, token) = (
+        service_client.clone(),
+        service_url.clone(),
+        token.to_owned(),
+    );
+    transport.spawn(async move {
+        TransportResult::Configuration(fetch_config(&client, &url, &token).await)
+    });
+}
+
+fn config_wake(pending: bool, next: Instant) -> Instant {
+    if pending {
+        Instant::now() + CONFIG_REFRESH
+    } else {
+        next
+    }
+}
+
+async fn collect_completed_probes(
+    completion: &mut Option<Result<ProbeResult, tokio::task::JoinError>>,
+    active: &mut JoinSet<ProbeResult>,
+    in_flight: &mut HashSet<String>,
+    schedules: &[ScheduledProbe],
+    pending: &mut BTreeMap<String, VecDeque<ProbeResult>>,
+) {
+    while let Some(completed) = completion.take().or_else(|| active.try_join_next()) {
+        if let Ok(result) = completed {
+            in_flight.remove(&result.task_id);
+            if schedules
+                .iter()
+                .any(|scheduled| scheduled.task.id == result.task_id)
+            {
+                queue_result(pending, result);
+            }
+        } else {
+            // Clear reserved slots if a probe task unexpectedly fails.
+            stop_active_probes(active, in_flight).await;
+            tracing::warn!("probe execution task failed");
+        }
+    }
+}
+
 async fn run_worker(
     service_client: Client,
     target_client: Client,
@@ -75,102 +296,96 @@ async fn run_worker(
     let mut schedules: Vec<ScheduledProbe> = Vec::new();
     let mut next_config = Instant::now();
     let mut active = JoinSet::new();
+    let mut transport = JoinSet::new();
     let mut in_flight = HashSet::new();
     let mut completion = None;
+    let mut pending = BTreeMap::<String, VecDeque<ProbeResult>>::new();
+    let mut last_delivery = BTreeMap::<String, VecDeque<Instant>>::new();
+    let mut config_pending = false;
+    let mut delivery_pending = false;
     loop {
-        let now = Instant::now();
-        if now >= next_config {
-            next_config = now + CONFIG_REFRESH;
-            match fetch_config(&service_client, &service_url, &token).await {
-                Ok(config) => {
-                    interval.send_replace(Duration::from_secs(config.interval_seconds));
-                    let enabled_tasks: Vec<_> = config
-                        .probes
-                        .into_iter()
-                        .filter(|task| task.enabled)
-                        .collect();
-                    if schedules.len() != enabled_tasks.len()
-                        || schedules
-                            .iter()
-                            .any(|scheduled| !enabled_tasks.contains(&scheduled.task))
-                    {
-                        completion = None;
-                        active.abort_all();
-                        while active.join_next().await.is_some() {}
-                        in_flight.clear();
-                    }
-                    let old_schedules = std::mem::take(&mut schedules);
-                    for task in enabled_tasks {
-                        let next_run = old_schedules
-                            .iter()
-                            .find(|old| old.task == task)
-                            .map_or(now, |old| old.next_run);
-                        schedules.push(ScheduledProbe { task, next_run });
-                    }
-                }
-                Err("unauthorized") => {
-                    tracing::warn!("Agent configuration credential rejected; probe worker stopped");
-                    return;
-                }
-                Err(reason) => tracing::warn!(reason, "Agent configuration refresh failed"),
-            }
-        }
+        start_configuration(
+            &mut next_config,
+            &mut config_pending,
+            &mut transport,
+            &service_client,
+            &service_url,
+            &token,
+        );
 
-        // Each completed result exists in exactly one JoinSet entry or this
-        // bounded batch. Delivery failure drops it; no historical retry queue.
-        let mut results = Vec::with_capacity(MAX_PROBE_CONCURRENCY);
-        while let Some(completed) = completion.take().or_else(|| active.try_join_next()) {
-            if let Ok(result) = completed {
-                let result: ProbeResult = result;
-                in_flight.remove(&result.task_id);
-                if schedules
-                    .iter()
-                    .any(|scheduled| scheduled.task.id == result.task_id)
-                {
-                    results.push(result);
-                }
-            } else {
-                // No probe should panic. Recover the bounded worker state
-                // without leaving a permanently reserved schedule slot.
-                active.abort_all();
-                while active.join_next().await.is_some() {}
-                in_flight.clear();
-                tracing::warn!("probe execution task failed");
-            }
+        collect_completed_probes(
+            &mut completion,
+            &mut active,
+            &mut in_flight,
+            &schedules,
+            &mut pending,
+        )
+        .await;
+        let mut delivery_wake = None;
+        if !delivery_pending && !pending.is_empty() {
+            (delivery_pending, delivery_wake) = start_delivery(
+                &mut pending,
+                &schedules,
+                &last_delivery,
+                &mut transport,
+                &service_client,
+                &service_url,
+                &token,
+            );
         }
-        if !results.is_empty() {
-            let batch = ProbeBatch {
-                schema_version: PROBE_SCHEMA_VERSION,
-                results,
-            };
-            if let Err(reason) = send_results(&service_client, &service_url, &token, &batch).await {
-                if reason == "unauthorized" {
-                    tracing::warn!("Agent result credential rejected; probe worker stopped");
-                    return;
-                }
-                tracing::warn!(reason, "probe result delivery failed; batch discarded");
-            }
-        }
-        // Oldest due task gets the next slot, so slow targets cannot starve
-        // later schedules when all 16 tasks compete for four slots.
-        schedules.sort_by_key(|scheduled| scheduled.next_run);
-        for scheduled in &mut schedules {
-            if active.len() >= MAX_PROBE_CONCURRENCY {
-                break;
-            }
-            if scheduled.next_run <= Instant::now() && !in_flight.contains(&scheduled.task.id) {
-                scheduled.next_run =
-                    Instant::now() + Duration::from_secs(scheduled.task.interval_seconds);
-                in_flight.insert(scheduled.task.id.clone());
-                active.spawn(run_probe(target_client.clone(), scheduled.task.clone()));
-            }
-        }
+        launch_due_probes(&mut schedules, &mut in_flight, &mut active, &target_client);
         // An in-flight task already owns its next run. When every slot is
         // occupied, wait for a completion instead of spinning on overdue work.
-        let next_wake = next_wake(&schedules, &in_flight, active.len(), next_config);
+        let mut next_wake = next_wake(
+            &schedules,
+            &in_flight,
+            active.len(),
+            config_wake(config_pending, next_config),
+        );
+        if !delivery_pending && let Some(delivery_wake) = delivery_wake {
+            next_wake = next_wake.min(delivery_wake);
+        }
         tokio::select! {
             completed = active.join_next(), if !active.is_empty() => {
                 completion = completed;
+            }
+            completed = transport.join_next(), if !transport.is_empty() => {
+                match completed {
+                    Some(Ok(TransportResult::Configuration(result))) => {
+                        config_pending = false;
+                        match result {
+                            Ok(config) => {
+                                apply_configuration(config, &interval, &mut schedules, &mut active,
+                                    &mut in_flight, &mut pending).await;
+                                last_delivery.retain(|id, _| schedules.iter().any(|scheduled| scheduled.task.id == *id));
+                            }
+                            Err("unauthorized") => {
+                                tracing::warn!("Agent configuration credential rejected; probe worker stopped");
+                                return;
+                            }
+                            Err(reason) => tracing::warn!(reason, "Agent configuration refresh failed"),
+                        }
+                    }
+                    Some(Ok(TransportResult::Delivery(result, task_ids))) => {
+                        delivery_pending = false;
+                        record_deliveries(&schedules, &mut last_delivery, task_ids);
+                        if let Err(reason) = result {
+                            if reason == "unauthorized" {
+                                tracing::warn!("Agent result credential rejected; probe worker stopped");
+                                return;
+                            }
+                            tracing::warn!(reason, "probe result delivery failed; batch discarded");
+                        }
+                    }
+                    Some(Err(_)) => {
+                        transport.abort_all();
+                        while transport.join_next().await.is_some() {}
+                        config_pending = false;
+                        delivery_pending = false;
+                        tracing::warn!("probe transport task failed");
+                    }
+                    None => {}
+                }
             }
             () = tokio::time::sleep_until(next_wake.into()) => {}
         }
@@ -501,6 +716,145 @@ fn parse_ping_latency(output: &[u8]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_results_keep_failures_and_respect_batch_bounds() {
+        let result = |task: usize, sequence: usize, success: bool| ProbeResult {
+            task_id: format!("task-{task:02}"),
+            sample_id: format!("{task}-{sequence}"),
+            collected_at_unix_ms: sequence as u64,
+            latency_ms: success.then_some(1.0),
+            success,
+            error: (!success).then(|| "timeout".to_owned()),
+        };
+        let mut pending = BTreeMap::new();
+        let now = Instant::now();
+        let schedules: Vec<_> = (0..MAX_PROBE_TASKS)
+            .map(|id| {
+                let mut probe = task(ProbeKind::Tcp, "127.0.0.1:80");
+                probe.id = format!("task-{id:02}");
+                probe.interval_seconds = 5;
+                ScheduledProbe {
+                    task: probe,
+                    next_run: now,
+                }
+            })
+            .collect();
+        for task in 0..MAX_PROBE_TASKS {
+            queue_result(&mut pending, result(task, 0, false));
+            queue_result(&mut pending, result(task, 1, true));
+        }
+        let mut last_delivery = BTreeMap::new();
+        let (first, _) = take_pending_results(&mut pending, &schedules, &last_delivery, now);
+        assert_eq!(first.len(), MAX_PROBE_TASKS);
+        assert!(first.iter().all(|sample| !sample.success));
+        for sample in &first {
+            last_delivery.insert(sample.task_id.clone(), VecDeque::from([now]));
+        }
+        let (second, _) = take_pending_results(&mut pending, &schedules, &last_delivery, now);
+        assert_eq!(second.len(), MAX_PROBE_TASKS);
+        assert!(second.iter().all(|sample| sample.success));
+        assert!(pending.is_empty());
+
+        for sample in &second {
+            last_delivery
+                .get_mut(&sample.task_id)
+                .unwrap()
+                .push_back(now);
+        }
+        queue_result(&mut pending, result(0, 0, false));
+        queue_result(&mut pending, result(0, 1, true));
+        queue_result(&mut pending, result(0, 2, true));
+        queue_result(&mut pending, result(0, 3, true));
+        queue_result(&mut pending, result(0, 4, true));
+        let (blocked, wake) = take_pending_results(&mut pending, &schedules, &last_delivery, now);
+        assert!(blocked.is_empty());
+        let ready = now + Duration::from_millis(5001);
+        assert_eq!(wake, Some(ready));
+        let (bounded, _) = take_pending_results(&mut pending, &schedules, &last_delivery, ready);
+        assert_eq!(bounded.len(), 1);
+        assert_eq!(bounded[0].sample_id, "0-1");
+        assert_eq!(pending["task-00"].front().unwrap().sample_id, "0-2");
+    }
+
+    #[tokio::test]
+    async fn slow_result_delivery_does_not_delay_the_next_probe() {
+        use std::sync::Arc;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::sync::{Notify, Semaphore};
+
+        let target = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut probe = task(ProbeKind::Tcp, &target.local_addr().unwrap().to_string());
+        probe.interval_seconds = 5;
+        let config = serde_json::to_string(&AgentRuntimeConfig {
+            schema_version: AGENT_CONFIG_SCHEMA_VERSION,
+            interval_seconds: 3,
+            probes: vec![probe],
+        })
+        .unwrap();
+        let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}/", service.local_addr().unwrap())).unwrap();
+        let started = Arc::new(Notify::new());
+        let release = Arc::new(Semaphore::new(0));
+        let server = tokio::spawn({
+            let started = started.clone();
+            let release = release.clone();
+            async move {
+                loop {
+                    let Ok((mut stream, _)) = service.accept().await else {
+                        return;
+                    };
+                    let (config, started, release) =
+                        (config.clone(), started.clone(), release.clone());
+                    tokio::spawn(async move {
+                        let mut headers = Vec::new();
+                        let mut byte = [0_u8; 1];
+                        while !headers.ends_with(b"\r\n\r\n") {
+                            if stream.read_exact(&mut byte).await.is_err()
+                                || headers.len() >= 16 * 1024
+                            {
+                                return;
+                            }
+                            headers.push(byte[0]);
+                        }
+                        let is_config = headers.starts_with(b"GET /api/v1/agents/config ");
+                        let body = if is_config {
+                            config
+                        } else {
+                            started.notify_one();
+                            if release.acquire().await.is_err() {
+                                return;
+                            }
+                            "{\"accepted\":true}".to_owned()
+                        };
+                        let _ = stream.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+                    });
+                }
+            }
+        });
+        let runner = ProbeRunner::start(
+            Client::new(),
+            url,
+            "test-token".into(),
+            Duration::from_secs(3),
+        )
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), target.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), started.notified())
+            .await
+            .unwrap();
+        // The first result response remains blocked while the next probe is due.
+        tokio::time::timeout(Duration::from_secs(7), target.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        release.add_permits(1);
+        drop(runner);
+        server.abort();
+    }
 
     fn task(kind: ProbeKind, target: &str) -> ProbeTask {
         ProbeTask {

@@ -13,11 +13,30 @@ class InitManager {
   private isPolling = false
   private isInitialized = false
   private isDestroyed = false
+  private refreshWhenVisible = false
+
+  private readonly onVisibilityChange = (): void => {
+    if (this.isDestroyed)
+      return
+    this.stopPolling()
+    if (document.visibilityState !== 'visible') {
+      this.refreshWhenVisible = false
+      return
+    }
+    if (this.isPolling) {
+      this.refreshWhenVisible = true
+    }
+    else {
+      this.refreshWhenVisible = false
+      void this.poll()
+    }
+  }
 
   constructor() {
     this.rpc = getSharedRpc()
     this.appStore = useAppStore()
     this.nodesStore = useNodesStore()
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
   }
 
   private getPollInterval(): number {
@@ -34,7 +53,7 @@ class InitManager {
   }
 
   private async poll(): Promise<void> {
-    if (this.isPolling || this.isDestroyed)
+    if (this.isPolling || this.isDestroyed || document.visibilityState !== 'visible')
       return
     this.isPolling = true
     try {
@@ -81,7 +100,15 @@ class InitManager {
       if (!this.isDestroyed) {
         this.appStore.loading = false
         this.stopPolling()
-        this.pollTimer = setTimeout(() => void this.poll(), this.getPollInterval())
+        if (document.visibilityState === 'visible') {
+          if (this.refreshWhenVisible) {
+            this.refreshWhenVisible = false
+            void this.poll()
+          }
+          else {
+            this.pollTimer = setTimeout(() => void this.poll(), this.getPollInterval())
+          }
+        }
       }
     }
   }
@@ -103,6 +130,7 @@ class InitManager {
 
   destroy(): void {
     this.isDestroyed = true
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
     this.stopPolling()
     this.rpc.close()
     this.nodesStore.clearNodes()
