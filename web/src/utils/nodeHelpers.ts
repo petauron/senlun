@@ -47,7 +47,7 @@ export function trafficSelectionMessage(selection: SelectedTraffic | undefined):
     disabled: '服务商同步已停用，显示上次值',
     authentication_required: '认证需管理员处理，当前用量不可判定',
     sync_failed: '同步失败，显示上次成功值',
-    no_data: selection.source === 'provider' ? '尚无服务商快照' : '尚无本地采样',
+    no_data: selection.source === 'provider' ? '尚无服务商快照' : '尚无本周期本地采样',
     stale: '同步已过期，显示上次成功值',
     quota_missing: '服务商未提供可用额度',
   }

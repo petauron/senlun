@@ -189,6 +189,15 @@ pub(crate) struct NodeOptions {
     pub traffic_limit_bytes: u64,
     pub traffic_limit_type: String,
     pub traffic_reset_day: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) traffic_reset_transition: Option<TrafficResetTransition>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TrafficResetTransition {
+    previous_day: u8,
+    effective_at_ms: u64,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -440,6 +449,15 @@ impl Storage {
             value["traffic_used_up"] = json!(up);
             value["traffic_used_down"] = json!(down);
             value["selected_traffic"] = json!(selected_traffic(&db, &id, Some(&options), now)?);
+            value["traffic_current_reset_day"] = json!(effective_reset_day(Some(&options), now));
+            value["traffic_next_reset_unix_ms"] = json!(next_effective_reset(&options, now));
+            value["traffic_reset_effective_at_unix_ms"] = json!(
+                options
+                    .traffic_reset_transition
+                    .as_ref()
+                    .filter(|transition| transition.effective_at_ms > now)
+                    .map(|transition| transition.effective_at_ms)
+            );
             nodes.push(value);
         }
         let mut failure_query=db.prepare("SELECT happened_at_ms,subject FROM audit_events WHERE action='notification.failed' ORDER BY id DESC LIMIT 100")?;
@@ -471,7 +489,7 @@ impl Storage {
             || !options.currency.bytes().all(|c| c.is_ascii_uppercase())
             || options.billing_cycle_days > 36500
             || options.traffic_limit_bytes > i64::MAX as u64
-            || !(1..=28).contains(&options.traffic_reset_day)
+            || !(1..=31).contains(&options.traffic_reset_day)
             || !["sum", "up", "down", "min", "max"].contains(&options.traffic_limit_type.as_str())
             || options
                 .expired_at_unix_ms
@@ -482,8 +500,27 @@ impl Storage {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
-        let old_source =
-            options_or_none(&tx, id)?.map_or(TrafficSource::Local, |old| old.traffic_source);
+        let previous = options_or_none(&tx, id)?;
+        let old_source = previous
+            .as_ref()
+            .map_or(TrafficSource::Local, |old| old.traffic_source);
+        // Use stored transition state, never client-supplied internal fields.
+        options.traffic_reset_transition = previous
+            .as_ref()
+            .and_then(|old| old.traffic_reset_transition.clone());
+        if options.traffic_reset_day != previous.as_ref().map_or(1, |old| old.traffic_reset_day) {
+            let now = crate::storage::unix_time_ms()?;
+            let active_day = effective_reset_day(previous.as_ref(), now);
+            options.traffic_reset_transition = if options.traffic_reset_day == active_day {
+                None
+            } else {
+                Some(TrafficResetTransition {
+                    previous_day: active_day,
+                    effective_at_ms: next_period_start(now, options.traffic_reset_day)
+                        .ok_or(StorageError::InvalidInput("cannot calculate traffic reset"))?,
+                })
+            };
+        }
         if old_source != options.traffic_source {
             crate::notifications::retire_traffic_evaluation(
                 &tx,
@@ -549,7 +586,8 @@ impl Storage {
             ));
         }
         verify_nodes(tx, &[id.to_owned()])?;
-        let day = options_or_none(tx, id)?.map_or(1, |o| o.traffic_reset_day);
+        let options = options_or_none(tx, id)?;
+        let day = effective_reset_day(options.as_ref(), now);
         if value.cycle_start_ms != period_start(now, day) {
             return Err(StorageError::InvalidInput("traffic cycle has changed"));
         }
@@ -1058,22 +1096,73 @@ pub(crate) fn validate_webhook(raw: &str) -> Result<reqwest::Url, StorageError> 
     Ok(url)
 }
 
+fn monthly_boundary(year: i32, month: Month, day: u8) -> Option<u64> {
+    let date = (1..=day.clamp(1, 31))
+        .rev()
+        .find_map(|candidate| Date::from_calendar_date(year, month, candidate).ok())?;
+    u64::try_from(date.midnight().assume_utc().unix_timestamp())
+        .ok()?
+        .checked_mul(1000)
+}
+
 pub(crate) fn period_start(now: u64, day: u8) -> u64 {
     let Ok(date) = OffsetDateTime::from_unix_timestamp(integer(now / 1000)) else {
         return now;
     };
-    let (mut year, mut month) = (date.year(), date.month());
-    if date.day() < day {
-        if month == Month::January {
-            year -= 1;
-            month = Month::December;
-        } else {
-            month = month.previous();
-        }
+    let (year, month) = (date.year(), date.month());
+    let Some(this_month) = monthly_boundary(year, month, day) else {
+        return now;
+    };
+    if this_month <= now {
+        return this_month;
     }
-    Date::from_calendar_date(year, month, day.clamp(1, 28)).map_or(now, |d| {
-        unsigned(d.midnight().assume_utc().unix_timestamp()) * 1000
+    let previous_year = if month == Month::January {
+        year - 1
+    } else {
+        year
+    };
+    monthly_boundary(previous_year, month.previous(), day).unwrap_or(now)
+}
+
+fn next_period_start(now: u64, day: u8) -> Option<u64> {
+    let date = OffsetDateTime::from_unix_timestamp(integer(now / 1000)).ok()?;
+    let (year, month) = (date.year(), date.month());
+    let this_month = monthly_boundary(year, month, day)?;
+    if this_month > now {
+        return Some(this_month);
+    }
+    let next_year = if month == Month::December {
+        year + 1
+    } else {
+        year
+    };
+    monthly_boundary(next_year, month.next(), day)
+}
+
+pub(crate) fn effective_reset_day(options: Option<&NodeOptions>, now: u64) -> u8 {
+    options.map_or(1, |options| {
+        options
+            .traffic_reset_transition
+            .as_ref()
+            .map_or(options.traffic_reset_day, |transition| {
+                if now < transition.effective_at_ms {
+                    transition.previous_day
+                } else {
+                    options.traffic_reset_day
+                }
+            })
     })
+}
+
+fn next_effective_reset(options: &NodeOptions, now: u64) -> Option<u64> {
+    let active = next_period_start(now, effective_reset_day(Some(options), now))?;
+    Some(
+        options
+            .traffic_reset_transition
+            .as_ref()
+            .filter(|transition| transition.effective_at_ms > now)
+            .map_or(active, |transition| active.min(transition.effective_at_ms)),
+    )
 }
 
 pub(crate) fn update_traffic(
@@ -1082,7 +1171,8 @@ pub(crate) fn update_traffic(
     snapshot: &SystemSnapshot,
     now: u64,
 ) -> Result<(), StorageError> {
-    let day = options_or_none(tx, node)?.map_or(1, |o| o.traffic_reset_day);
+    let options = options_or_none(tx, node)?;
+    let day = effective_reset_day(options.as_ref(), now);
     let cycle = integer(period_start(now, day));
     let old:Option<(i64,i64,i64,i64,i64)>=tx.query_row("SELECT cycle_start_ms,raw_up,raw_down,used_up,used_down FROM traffic_periods WHERE node_id=?1",[node],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
     let up = integer(snapshot.network_total_transmitted_bytes);
@@ -1106,8 +1196,10 @@ pub(crate) fn update_traffic(
 }
 
 fn period_usage(db: &Connection, node: &str) -> Result<(u64, u64), StorageError> {
-    let day = options_or_none(db, node)?.map_or(1, |o| o.traffic_reset_day);
-    let cycle = integer(period_start(crate::storage::unix_time_ms()?, day));
+    let now = crate::storage::unix_time_ms()?;
+    let options = options_or_none(db, node)?;
+    let day = effective_reset_day(options.as_ref(), now);
+    let cycle = integer(period_start(now, day));
     Ok(db
         .query_row(
             "SELECT used_up,used_down FROM traffic_periods WHERE node_id=?1 AND cycle_start_ms=?2",
@@ -1139,7 +1231,7 @@ pub(crate) fn selected_traffic(
         reset_at: None,
     };
     if source == TrafficSource::Local {
-        let day = options.map_or(1, |options| options.traffic_reset_day);
+        let day = effective_reset_day(options, now);
         let totals: Option<(i64, i64, i64)> = db
             .query_row(
                 "SELECT cycle_start_ms,used_up,used_down FROM traffic_periods WHERE node_id=?1",
@@ -1155,6 +1247,10 @@ pub(crate) fn selected_traffic(
         };
         let (up, down) = if cycle == integer(period_start(now, day)) {
             (unsigned(up), unsigned(down))
+        } else if options.is_some_and(|value| value.traffic_reset_transition.is_some()) {
+            // Do not invent a current-cycle value until the first new sample.
+            result.status = "no_data";
+            return Ok(result);
         } else {
             // An existing baseline crossed its local billing boundary.
             (0, 0)

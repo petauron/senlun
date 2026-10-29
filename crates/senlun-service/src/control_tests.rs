@@ -386,6 +386,222 @@ pub(crate) fn fixture() -> (TempDir, Storage, senlun_protocol::EnrollmentRespons
     (directory, storage, credentials)
 }
 
+fn utc_midnight(year: i32, month: time::Month, day: u8) -> u64 {
+    u64::try_from(
+        time::Date::from_calendar_date(year, month, day)
+            .unwrap()
+            .midnight()
+            .assume_utc()
+            .unix_timestamp(),
+    )
+    .unwrap()
+        * 1000
+}
+
+#[test]
+fn traffic_period_utc_boundaries_cover_short_months_leap_year_and_new_year() {
+    use time::Month::{April, December, February, January, March, May};
+    let cases = [
+        (1, (2027, May, 1), (2027, May, 1)),
+        (28, (2027, May, 27), (2027, April, 28)),
+        (28, (2027, May, 28), (2027, May, 28)),
+        (29, (2027, February, 28), (2027, February, 28)),
+        (29, (2028, February, 29), (2028, February, 29)),
+        (29, (2027, March, 28), (2027, February, 28)),
+        (29, (2027, March, 29), (2027, March, 29)),
+        (30, (2027, February, 28), (2027, February, 28)),
+        (30, (2027, April, 30), (2027, April, 30)),
+        (31, (2027, February, 28), (2027, February, 28)),
+        (31, (2028, February, 29), (2028, February, 29)),
+        (31, (2027, April, 30), (2027, April, 30)),
+        (31, (2027, May, 30), (2027, April, 30)),
+        (31, (2027, May, 31), (2027, May, 31)),
+        (31, (2028, January, 1), (2027, December, 31)),
+    ];
+    for (day, (year, month, date), (expected_year, expected_month, expected_date)) in cases {
+        let now = utc_midnight(year, month, date);
+        let expected = utc_midnight(expected_year, expected_month, expected_date);
+        assert_eq!(crate::control::period_start(now, day), expected);
+    }
+    let boundary = utc_midnight(2028, February, 29);
+    assert_eq!(
+        crate::control::period_start(boundary - 1, 31),
+        utc_midnight(2028, January, 31)
+    );
+    assert_eq!(crate::control::period_start(boundary, 31), boundary);
+}
+
+fn local_traffic(storage: &Storage, id: &str, now: u64) -> crate::control::SelectedTraffic {
+    let db = storage.connection().unwrap();
+    let options = crate::control::options_or_none(&db, id).unwrap();
+    crate::control::selected_traffic(&db, id, options.as_ref(), now).unwrap()
+}
+
+#[test]
+fn traffic_period_changed_reset_preserves_ledger_and_handles_retries_and_correction() {
+    let (directory, storage, node) = fixture();
+    let now = unix_time_ms().unwrap();
+    let first_at = crate::control::period_start(now, 1) + 1000;
+    let hash = crate::storage::hash_token(&node.agent_token);
+    storage
+        .ingest(&hash, &sample(first_at, 1000, 2000), first_at)
+        .unwrap();
+    storage
+        .ingest(&hash, &sample(first_at + 2000, 1100, 2200), first_at + 2000)
+        .unwrap();
+    let before: (i64, i64, i64, i64, i64) = storage.connection().unwrap().query_row(
+        "SELECT cycle_start_ms,raw_up,raw_down,used_up,used_down FROM traffic_periods WHERE node_id=?1",
+        [&node.node_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).unwrap();
+    let samples_before: i64 = storage
+        .connection()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM snapshots WHERE node_id=?1",
+            [&node.node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+
+    let mut options = NodeOptions {
+        id: node.node_id.clone(),
+        name: "example".into(),
+        currency: "USD".into(),
+        traffic_limit_bytes: 1000,
+        traffic_limit_type: "sum".into(),
+        traffic_reset_day: 29,
+        ..NodeOptions::default()
+    };
+    storage
+        .save_node_options(&node.node_id, &mut options)
+        .unwrap();
+    let state = storage.admin_state().unwrap();
+    let boundary = state["nodes"][0]["traffic_reset_effective_at_unix_ms"]
+        .as_u64()
+        .unwrap();
+    assert!(boundary > now);
+    assert_eq!(state["nodes"][0]["id"], node.node_id);
+    assert_eq!(state["nodes"][0]["traffic_current_reset_day"], 1);
+    assert_eq!(
+        crate::control::effective_reset_day(Some(&options), boundary - 1),
+        1
+    );
+    assert_eq!(
+        crate::control::effective_reset_day(Some(&options), boundary),
+        29
+    );
+    assert!(
+        state["nodes"][0]["traffic_next_reset_unix_ms"]
+            .as_u64()
+            .unwrap()
+            <= boundary
+    );
+    let mut invalid = options.clone();
+    invalid.traffic_reset_day = 32;
+    assert!(matches!(
+        storage.save_node_options(&node.node_id, &mut invalid),
+        Err(StorageError::InvalidInput(_))
+    ));
+    let after: (i64, i64, i64, i64, i64) = storage.connection().unwrap().query_row(
+        "SELECT cycle_start_ms,raw_up,raw_down,used_up,used_down FROM traffic_periods WHERE node_id=?1",
+        [&node.node_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    ).unwrap();
+    let samples_after: i64 = storage
+        .connection()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM snapshots WHERE node_id=?1",
+            [&node.node_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "saving a future schedule must not rewrite the ledger"
+    );
+    assert_eq!(
+        samples_after, samples_before,
+        "saving a schedule must retain samples"
+    );
+
+    storage
+        .ingest(&hash, &sample(boundary - 2000, 1200, 2300), boundary - 2000)
+        .unwrap();
+    let waiting = local_traffic(&storage, &node.node_id, boundary);
+    assert_eq!(waiting.status, "no_data");
+    assert!(waiting.used_bytes.is_none());
+    storage
+        .ingest(&hash, &sample(boundary + 1000, 1300, 2400), boundary + 1000)
+        .unwrap();
+    let next = sample(boundary + 2000, 1350, 2450);
+    storage.ingest(&hash, &next, boundary + 2000).unwrap();
+    storage.ingest(&hash, &next, boundary + 3000).unwrap();
+    let selection = local_traffic(&storage, &node.node_id, boundary + 3000);
+    assert_eq!(selection.status, "ready");
+    assert_eq!(
+        (selection.up_bytes, selection.down_bytes),
+        (Some(150), Some(150))
+    );
+    assert_eq!(selection.percentage, Some(30.0));
+
+    storage
+        .ingest(&hash, &sample(boundary + 4000, 25, 30), boundary + 4000)
+        .unwrap();
+    let before_restart = sample(boundary + 5000, 35, 40);
+    storage
+        .ingest(&hash, &before_restart, boundary + 5000)
+        .unwrap();
+    let current = local_traffic(&storage, &node.node_id, boundary + 5000);
+    assert_eq!(
+        (current.up_bytes, current.down_bytes),
+        (Some(160), Some(160))
+    );
+    storage.flush_monitoring(boundary + 5500, true).unwrap();
+    drop(storage);
+    let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+    storage
+        .ingest(&hash, &before_restart, boundary + 5500)
+        .unwrap();
+    let after_restart = local_traffic(&storage, &node.node_id, boundary + 5500);
+    assert_eq!(after_restart.status, "ready");
+    assert_eq!(
+        (after_restart.up_bytes, after_restart.down_bytes),
+        (Some(160), Some(160))
+    );
+    storage
+        .ingest(&hash, &sample(boundary + 6000, 45, 50), boundary + 6000)
+        .unwrap();
+    let correction = browser_traffic_request(&storage, &node.node_id, boundary + 6000);
+    let latest = sample(boundary + 7000, 55, 60);
+    storage.ingest(&hash, &latest, boundary + 7000).unwrap();
+    storage
+        .correct_browser_traffic(
+            &node.node_id,
+            &correction,
+            "test-admin",
+            boundary + 7000,
+            90,
+        )
+        .unwrap();
+    let corrected = local_traffic(&storage, &node.node_id, boundary + 7000);
+    assert_eq!(corrected.status, "ready");
+    assert_eq!(
+        (corrected.up_bytes, corrected.down_bytes),
+        (Some(510), Some(810))
+    );
+    storage.flush_monitoring(boundary + 8000, true).unwrap();
+    drop(storage);
+
+    let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+    storage.ingest(&hash, &latest, boundary + 9000).unwrap();
+    let restored = local_traffic(&storage, &node.node_id, boundary + 9000);
+    assert_eq!(restored.status, "ready");
+    assert_eq!(
+        (restored.up_bytes, restored.down_bytes),
+        (Some(510), Some(810))
+    );
+}
+
 #[test]
 fn hidden_metadata_applies_to_all_public_read_models() {
     let (_dir, storage, node) = fixture();
