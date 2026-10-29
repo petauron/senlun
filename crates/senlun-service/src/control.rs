@@ -449,15 +449,8 @@ impl Storage {
             value["traffic_used_up"] = json!(up);
             value["traffic_used_down"] = json!(down);
             value["selected_traffic"] = json!(selected_traffic(&db, &id, Some(&options), now)?);
-            value["traffic_current_reset_day"] = json!(effective_reset_day(Some(&options), now));
-            value["traffic_next_reset_unix_ms"] = json!(next_effective_reset(&options, now));
-            value["traffic_reset_effective_at_unix_ms"] = json!(
-                options
-                    .traffic_reset_transition
-                    .as_ref()
-                    .filter(|transition| transition.effective_at_ms > now)
-                    .map(|transition| transition.effective_at_ms)
-            );
+            value["traffic_next_reset_unix_ms"] =
+                json!(next_period_start(now, options.traffic_reset_day));
             nodes.push(value);
         }
         let mut failure_query=db.prepare("SELECT happened_at_ms,subject FROM audit_events WHERE action='notification.failed' ORDER BY id DESC LIMIT 100")?;
@@ -510,16 +503,11 @@ impl Storage {
             .and_then(|old| old.traffic_reset_transition.clone());
         if options.traffic_reset_day != previous.as_ref().map_or(1, |old| old.traffic_reset_day) {
             let now = crate::storage::unix_time_ms()?;
-            let active_day = effective_reset_day(previous.as_ref(), now);
-            options.traffic_reset_transition = if options.traffic_reset_day == active_day {
-                None
-            } else {
-                Some(TrafficResetTransition {
-                    previous_day: active_day,
-                    effective_at_ms: next_period_start(now, options.traffic_reset_day)
-                        .ok_or(StorageError::InvalidInput("cannot calculate traffic reset"))?,
-                })
-            };
+            options.traffic_reset_transition = Some(TrafficResetTransition {
+                previous_day: reset_day(previous.as_ref()),
+                effective_at_ms: next_period_start(now, options.traffic_reset_day)
+                    .ok_or(StorageError::InvalidInput("cannot calculate traffic reset"))?,
+            });
         }
         if old_source != options.traffic_source {
             crate::notifications::retire_traffic_evaluation(
@@ -587,7 +575,7 @@ impl Storage {
         }
         verify_nodes(tx, &[id.to_owned()])?;
         let options = options_or_none(tx, id)?;
-        let day = effective_reset_day(options.as_ref(), now);
+        let day = reset_day(options.as_ref());
         if value.cycle_start_ms != period_start(now, day) {
             return Err(StorageError::InvalidInput("traffic cycle has changed"));
         }
@@ -1139,30 +1127,22 @@ fn next_period_start(now: u64, day: u8) -> Option<u64> {
     monthly_boundary(next_year, month.next(), day)
 }
 
-pub(crate) fn effective_reset_day(options: Option<&NodeOptions>, now: u64) -> u8 {
-    options.map_or(1, |options| {
-        options
-            .traffic_reset_transition
-            .as_ref()
-            .map_or(options.traffic_reset_day, |transition| {
-                if now < transition.effective_at_ms {
-                    transition.previous_day
-                } else {
-                    options.traffic_reset_day
-                }
-            })
-    })
+pub(crate) fn reset_day(options: Option<&NodeOptions>) -> u8 {
+    options.map_or(1, |options| options.traffic_reset_day)
 }
 
-fn next_effective_reset(options: &NodeOptions, now: u64) -> Option<u64> {
-    let active = next_period_start(now, effective_reset_day(Some(options), now))?;
-    Some(
+// Keep the existing cycle's totals until the first boundary of the new
+// schedule. This also applies to transitions saved by the previous release.
+fn carry_existing_traffic(options: Option<&NodeOptions>, now: u64) -> bool {
+    options.is_some_and(|options| {
         options
             .traffic_reset_transition
             .as_ref()
-            .filter(|transition| transition.effective_at_ms > now)
-            .map_or(active, |transition| active.min(transition.effective_at_ms)),
-    )
+            .is_some_and(|transition| {
+                transition.previous_day != options.traffic_reset_day
+                    && now < transition.effective_at_ms
+            })
+    })
 }
 
 pub(crate) fn update_traffic(
@@ -1172,8 +1152,9 @@ pub(crate) fn update_traffic(
     now: u64,
 ) -> Result<(), StorageError> {
     let options = options_or_none(tx, node)?;
-    let day = effective_reset_day(options.as_ref(), now);
+    let day = reset_day(options.as_ref());
     let cycle = integer(period_start(now, day));
+    let carry = carry_existing_traffic(options.as_ref(), now);
     let old:Option<(i64,i64,i64,i64,i64)>=tx.query_row("SELECT cycle_start_ms,raw_up,raw_down,used_up,used_down FROM traffic_periods WHERE node_id=?1",[node],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
     let up = integer(snapshot.network_total_transmitted_bytes);
     let down = integer(snapshot.network_total_received_bytes);
@@ -1186,8 +1167,18 @@ pub(crate) fn update_traffic(
             let delta_up = (up - raw_up).max(0);
             let delta_down = (down - raw_down).max(0);
             (
-                (if previous == cycle { total_up } else { 0_i64 }).saturating_add(delta_up),
-                (if previous == cycle { total_down } else { 0_i64 }).saturating_add(delta_down),
+                (if previous == cycle || carry {
+                    total_up
+                } else {
+                    0_i64
+                })
+                .saturating_add(delta_up),
+                (if previous == cycle || carry {
+                    total_down
+                } else {
+                    0_i64
+                })
+                .saturating_add(delta_down),
             )
         },
     );
@@ -1198,12 +1189,12 @@ pub(crate) fn update_traffic(
 fn period_usage(db: &Connection, node: &str) -> Result<(u64, u64), StorageError> {
     let now = crate::storage::unix_time_ms()?;
     let options = options_or_none(db, node)?;
-    let day = effective_reset_day(options.as_ref(), now);
+    let day = reset_day(options.as_ref());
     let cycle = integer(period_start(now, day));
     Ok(db
         .query_row(
-            "SELECT used_up,used_down FROM traffic_periods WHERE node_id=?1 AND cycle_start_ms=?2",
-            params![node, cycle],
+            "SELECT used_up,used_down FROM traffic_periods WHERE node_id=?1 AND (cycle_start_ms=?2 OR ?3)",
+            params![node, cycle, carry_existing_traffic(options.as_ref(), now)],
             |row| Ok((unsigned(row.get(0)?), unsigned(row.get(1)?))),
         )
         .optional()?
@@ -1231,7 +1222,7 @@ pub(crate) fn selected_traffic(
         reset_at: None,
     };
     if source == TrafficSource::Local {
-        let day = effective_reset_day(options, now);
+        let day = reset_day(options);
         let totals: Option<(i64, i64, i64)> = db
             .query_row(
                 "SELECT cycle_start_ms,used_up,used_down FROM traffic_periods WHERE node_id=?1",
@@ -1245,16 +1236,17 @@ pub(crate) fn selected_traffic(
             result.status = "no_data";
             return Ok(result);
         };
-        let (up, down) = if cycle == integer(period_start(now, day)) {
-            (unsigned(up), unsigned(down))
-        } else if options.is_some_and(|value| value.traffic_reset_transition.is_some()) {
-            // Do not invent a current-cycle value until the first new sample.
-            result.status = "no_data";
-            return Ok(result);
-        } else {
-            // An existing baseline crossed its local billing boundary.
-            (0, 0)
-        };
+        let (up, down) =
+            if cycle == integer(period_start(now, day)) || carry_existing_traffic(options, now) {
+                (unsigned(up), unsigned(down))
+            } else if options.is_some_and(|value| value.traffic_reset_transition.is_some()) {
+                // Do not invent a current-cycle value until the first new sample.
+                result.status = "no_data";
+                return Ok(result);
+            } else {
+                // An existing baseline crossed its local billing boundary.
+                (0, 0)
+            };
         let used = match options.map_or("sum", |options| options.traffic_limit_type.as_str()) {
             "up" => up,
             "down" => down,
