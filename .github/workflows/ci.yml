@@ -78,7 +78,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ubuntu-24.04
           cache-bin: false
@@ -113,7 +113,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Cache Rust dependency sources
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ubuntu-24.04
           cache-bin: false
@@ -175,7 +175,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ubuntu-24.04
           cache-bin: false
@@ -208,7 +208,7 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Cache Debian 12 Rust dependencies
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           shared-key: bookworm-native-${{ hashFiles('scripts/build-linux-release.sh') }}
           cache-bin: false
