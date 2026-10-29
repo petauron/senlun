@@ -22,7 +22,11 @@ export interface TrafficCorrectionContext {
 const maximumBytes = 9223372036854775807n
 const decimalPattern = /^\d+(?:\.\d{1,30})?$/
 const trailingZeroPattern = /0+$/
-const factor = (unit: TrafficUnit) => unit === 'gb' ? 1000000000n : 1073741824n
+function factor(unit: TrafficUnit) {
+  return unit === 'gb'
+    ? 1000000000n
+    : 1073741824n
+}
 
 // Do not pass traffic input through Number: accepted counts may exceed 2^53.
 export function parseTrafficAmount(raw: string, unit: TrafficUnit): string {
@@ -41,12 +45,16 @@ export function parseTrafficAmount(raw: string, unit: TrafficUnit): string {
 export function formatTrafficAmount(bytes: string, unit: TrafficUnit): string {
   const value = BigInt(bytes)
   const divisor = factor(unit)
-  const precision = unit === 'gb' ? 9 : 30
+  const precision = unit === 'gb'
+    ? 9
+    : 30
   const fraction = ((value % divisor) * 10n ** BigInt(precision) / divisor)
     .toString()
     .padStart(precision, '0')
     .replace(trailingZeroPattern, '')
-  return `${value / divisor}${fraction ? `.${fraction}` : ''}`
+  return `${value / divisor}${fraction
+    ? `.${fraction}`
+    : ''}`
 }
 
 export function billedTraffic(up: string, down: string, direction: TrafficDirection): string {
@@ -55,8 +63,12 @@ export function billedTraffic(up: string, down: string, direction: TrafficDirect
   switch (direction) {
     case 'up': return a.toString()
     case 'down': return b.toString()
-    case 'max': return (a > b ? a : b).toString()
-    case 'min': return (a < b ? a : b).toString()
+    case 'max': return (a > b
+      ? a
+      : b).toString()
+    case 'min': return (a < b
+      ? a
+      : b).toString()
     default: return (a + b).toString()
   }
 }

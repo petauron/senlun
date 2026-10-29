@@ -19,7 +19,9 @@ const props = withDefaults(defineProps<Props>(), {
 const clamped = computed(() => Math.max(0, Math.min(100, Number(props.percentage) || 0)))
 
 const heightStyle = computed(() => ({
-  height: typeof props.height === 'number' ? `${props.height}px` : props.height,
+  height: typeof props.height === 'number'
+    ? `${props.height}px`
+    : props.height,
 }))
 
 const statusClass = computed(() => {

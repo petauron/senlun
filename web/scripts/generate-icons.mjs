@@ -68,7 +68,9 @@ for (const [prefix, requestedNames] of [...references].sort(([a], [b]) => a.loca
     width: source.width,
     height: source.height,
     icons,
-    ...(Object.keys(aliases).length ? { aliases } : {}),
+    ...(Object.keys(aliases).length
+      ? { aliases }
+      : {}),
   })
 }
 

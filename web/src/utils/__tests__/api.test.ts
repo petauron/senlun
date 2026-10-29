@@ -7,7 +7,12 @@ const dispatchEvent = vi.fn()
 
 beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock)
-  vi.stubGlobal('window', { location: { origin: 'https://senlun.example' }, setTimeout, clearTimeout, dispatchEvent })
+  vi.stubGlobal('window', {
+    location: { origin: 'https://senlun.example' },
+    setTimeout,
+    clearTimeout,
+    dispatchEvent,
+  })
   setCsrfToken('test-csrf')
 })
 
@@ -20,7 +25,9 @@ afterEach(() => {
 
 describe('authenticated API transport', () => {
   it('shows the nested Service error message without object coercion', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: 'invalid node metadata' } }), { status: 400 }))
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({
+      error: { message: 'invalid node metadata' },
+    }), { status: 400 }))
     await expect(new SenlunApi('/api').post('admin/nodes/test', {})).rejects.toThrow('invalid node metadata')
   })
 

@@ -16,8 +16,12 @@ const showBackgroundOverlay = computed(() => hasCustomBackground.value && appSto
 const backgroundStyle = computed(() => {
   const blur = appStore.backgroundBlur
   return {
-    filter: blur > 0 ? `blur(${blur}px)` : 'none',
-    opacity: appStore.backgroundType === 'video' && !isLoaded.value ? 0 : 1,
+    filter: blur > 0
+      ? `blur(${blur}px)`
+      : 'none',
+    opacity: appStore.backgroundType === 'video' && !isLoaded.value
+      ? 0
+      : 1,
   }
 })
 

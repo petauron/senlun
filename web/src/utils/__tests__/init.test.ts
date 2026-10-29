@@ -10,11 +10,23 @@ const mocks = vi.hoisted(() => ({
   app: { publicSettings: null as null | { theme_settings: { dataUpdateInterval: number } }, connectionError: false, loading: true },
 }))
 
-vi.mock('@/stores/app', () => ({ useAppStore: () => mocks.app }))
-vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ loggedIn: true }) }))
-vi.mock('@/stores/nodes', () => ({ useNodesStore: () => ({ initNodes: mocks.initNodes, clearNodes: mocks.clearNodes }) }))
-vi.mock('@/utils/api', () => ({ ApiError: class ApiError extends Error {}, getSharedApi: () => ({ getPublicSettings: mocks.getPublicSettings }) }))
-vi.mock('@/utils/rpc', () => ({ RpcError: class RpcError extends Error {}, getSharedRpc: () => ({ getDashboard: mocks.getDashboard, close: mocks.close }) }))
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => mocks.app,
+}))
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => ({ loggedIn: true }),
+}))
+vi.mock('@/stores/nodes', () => ({
+  useNodesStore: () => ({ initNodes: mocks.initNodes, clearNodes: mocks.clearNodes }),
+}))
+vi.mock('@/utils/api', () => ({
+  ApiError: class ApiError extends Error {},
+  getSharedApi: () => ({ getPublicSettings: mocks.getPublicSettings }),
+}))
+vi.mock('@/utils/rpc', () => ({
+  RpcError: class RpcError extends Error {},
+  getSharedRpc: () => ({ getDashboard: mocks.getDashboard, close: mocks.close }),
+}))
 
 class FakeDocument extends EventTarget {
   visibilityState: 'visible' | 'hidden' = 'visible'
@@ -30,7 +42,9 @@ beforeEach(() => {
   page = new FakeDocument()
   vi.stubGlobal('document', page)
   mocks.getDashboard.mockReset().mockResolvedValue({ clients: {}, statuses: {} })
-  mocks.getPublicSettings.mockReset().mockResolvedValue({ theme_settings: { dataUpdateInterval: 3 } })
+  mocks.getPublicSettings.mockReset().mockResolvedValue({
+    theme_settings: { dataUpdateInterval: 3 },
+  })
   mocks.close.mockReset()
   mocks.initNodes.mockReset()
   mocks.clearNodes.mockReset()

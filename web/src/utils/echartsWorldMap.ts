@@ -68,7 +68,12 @@ function normalizeCountryName(name: string): string {
 function createAliasToCodeMap(): Map<string, string> {
   const aliasToCodeMap = new Map<string, string>()
   for (const info of Object.values(emojiToRegionMap)) {
-    for (const alias of [info.code, info.en, info.zh, ...info.aliases]) {
+    for (const alias of [
+      info.code,
+      info.en,
+      info.zh,
+      ...info.aliases,
+    ]) {
       const key = normalizeCountryName(alias)
       if (!key || aliasToCodeMap.has(key))
         continue
@@ -89,7 +94,9 @@ function resolveCountryCode(name: string): string | null {
 
 function normalizeWorldGeoJson(worldGeoJson: WorldGeoJson): WorldGeoJson {
   for (const feature of worldGeoJson.features) {
-    const name = typeof feature.properties?.name === 'string' ? feature.properties.name : ''
+    const name = typeof feature.properties?.name === 'string'
+      ? feature.properties.name
+      : ''
     const code = resolveCountryCode(name)
     if (!code)
       continue

@@ -150,7 +150,9 @@ onMounted(async () => {
     mapName.value = await ensureWorldMapRegistered()
   }
   catch (error) {
-    loadError.value = error instanceof Error ? error.message : '地图资源加载失败'
+    loadError.value = error instanceof Error
+      ? error.message
+      : '地图资源加载失败'
   }
   finally {
     loading.value = false

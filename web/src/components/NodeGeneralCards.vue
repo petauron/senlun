@@ -111,9 +111,21 @@ const formattedRemainingValue = computed(() => ({
   unit: financeCurrency.value,
 }))
 const financeSummaryItems = computed(() => [
-  { label: '总价值', value: formatValue(finance.value.total), symbol: CURRENCY_SYMBOLS[financeCurrency.value] },
-  { label: '月均支出', value: formatValue(finance.value.monthly), symbol: CURRENCY_SYMBOLS[financeCurrency.value] },
-  { label: '剩余价值', value: formatValue(finance.value.remaining), symbol: CURRENCY_SYMBOLS[financeCurrency.value] },
+  {
+    label: '总价值',
+    value: formatValue(finance.value.total),
+    symbol: CURRENCY_SYMBOLS[financeCurrency.value],
+  },
+  {
+    label: '月均支出',
+    value: formatValue(finance.value.monthly),
+    symbol: CURRENCY_SYMBOLS[financeCurrency.value],
+  },
+  {
+    label: '剩余价值',
+    value: formatValue(finance.value.remaining),
+    symbol: CURRENCY_SYMBOLS[financeCurrency.value],
+  },
 ])
 const exchangeRateRows = computed(() => FINANCE_CURRENCIES.filter(currency => rates.value[currency]).map(currency => ({
   currency,
@@ -125,7 +137,9 @@ const financeDisclosure = computed(() => [
     ? `Frankfurter 每日汇率（${rateDate.value}）；休市时显示最近交易日。`
     : '当前使用主题内置参考汇率，非实时。可在站点设置启用每日汇率。',
   '月均按 30 天折算；剩余按未到期时长折算。',
-  finance.value.excluded ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。` : '',
+  finance.value.excluded
+    ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。`
+    : '',
 ].filter(Boolean).join(' '))
 const showEarth = computed(() => appStore.earthViewMode === 'earth' || appStore.earthViewMode === 'earth-stop')
 const showMaps = computed(() => appStore.earthViewMode === 'maps')

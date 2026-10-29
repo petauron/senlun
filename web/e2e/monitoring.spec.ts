@@ -130,7 +130,17 @@ test('network quality offers the full retained range with an exact custom label'
   await login(page, '/network-quality')
   await expect(page.getByRole('button', { name: '访问者信息' })).toBeVisible()
   const ranges = page.getByRole('group', { name: '统计范围' })
-  await expect(ranges.getByRole('button')).toHaveText(['1 小时', '6 小时', '12 小时', '1 天', '7 天', '30 天', '60 天', '90 天', '100 天'])
+  await expect(ranges.getByRole('button')).toHaveText([
+    '1 小时',
+    '6 小时',
+    '12 小时',
+    '1 天',
+    '7 天',
+    '30 天',
+    '60 天',
+    '90 天',
+    '100 天',
+  ])
   await ranges.getByRole('button', { name: '100 天' }).click()
   await expect(ranges.getByRole('button', { name: '100 天' })).toHaveAttribute('aria-pressed', 'true')
 
@@ -178,10 +188,52 @@ test('minute history displays counted failures and exact statistics on desktop a
     const now = Date.now()
     await route.fulfill({
       json: {
-        tasks: [{ id: 'minute-probe', name: 'minute-probe', kind: 'tcp', interval_seconds: 5 }],
-        records: [{ task_id: 'minute-probe', collected_at_unix_ms: now, received_at_unix_ms: now, latency_ms: 12.5, success: false, error: 'timeout', aggregated: true, samples: 10, failed_samples: 2, resolution_ms: 60000 }],
-        chart: [{ task_id: 'minute-probe', received_at_unix_ms: now, latency_ms: 12.5, samples: 10, failed_samples: 2 }],
-        summary: [{ task_id: 'minute-probe', samples: 10, loss_percent: 20, avg_latency_ms: 12.5, min_latency_ms: 5, max_latency_ms: 30, latest_latency_ms: 15, p50_latency_ms: 12, p95_latency_ms: 28, p99_latency_ms: 29, p99_p50_ratio: 1.4167 }],
+        tasks: [
+          {
+            id: 'minute-probe',
+            name: 'minute-probe',
+            kind: 'tcp',
+            interval_seconds: 5,
+          },
+        ],
+        records: [
+          {
+            task_id: 'minute-probe',
+            collected_at_unix_ms: now,
+            received_at_unix_ms: now,
+            latency_ms: 12.5,
+            success: false,
+            error: 'timeout',
+            aggregated: true,
+            samples: 10,
+            failed_samples: 2,
+            resolution_ms: 60000,
+          },
+        ],
+        chart: [
+          {
+            task_id: 'minute-probe',
+            received_at_unix_ms: now,
+            latency_ms: 12.5,
+            samples: 10,
+            failed_samples: 2,
+          },
+        ],
+        summary: [
+          {
+            task_id: 'minute-probe',
+            samples: 10,
+            loss_percent: 20,
+            avg_latency_ms: 12.5,
+            min_latency_ms: 5,
+            max_latency_ms: 30,
+            latest_latency_ms: 15,
+            p50_latency_ms: 12,
+            p95_latency_ms: 28,
+            p99_latency_ms: 29,
+            p99_p50_ratio: 1.4167,
+          },
+        ],
         chart_source_points: 10,
         history_resolution_ms: 60000,
         chart_bucket_ms: 60000,
@@ -222,7 +274,14 @@ test('probe history honors Emerald chart defaults and retained range', async ({ 
     requests.push(route.request().url())
     await route.fulfill({
       json: {
-        tasks: [{ id: 'e2e-probe', name: 'e2e-probe', kind: 'tcp', interval_seconds: 60 }],
+        tasks: [
+          {
+            id: 'e2e-probe',
+            name: 'e2e-probe',
+            kind: 'tcp',
+            interval_seconds: 60,
+          },
+        ],
         records: [],
         chart: [],
         summary: [],
@@ -236,7 +295,14 @@ test('probe history honors Emerald chart defaults and retained range', async ({ 
   await login(page)
   await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
   const ranges = page.getByRole('tablist', { name: '探测历史时间范围' })
-  await expect(ranges.getByRole('tab')).toHaveText(['1 小时', '6 小时', '12 小时', '1 天', '3 天', '7 天'])
+  await expect(ranges.getByRole('tab')).toHaveText([
+    '1 小时',
+    '6 小时',
+    '12 小时',
+    '1 天',
+    '3 天',
+    '7 天',
+  ])
   await expect(ranges.getByRole('tab', { name: '3 天' })).toHaveAttribute('data-state', 'active')
   await expect(page.getByRole('group', { name: '图表布局' }).getByRole('button', { name: '分图' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByRole('button', { name: '自动刷新' })).toBeVisible()
@@ -256,14 +322,26 @@ test('probe history does not leave stale metrics visible after refresh fails', a
   let releaseEmptyResponse: (() => void) | undefined
   await page.route('**/api/v1/nodes/*/probes?*', async (route) => {
     if (responseMode === 'error') {
-      await route.fulfill({ status: 503, json: { error: '探测暂不可用' } })
+      await route.fulfill({
+        status: 503,
+        json: { error: '探测暂不可用' },
+      })
       return
     }
     if (responseMode === 'empty')
       await new Promise<void>((resolve) => { releaseEmptyResponse = resolve })
     await route.fulfill({
       json: {
-        tasks: responseMode === 'empty' ? [] : [{ id: 'e2e-probe', name: 'e2e-probe', kind: 'icmp', interval_seconds: 60 }],
+        tasks: responseMode === 'empty'
+          ? []
+          : [
+              {
+                id: 'e2e-probe',
+                name: 'e2e-probe',
+                kind: 'icmp',
+                interval_seconds: 60,
+              },
+            ],
         records: [],
         chart: [],
         summary: [],
@@ -306,17 +384,72 @@ test('probe analysis switches tasks without changing the selected chart series',
     await route.fulfill({
       json: {
         tasks: [
-          { id: 'e2e-probe', name: 'e2e-probe', kind: 'tcp', interval_seconds: 60 },
-          { id: 'e2e-probe-2', name: 'e2e-probe-2', kind: 'icmp', interval_seconds: 30 },
+          {
+            id: 'e2e-probe',
+            name: 'e2e-probe',
+            kind: 'tcp',
+            interval_seconds: 60,
+          },
+          {
+            id: 'e2e-probe-2',
+            name: 'e2e-probe-2',
+            kind: 'icmp',
+            interval_seconds: 30,
+          },
         ],
-        records: [{ task_id: 'e2e-probe', collected_at_unix_ms: Date.now(), received_at_unix_ms: Date.now(), latency_ms: 20, success: true, error: null }],
+        records: [
+          {
+            task_id: 'e2e-probe',
+            collected_at_unix_ms: Date.now(),
+            received_at_unix_ms: Date.now(),
+            latency_ms: 20,
+            success: true,
+            error: null,
+          },
+        ],
         chart: [
-          { task_id: 'e2e-probe', received_at_unix_ms: Date.now(), latency_ms: 20, failed_samples: 0, samples: 1 },
-          { task_id: 'e2e-probe-2', received_at_unix_ms: Date.now(), latency_ms: 40, failed_samples: 1, samples: 2 },
+          {
+            task_id: 'e2e-probe',
+            received_at_unix_ms: Date.now(),
+            latency_ms: 20,
+            failed_samples: 0,
+            samples: 1,
+          },
+          {
+            task_id: 'e2e-probe-2',
+            received_at_unix_ms: Date.now(),
+            latency_ms: 40,
+            failed_samples: 1,
+            samples: 2,
+          },
         ],
         summary: [
-          { task_id: 'e2e-probe', samples: 4, loss_percent: 25, avg_latency_ms: 20, min_latency_ms: 10, max_latency_ms: 30, latest_latency_ms: 20, p50_latency_ms: 20, p95_latency_ms: 27, p99_latency_ms: 29, p99_p50_ratio: 0.45 },
-          { task_id: 'e2e-probe-2', samples: 2, loss_percent: 50, avg_latency_ms: 40, min_latency_ms: 40, max_latency_ms: 40, latest_latency_ms: 40, p50_latency_ms: 40, p95_latency_ms: 40, p99_latency_ms: 40, p99_p50_ratio: 0 },
+          {
+            task_id: 'e2e-probe',
+            samples: 4,
+            loss_percent: 25,
+            avg_latency_ms: 20,
+            min_latency_ms: 10,
+            max_latency_ms: 30,
+            latest_latency_ms: 20,
+            p50_latency_ms: 20,
+            p95_latency_ms: 27,
+            p99_latency_ms: 29,
+            p99_p50_ratio: 0.45,
+          },
+          {
+            task_id: 'e2e-probe-2',
+            samples: 2,
+            loss_percent: 50,
+            avg_latency_ms: 40,
+            min_latency_ms: 40,
+            max_latency_ms: 40,
+            latest_latency_ms: 40,
+            p50_latency_ms: 40,
+            p95_latency_ms: 40,
+            p99_latency_ms: 40,
+            p99_p50_ratio: 0,
+          },
         ],
         chart_source_points: 3,
         chart_bucket_ms: 3601,
@@ -349,7 +482,9 @@ test('probe analysis switches tasks without changing the selected chart series',
   for (const name of ['暂停刷新', '立即刷新', 'PNG', 'CSV'])
     await expect(page.getByRole('button', { name, exact: true }).locator('svg')).toHaveCount(1)
   const chart = page.locator('[aria-label="探测延迟和丢包率曲线，左右轴分别为毫秒和百分比，长时间缺报为断点"]')
-  await expect.poll(() => chart.evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(testInfo.project.name === 'mobile-chromium' ? 328 : 392)
+  await expect.poll(() => chart.evaluate(element => Math.round(element.getBoundingClientRect().height))).toBe(testInfo.project.name === 'mobile-chromium'
+    ? 328
+    : 392)
   await chart.hover()
   await expect(chart.getByText('e2e-probe 延迟')).toBeVisible()
   await expect(chart.getByText('e2e-probe 丢包率')).toBeVisible()
@@ -421,7 +556,14 @@ test('probe auto-refresh pauses without blocking range changes or manual refresh
     requests.push(route.request().url())
     await route.fulfill({
       json: {
-        tasks: [{ id: 'e2e-probe', name: 'e2e-probe', kind: 'tcp', interval_seconds: 60 }],
+        tasks: [
+          {
+            id: 'e2e-probe',
+            name: 'e2e-probe',
+            kind: 'tcp',
+            interval_seconds: 60,
+          },
+        ],
         records: [],
         chart: [],
         summary: [],

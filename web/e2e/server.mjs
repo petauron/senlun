@@ -8,7 +8,9 @@ import { testPassword, testUsername } from './credentials.mjs'
 
 const webDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const repository = resolve(webDirectory, '..')
-const binarySuffix = process.platform === 'win32' ? '.exe' : ''
+const binarySuffix = process.platform === 'win32'
+  ? '.exe'
+  : ''
 const serviceBinary = join(repository, 'target', 'debug', `senlun-service${binarySuffix}`)
 const agentBinary = join(repository, 'target', 'debug', `senlun-agent${binarySuffix}`)
 const stateDirectory = mkdtempSync(join(tmpdir(), 'senlun-e2e-'))
@@ -24,7 +26,12 @@ const baseEnvironment = {
 
 const enrollment = spawnSync(
   serviceBinary,
-  ['enrollment', 'create', '--ttl-seconds', '600'],
+  [
+    'enrollment',
+    'create',
+    '--ttl-seconds',
+    '600',
+  ],
   { cwd: repository, env: baseEnvironment, encoding: 'utf8' },
 )
 if (enrollment.status !== 0) {
@@ -83,7 +90,12 @@ async function initializeAdministrator() {
       const cookie = response.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
       const setup = await fetch(new URL('api/auth/setup', serviceUrl), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Origin': 'http://127.0.0.1:18080', 'Cookie': cookie, 'X-CSRF-Token': status.csrf_token },
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': 'http://127.0.0.1:18080',
+          'Cookie': cookie,
+          'X-CSRF-Token': status.csrf_token,
+        },
         body: JSON.stringify({ username: testUsername, password: testPassword }),
       })
       if (!setup.ok)

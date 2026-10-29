@@ -57,7 +57,9 @@ const useAppStore = defineStore('app', () => {
     const previous = Array.isArray(storedIPv6ProbeNodes.value)
       ? storedIPv6ProbeNodes.value.filter(id => typeof id === 'string' && id !== nodeUuid)
       : []
-    storedIPv6ProbeNodes.value = (version === 'ipv6' ? [...previous, nodeUuid] : previous).slice(-1000)
+    storedIPv6ProbeNodes.value = (version === 'ipv6'
+      ? [...previous, nodeUuid]
+      : previous).slice(-1000)
   }
 
   // 计算属性：从主题配置获取默认视图模式
@@ -317,7 +319,9 @@ const useAppStore = defineStore('app', () => {
 
   function updateThemeMode(mode?: ThemeMode) {
     if (mode) {
-      themeMode.value = isValidThemeMode(mode) ? mode : 'auto'
+      themeMode.value = isValidThemeMode(mode)
+        ? mode
+        : 'auto'
       return
     }
 
@@ -327,7 +331,9 @@ const useAppStore = defineStore('app', () => {
       dark: 'auto',
     }
 
-    const currentMode = isValidThemeMode(themeMode.value) ? themeMode.value : 'auto'
+    const currentMode = isValidThemeMode(themeMode.value)
+      ? themeMode.value
+      : 'auto'
     themeMode.value = nextMode[currentMode]
   }
 

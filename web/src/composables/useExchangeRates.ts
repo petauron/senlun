@@ -17,7 +17,9 @@ function parseRates(raw: unknown): Rates | null {
     if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0)
       rates[code] = rate
   }
-  return rates.USD && rates.EUR ? rates : null
+  return rates.USD && rates.EUR
+    ? rates
+    : null
 }
 
 export function useExchangeRates() {

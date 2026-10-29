@@ -16,44 +16,80 @@ const historyHours = computed(() => {
   if (!props.nodeUuid)
     return 1
   const configured = app.publicSettings?.theme_settings?.homePingHistoryHours
-  const requested = typeof configured === 'number' && Number.isFinite(configured) ? Math.round(configured) : 1
+  const requested = typeof configured === 'number' && Number.isFinite(configured)
+    ? Math.round(configured)
+    : 1
   return Math.min(168, app.publicSettings?.ping_record_preserve_time ?? 168, Math.max(1, requested))
 })
-const historyLabel = computed(() => historyHours.value % 24 === 0 ? `${historyHours.value / 24} 天` : `${historyHours.value} 小时`)
-const emptyPoints: NodeProbe['points'] = Array.from({ length: 10 }, (_, bucket) => ({ bucket, time: 0, latency: null, loss: 0, samples: 0, successful_samples: 0 }))
+const historyLabel = computed(() => historyHours.value % 24 === 0
+  ? `${historyHours.value / 24} 天`
+  : `${historyHours.value} 小时`)
+const emptyPoints: NodeProbe['points'] = Array.from({ length: 10 }, (_, bucket) => ({
+  bucket,
+  time: 0,
+  latency: null,
+  loss: 0,
+  samples: 0,
+  successful_samples: 0,
+}))
 const rows = computed(() => {
   const selected = props.nodeUuid
     ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
     : props.probes ?? []
   return selected.map((task, index) => {
     if (!task) {
-      return { id: `empty-${index}`, name: props.ipVersion === 'ipv6' ? '未配置 V6' : '未配置 V4', kind: 'icmp' as const, stale: true, points: emptyPoints, latency: '--', loss: '--' }
+      return {
+        id: `empty-${index}`,
+        name: props.ipVersion === 'ipv6'
+          ? '未配置 V6'
+          : '未配置 V4',
+        kind: 'icmp' as const,
+        stale: true,
+        points: emptyPoints,
+        latency: '--',
+        loss: '--',
+      }
     }
     const stale = task.samples === 0
     const points = task.points.slice(-10)
     return {
       id: task.id,
-      name: props.nodeUuid ? task.name.replace(ipv6DisplayName, 'V6') : task.name,
+      name: props.nodeUuid
+        ? task.name.replace(ipv6DisplayName, 'V6')
+        : task.name,
       kind: task.kind,
       stale,
       points: emptyPoints.map((empty, bucket) => points.find(p => p.bucket === bucket) ?? empty),
-      latency: task.avg_latency_ms === null ? '--' : `${Math.round(task.avg_latency_ms)} ms`,
-      loss: task.loss_percent === null ? '--' : `${task.loss_percent.toFixed(1)}%`,
+      latency: task.avg_latency_ms === null
+        ? '--'
+        : `${Math.round(task.avg_latency_ms)} ms`,
+      loss: task.loss_percent === null
+        ? '--'
+        : `${task.loss_percent.toFixed(1)}%`,
     }
   })
 })
 function sampleTooltip(name: string, point: NodeProbe['points'][number], metric: typeof metrics[number]): string {
   const value = !point.samples
     ? 'N/A'
-    : metric === 'loss' ? `${point.loss.toFixed(1)}%` : point.latency === null ? 'N/A' : `${Math.round(point.latency)} ms`
-  const time = formatDateTime(new Date(point.time), historyHours.value >= 24 ? 'MM-DD HH:mm' : 'HH:mm:ss')
+    : metric === 'loss'
+      ? `${point.loss.toFixed(1)}%`
+      : point.latency === null
+        ? 'N/A'
+        : `${Math.round(point.latency)} ms`
+  const time = formatDateTime(new Date(point.time), historyHours.value >= 24
+    ? 'MM-DD HH:mm'
+    : 'HH:mm:ss')
   return `${name}\n${time}\n${value}`
 }
 function panelTooltip(row: { name: string, kind: NodeProbe['kind'], stale: boolean, latency: string, loss: string }, metric: typeof metrics[number]): string {
   if (row.stale)
     return `${row.name} · 暂无数据`
-  if (metric === 'latency')
-    return row.latency === '--' ? `${row.name} · 最近 ${historyLabel.value}暂无有效延迟` : `${row.name} · 最近 ${historyLabel.value}平均延迟 ${row.latency}`
+  if (metric === 'latency') {
+    return row.latency === '--'
+      ? `${row.name} · 最近 ${historyLabel.value}暂无有效延迟`
+      : `${row.name} · 最近 ${historyLabel.value}平均延迟 ${row.latency}`
+  }
   return `${row.name} · 最近 ${historyLabel.value}平均${failureRateLabel(row.kind)} ${row.loss}`
 }
 function openMetric(event: Event) {

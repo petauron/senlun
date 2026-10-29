@@ -62,7 +62,9 @@ const metricCards = computed<MetricCard[]>(() => {
   const currency = normalizeCurrency(node.currency)
   const rate = rates.value[currency] ?? 0
   const hasRate = Number.isFinite(rate) && rate > 0
-  const priceCNY = hasRate && Number.isFinite(node.price) && node.price > 0 ? node.price / rate : 0
+  const priceCNY = hasRate && Number.isFinite(node.price) && node.price > 0
+    ? node.price / rate
+    : 0
   const displayCurrency = rates.value[selectedCurrency] ? selectedCurrency : 'CNY'
   const displayRate = rates.value[displayCurrency] ?? 1
   const formatMoney = (valueCNY: number) => {
@@ -79,25 +81,35 @@ const metricCards = computed<MetricCard[]>(() => {
   const hasCycle = Number.isFinite(node.billing_cycle) && node.billing_cycle > 0
   const expiry = Date.parse(node.expired_at)
   const hasExpiry = Number.isFinite(expiry)
-  const remainingDays = hasExpiry ? (expiry - now.value.getTime()) / 86400000 : 0
+  const remainingDays = hasExpiry
+    ? (expiry - now.value.getTime()) / 86400000
+    : 0
   const remainingValue = remainingDays > 36500
     ? priceCNY
     : hasExpiry && hasCycle && remainingDays > 0
       ? priceCNY * remainingDays / node.billing_cycle
       : 0
-  const expiryText = hasExpiry ? getExpireText(node.expired_at) : '-'
+  const expiryText = hasExpiry
+    ? getExpireText(node.expired_at)
+    : '-'
   const expiryParts = EXPIRES_IN_DAYS.exec(expiryText)
 
   return [
     {
       label: '节点价格',
-      value: hasPrice ? `${formatMoney(priceCNY)} ${displayCurrency}` : formatMoney(0),
-      unit: hasPrice ? ` / ${getBillingCycleText(node.billing_cycle)}` : displayCurrency,
+      value: hasPrice
+        ? `${formatMoney(priceCNY)} ${displayCurrency}`
+        : formatMoney(0),
+      unit: hasPrice
+        ? ` / ${getBillingCycleText(node.billing_cycle)}`
+        : displayCurrency,
       icon: 'tabler:cash',
     },
     {
       label: '月均支出',
-      value: hasCycle ? `${formatMoney(priceCNY / node.billing_cycle * 30)} ${displayCurrency}` : '不适用',
+      value: hasCycle
+        ? `${formatMoney(priceCNY / node.billing_cycle * 30)} ${displayCurrency}`
+        : '不适用',
       unit: hasCycle ? ' / 月' : undefined,
       icon: 'tabler:receipt-2',
     },
@@ -106,7 +118,9 @@ const metricCards = computed<MetricCard[]>(() => {
       value: expiryParts?.[1] ?? expiryText,
       unit: expiryParts ? '天' : undefined,
       icon: 'tabler:calendar-dollar',
-      valueClass: hasExpiry ? getExpireTextClass(node.expired_at) : undefined,
+      valueClass: hasExpiry
+        ? getExpireTextClass(node.expired_at)
+        : undefined,
     },
     {
       label: '剩余价值',
@@ -120,13 +134,17 @@ const metricCards = computed<MetricCard[]>(() => {
 function displayArchitecture(arch: string | undefined): string {
   if (!arch)
     return '-'
-  return arch === 'x86_64' ? 'amd64' : arch
+  return arch === 'x86_64'
+    ? 'amd64'
+    : arch
 }
 
 function displayKernelVersion(kernel: string | undefined): string {
   if (!kernel)
     return '-'
-  return kernel.startsWith('Linux ') ? kernel.slice(6) : kernel
+  return kernel.startsWith('Linux ')
+    ? kernel.slice(6)
+    : kernel
 }
 
 function displayOperatingSystem(os: string | undefined): string {
@@ -137,23 +155,61 @@ function displayOperatingSystem(os: string | undefined): string {
 }
 
 const hardwareInfo = computed<InfoItem[]>(() => [
-  { label: 'CPU', value: data.value ? `${data.value.cpu_name} (x${data.value.cpu_cores})` : '-', icon: 'icon-park-outline:cpu' },
-  { label: '架构', value: displayArchitecture(data.value?.arch), icon: 'icon-park-outline:application-two' },
+  {
+    label: 'CPU',
+    value: data.value
+      ? `${data.value.cpu_name} (x${data.value.cpu_cores})`
+      : '-',
+    icon: 'icon-park-outline:cpu',
+  },
+  {
+    label: '架构',
+    value: displayArchitecture(data.value?.arch),
+    icon: 'icon-park-outline:application-two',
+  },
   { label: '虚拟化', value: data.value?.virtualization || '未知', icon: 'icon-park-outline:server' },
   { label: 'GPU', value: data.value?.gpu_name || '-', icon: 'icon-park-outline:video-one' },
 ])
 
 const systemInfo = computed<InfoItem[]>(() => [
-  { label: '操作系统', value: displayOperatingSystem(data.value?.os), icon: 'icon-park-outline:computer' },
-  { label: '内核版本', value: displayKernelVersion(data.value?.kernel_version), icon: 'icon-park-outline:code' },
-  { label: '运行时间', value: formatUptime(data.value?.uptime ?? 0, 'minute'), icon: 'icon-park-outline:timer' },
-  { label: '最后上报', value: formatDateTime(data.value?.time), icon: 'icon-park-outline:time' },
+  {
+    label: '操作系统',
+    value: displayOperatingSystem(data.value?.os),
+    icon: 'icon-park-outline:computer',
+  },
+  {
+    label: '内核版本',
+    value: displayKernelVersion(data.value?.kernel_version),
+    icon: 'icon-park-outline:code',
+  },
+  {
+    label: '运行时间',
+    value: formatUptime(data.value?.uptime ?? 0, 'minute'),
+    icon: 'icon-park-outline:timer',
+  },
+  {
+    label: '最后上报',
+    value: formatDateTime(data.value?.time),
+    icon: 'icon-park-outline:time',
+  },
 ])
 
 const storageInfo = computed<InfoItem[]>(() => [
-  { label: '内存', value: formatBytes(data.value?.mem_total ?? 0), icon: 'icon-park-outline:memory' },
-  { label: '内存交换', value: formatBytes(data.value?.swap_total ?? 0), icon: 'icon-park-outline:switch' },
-  { label: '硬盘', value: formatBytes(data.value?.disk_total ?? 0), icon: 'icon-park-outline:hard-disk' },
+  {
+    label: '内存',
+    value: formatBytes(data.value?.mem_total ?? 0),
+    icon: 'icon-park-outline:memory',
+  },
+  {
+    label: '内存交换',
+    value: formatBytes(data.value?.swap_total ?? 0),
+    icon: 'icon-park-outline:switch',
+  },
+  {
+    label: '硬盘',
+    value: formatBytes(data.value?.disk_total ?? 0),
+    icon: 'icon-park-outline:hard-disk',
+  },
 ])
 
 const trafficUsed = computed(() => {

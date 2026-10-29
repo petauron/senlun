@@ -61,7 +61,10 @@ export function formatBytes(bytes: number, decimals = 1): string {
  * @returns 格式化后的字符串，如 "1.5 GB"
  */
 export function formatBytesWithConfig(bytes: number, config?: ByteDecimalsConfig): string {
-  const mergedConfig = { ...DEFAULT_BYTE_DECIMALS, ...config }
+  const mergedConfig = {
+    ...DEFAULT_BYTE_DECIMALS,
+    ...config,
+  }
 
   if (bytes === 0) {
     // 0 字节时，检查 B 是否被禁用
@@ -76,13 +79,17 @@ export function formatBytesWithConfig(bytes: number, config?: ByteDecimalsConfig
   // 获取对应单位的精度配置
   const unitKey = BYTE_UNITS[i]
   // PB 及以上单位使用 TB 的精度配置
-  const decimals = (unitKey === 'TB' || unitKey === 'PB') ? mergedConfig.TB : mergedConfig[unitKey as keyof ByteDecimalsConfig]
+  const decimals = (unitKey === 'TB' || unitKey === 'PB')
+    ? mergedConfig.TB
+    : mergedConfig[unitKey as keyof ByteDecimalsConfig]
 
   // 如果当前单位被禁用，向上查找可用单位
   if (decimals === -1) {
     for (let j = i + 1; j < BYTE_UNITS.length; j++) {
       const nextUnitKey = BYTE_UNITS[j]
-      const nextDecimals = (nextUnitKey === 'TB' || nextUnitKey === 'PB') ? mergedConfig.TB : mergedConfig[nextUnitKey as keyof ByteDecimalsConfig]
+      const nextDecimals = (nextUnitKey === 'TB' || nextUnitKey === 'PB')
+        ? mergedConfig.TB
+        : mergedConfig[nextUnitKey as keyof ByteDecimalsConfig]
       if (nextDecimals !== -1) {
         const unit = BYTE_UNITS[j]
         return `${(bytes / k ** j).toFixed(nextDecimals)} ${unit}`
@@ -104,7 +111,10 @@ export function formatBytesWithConfig(bytes: number, config?: ByteDecimalsConfig
  * @returns 分离的数值和单位，如 { value: "1.5", unit: "GB" }
  */
 export function formatBytesSplit(bytes: number, config?: ByteDecimalsConfig): { value: string, unit: string } {
-  const mergedConfig = { ...DEFAULT_BYTE_DECIMALS, ...config }
+  const mergedConfig = {
+    ...DEFAULT_BYTE_DECIMALS,
+    ...config,
+  }
 
   if (bytes === 0) {
     if (mergedConfig.B === -1)
@@ -116,23 +126,36 @@ export function formatBytesSplit(bytes: number, config?: ByteDecimalsConfig): { 
   const i = Math.floor(Math.log(bytes) / Math.log(k))
 
   const unitKey = BYTE_UNITS[i]
-  const decimals = (unitKey === 'TB' || unitKey === 'PB') ? mergedConfig.TB : mergedConfig[unitKey as keyof ByteDecimalsConfig]
+  const decimals = (unitKey === 'TB' || unitKey === 'PB')
+    ? mergedConfig.TB
+    : mergedConfig[unitKey as keyof ByteDecimalsConfig]
 
   if (decimals === -1) {
     for (let j = i + 1; j < BYTE_UNITS.length; j++) {
       const nextUnitKey = BYTE_UNITS[j]
-      const nextDecimals = (nextUnitKey === 'TB' || nextUnitKey === 'PB') ? mergedConfig.TB : mergedConfig[nextUnitKey as keyof ByteDecimalsConfig]
+      const nextDecimals = (nextUnitKey === 'TB' || nextUnitKey === 'PB')
+        ? mergedConfig.TB
+        : mergedConfig[nextUnitKey as keyof ByteDecimalsConfig]
       if (nextDecimals !== -1) {
         const unit = BYTE_UNITS[j]
-        return { value: (bytes / k ** j).toFixed(nextDecimals), unit: `${unit}` }
+        return {
+          value: (bytes / k ** j).toFixed(nextDecimals),
+          unit: `${unit}`,
+        }
       }
     }
     const unit = BYTE_UNITS[i] ?? LAST_BYTE_UNIT
-    return { value: (bytes / k ** i).toFixed(1), unit: `${unit}` }
+    return {
+      value: (bytes / k ** i).toFixed(1),
+      unit: `${unit}`,
+    }
   }
 
   const unit = BYTE_UNITS[i] ?? LAST_BYTE_UNIT
-  return { value: (bytes / k ** i).toFixed(decimals), unit: `${unit}` }
+  return {
+    value: (bytes / k ** i).toFixed(decimals),
+    unit: `${unit}`,
+  }
 }
 
 /**
@@ -185,7 +208,9 @@ export function formatUptime(seconds: number): string {
     }
   }
 
-  return parts.length > 0 ? parts.join(' ') : '0 秒'
+  return parts.length > 0
+    ? parts.join(' ')
+    : '0 秒'
 }
 
 /**

@@ -28,7 +28,10 @@ async function signInAgain(): Promise<void> {
   pendingTotp.value = null
   destroyInitManager()
   auth.clear()
-  await router.replace({ name: 'login', query: { redirect: '/admin?section=security' } })
+  await router.replace({
+    name: 'login',
+    query: { redirect: '/admin?section=security' },
+  })
 }
 
 async function setupTotp(): Promise<void> {

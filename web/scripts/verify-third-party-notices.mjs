@@ -34,13 +34,30 @@ if (!notices.includes(`Apache ECharts ${echartsPackage.version}`) || !notices.in
 if (!echartsD3License.includes('Copyright 2010-2016 Mike Bostock'))
   throw new Error('ECharts D3-derived license terms are incomplete')
 
-for (const dependency of ['@iconify/vue', 'cobe', 'dayjs', 'echarts', 'pinia', 'vue', 'vue-echarts']) {
+for (const dependency of [
+  '@iconify/vue',
+  'cobe',
+  'dayjs',
+  'echarts',
+  'pinia',
+  'vue',
+  'vue-echarts',
+]) {
   if (!bundledLicenses.includes(dependency))
     throw new Error(`Bundled dependency license is missing: ${dependency}`)
 }
 
-const allowedBundledLicenses = new Set(['0BSD', 'Apache-2.0', 'BSD-3-Clause', 'ISC', 'MIT', 'Zlib'])
-const bundledHeadings = [...bundledLicenses.matchAll(/^## .+ \(([^()]+)\)$/gm)]
+const allowedBundledLicenses = new Set([
+  '0BSD',
+  'Apache-2.0',
+  'BSD-3-Clause',
+  'ISC',
+  'MIT',
+  'Zlib',
+])
+const bundledHeadings = [
+  ...bundledLicenses.matchAll(/^## .+ \(([^()]+)\)$/gm),
+]
 if (bundledHeadings.length === 0)
   throw new Error('Bundled dependency license inventory is empty')
 for (const [, license] of bundledHeadings) {

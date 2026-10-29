@@ -30,8 +30,12 @@ function onAuthRequired(): void {
   destroyInitManager()
   auth.clear()
   appStore.loading = false
-  if (route.name !== 'login')
-    void router.replace({ name: 'login', query: { redirect: route.fullPath } })
+  if (route.name !== 'login') {
+    void router.replace({
+      name: 'login',
+      query: { redirect: route.fullPath },
+    })
+  }
 }
 
 onMounted(async () => {

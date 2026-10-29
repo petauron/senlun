@@ -36,7 +36,11 @@ const emptyRecord = record(0, null)
 describe('alignRecordsToTimeWindow', () => {
   it('keeps the offline tail as null through the requested end', () => {
     const rows = alignRecordsToTimeWindow(
-      [record(5, 5), record(15, 15), record(25, 25)],
+      [
+        record(5, 5),
+        record(15, 15),
+        record(25, 25),
+      ],
       10 * minute,
       start,
       start + 60 * minute,
@@ -50,7 +54,10 @@ describe('alignRecordsToTimeWindow', () => {
 
   it('keeps the offline head and sparse middle buckets as null', () => {
     const rows = alignRecordsToTimeWindow(
-      [record(25, 25), record(55, 55)],
+      [
+        record(25, 25),
+        record(55, 55),
+      ],
       10 * minute,
       start,
       start + 60 * minute,
@@ -62,7 +69,10 @@ describe('alignRecordsToTimeWindow', () => {
 
   it('selects one nearest sample per bucket without reusing old values', () => {
     const rows = alignRecordsToTimeWindow(
-      [record(1, 1), record(9, 9)],
+      [
+        record(1, 1),
+        record(9, 9),
+      ],
       10 * minute,
       start,
       start + 30 * minute,
@@ -92,7 +102,11 @@ describe('alignRecordsToTimeWindow', () => {
 
 describe('cutPeakValues', () => {
   it('smooths a single spike without changing the source samples', () => {
-    const source = Array.from({ length: 31 }, (_, index) => ({ latency: index === 15 ? 200 : 10 }))
+    const source = Array.from({ length: 31 }, (_, index) => ({
+      latency: index === 15
+        ? 200
+        : 10,
+    }))
     const smoothed = cutPeakValues(source, ['latency'])
 
     expect(source[15]?.latency).toBe(200)

@@ -9,12 +9,26 @@ describe('local traffic correction amounts', () => {
     expect(parseTrafficAmount('0.1', 'gib')).toBe('107374182')
   })
 
-  it.each(['0', '1', '9007199254740993', '9223372036854775807'])('round-trips %s bytes without Number precision loss', (value) => {
+  it.each([
+    '0',
+    '1',
+    '9007199254740993',
+    '9223372036854775807',
+  ])('round-trips %s bytes without Number precision loss', (value) => {
     expect(parseTrafficAmount(formatTrafficAmount(value, 'gb'), 'gb')).toBe(value)
     expect(parseTrafficAmount(formatTrafficAmount(value, 'gib'), 'gib')).toBe(value)
   })
 
-  it.each(['', '-1', 'NaN', 'Infinity', '1e3', '1,000', '0x10', '99999999999999999999'])('rejects invalid or overflowing input %s', (value) => {
+  it.each([
+    '',
+    '-1',
+    'NaN',
+    'Infinity',
+    '1e3',
+    '1,000',
+    '0x10',
+    '99999999999999999999',
+  ])('rejects invalid or overflowing input %s', (value) => {
     expect(() => parseTrafficAmount(value, 'gb')).toThrow()
   })
 

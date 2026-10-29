@@ -7,7 +7,12 @@ const point = (bucket: number, latency: number | null) => ({ received_at_unix_ms
 
 describe('probeChartSeries', () => {
   it('keeps a long reporting gap empty instead of drawing a continuous line', () => {
-    const points = [point(0, 10), point(1, 11), point(2, 12), point(52, 13)]
+    const points = [
+      point(0, 10),
+      point(1, 11),
+      point(2, 12),
+      point(52, 13),
+    ]
     const series = probeChartSeries(points, start, start + 60 * minute, minute, false)
     const smoothed = probeChartSeries(points, start, start + 60 * minute, minute, true)
 
@@ -21,7 +26,11 @@ describe('probeChartSeries', () => {
   })
 
   it('uses Emerald bounded interpolation for a short failure gap without changing source samples', () => {
-    const points = [point(0, 10), point(1, null), point(2, 20)]
+    const points = [
+      point(0, 10),
+      point(1, null),
+      point(2, 20),
+    ]
     const series = probeChartSeries(points, start, start + 60 * minute, minute, false)
 
     expect(series).toHaveLength(3)
@@ -30,7 +39,10 @@ describe('probeChartSeries', () => {
   })
 
   it('does not invent values before the first or after the last received bucket', () => {
-    const series = probeChartSeries([point(10, 8), point(11, 9)], start, start + 60 * minute, minute, false)
+    const series = probeChartSeries([
+      point(10, 8),
+      point(11, 9),
+    ], start, start + 60 * minute, minute, false)
 
     expect(series).toHaveLength(2)
     expect(series[0]?.[0]).toBe(point(10, 8).received_at_unix_ms)
@@ -38,13 +50,21 @@ describe('probeChartSeries', () => {
   })
 
   it('rejects an oversized or malformed bucket range', () => {
-    expect(probeChartSeries([point(0, 10)], start, start + 100_000 * minute, minute, false)).toEqual([])
-    expect(probeChartSeries([point(0, 10)], start, start + minute, 0, false)).toEqual([])
+    expect(probeChartSeries([
+      point(0, 10),
+    ], start, start + 100_000 * minute, minute, false)).toEqual([])
+    expect(probeChartSeries([
+      point(0, 10),
+    ], start, start + minute, 0, false)).toEqual([])
   })
 })
 
 describe('probeFailureSeries', () => {
-  const failurePoint = (bucket: number, failed: number, samples: number) => ({ ...point(bucket, null), failed_samples: failed, samples })
+  const failurePoint = (bucket: number, failed: number, samples: number) => ({
+    ...point(bucket, null),
+    failed_samples: failed,
+    samples,
+  })
 
   it('shows observed 0%, partial, and total failures without inventing samples across an outage', () => {
     const series = probeFailureSeries([
@@ -60,8 +80,17 @@ describe('probeFailureSeries', () => {
   })
 
   it('rejects invalid buckets and preserves a single real observation', () => {
-    expect(probeFailureSeries([failurePoint(1, 1, 2)], start, start + 60 * minute, minute)).toEqual([[point(1, null).received_at_unix_ms, 50]])
-    expect(probeFailureSeries([failurePoint(1, 2, 1), failurePoint(2, 0, 0)], start, start + 60 * minute, minute)).toEqual([])
-    expect(probeFailureSeries([failurePoint(0, 0, 1)], start, start + 100_000 * minute, minute)).toEqual([])
+    expect(probeFailureSeries([
+      failurePoint(1, 1, 2),
+    ], start, start + 60 * minute, minute)).toEqual([
+      [point(1, null).received_at_unix_ms, 50],
+    ])
+    expect(probeFailureSeries([
+      failurePoint(1, 2, 1),
+      failurePoint(2, 0, 0),
+    ], start, start + 60 * minute, minute)).toEqual([])
+    expect(probeFailureSeries([
+      failurePoint(0, 0, 1),
+    ], start, start + 100_000 * minute, minute)).toEqual([])
   })
 })

@@ -18,7 +18,9 @@ const busy = ref(false)
 const error = ref('')
 const setup = computed(() => auth.status?.initialized === false)
 const oauthTotp = computed(() => route.query.oauth_totp === 'required' || auth.status?.oauth_totp_required === true)
-const heading = computed(() => setup.value ? '初始化 Senlun' : oauthTotp.value ? '完成两步验证' : '登录 Senlun')
+const heading = computed(() => setup.value
+  ? '初始化 Senlun'
+  : oauthTotp.value ? '完成两步验证' : '登录 Senlun')
 
 async function refresh(): Promise<void> {
   busy.value = true
@@ -26,7 +28,11 @@ async function refresh(): Promise<void> {
   try {
     await auth.refresh()
   }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
+  catch (cause) {
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
   finally { busy.value = false }
 }
 
@@ -36,16 +42,24 @@ async function submit(): Promise<void> {
   busy.value = true
   error.value = ''
   try {
-    const path = setup.value ? 'setup' : oauthTotp.value ? 'oauth/complete' : 'login'
+    const path = setup.value
+      ? 'setup'
+      : oauthTotp.value ? 'oauth/complete' : 'login'
     const body = setup.value
       ? { username: username.value, password: password.value }
-      : oauthTotp.value ? { code: code.value } : { username: username.value, password: password.value, code: code.value || undefined }
+      : oauthTotp.value
+        ? { code: code.value }
+        : { username: username.value, password: password.value, code: code.value || undefined }
     await auth.authenticate(path, body)
     password.value = ''
     code.value = ''
     await router.replace(loginDestination(route.query.redirect))
   }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
+  catch (cause) {
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
   finally { busy.value = false }
 }
 
@@ -60,7 +74,9 @@ async function startOAuth(): Promise<void> {
     window.location.assign(url.href)
   }
   catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
     busy.value = false
   }
 }

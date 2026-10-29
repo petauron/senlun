@@ -179,11 +179,33 @@ export interface ProbeComparison {
 /** Do not send read-only counters or newly added admin-state fields as metadata. */
 export function nodeMetadata(node: ManagedNode): ManagedNode {
   const { id, name, region, group, weight, hidden, tags, public_remark, ipv4, ipv6, price, currency, billing_cycle_days, expired_at_unix_ms, auto_renewal, traffic_source, traffic_limit_bytes, traffic_limit_type, traffic_reset_day } = node
-  return { id, name, region, group, weight, hidden, tags, public_remark, ipv4: ipv4 ?? '', ipv6: ipv6 ?? '', price, currency, billing_cycle_days, expired_at_unix_ms, auto_renewal, traffic_source: traffic_source ?? 'local', traffic_limit_bytes, traffic_limit_type, traffic_reset_day }
+  return {
+    id,
+    name,
+    region,
+    group,
+    weight,
+    hidden,
+    tags,
+    public_remark,
+    ipv4: ipv4 ?? '',
+    ipv6: ipv6 ?? '',
+    price,
+    currency,
+    billing_cycle_days,
+    expired_at_unix_ms,
+    auto_renewal,
+    traffic_source: traffic_source ?? 'local',
+    traffic_limit_bytes,
+    traffic_limit_type,
+    traffic_reset_day,
+  }
 }
 
 export function fetchProbeHistory(id: string, hours: number, taskId?: string, signal?: AbortSignal): Promise<ProbeHistory> {
-  const taskFilter = taskId ? `&task_id=${encodeURIComponent(taskId)}` : ''
+  const taskFilter = taskId
+    ? `&task_id=${encodeURIComponent(taskId)}`
+    : ''
   return getSharedApi().get(`v1/nodes/${encodeURIComponent(id)}/probes?hours=${hours}${taskFilter}`, signal)
 }
 

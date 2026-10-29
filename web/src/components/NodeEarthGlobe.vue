@@ -85,7 +85,9 @@ function triggerStaticRedrawWindow(duration = 1500) {
 }
 
 function shouldKeepStaticRedraw(): boolean {
-  const now = typeof performance === 'undefined' ? Date.now() : performance.now()
+  const now = typeof performance === 'undefined'
+    ? Date.now()
+    : performance.now()
   return now < staticRedrawUntil
 }
 
@@ -125,7 +127,12 @@ const regionClusters = computed<RegionCluster[]>(() => {
 
     let entry = map.get(code)
     if (!entry) {
-      entry = { code, coord, servers: 0, onlineServers: 0 }
+      entry = {
+        code,
+        coord,
+        servers: 0,
+        onlineServers: 0,
+      }
       map.set(code, entry)
     }
     entry.servers += 1
@@ -426,7 +433,10 @@ watch(
 )
 
 watch(
-  [() => appStore.earthViewMode, reducedMotion],
+  [
+    () => appStore.earthViewMode,
+    reducedMotion,
+  ],
   ([mode]) => {
     if (mode === 'earth-stop')
       resetStoppedView()
@@ -436,7 +446,10 @@ watch(
 )
 
 watch(
-  [() => regionClusters.value.map(clusterKey).join(','), userCoord],
+  [
+    () => regionClusters.value.map(clusterKey).join(','),
+    userCoord,
+  ],
   async () => {
     if (!globe)
       return

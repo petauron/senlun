@@ -41,20 +41,35 @@ test('traffic status refresh preserves drafts and credentials until a node switc
   let failRefresh = false
   let failSave = true
   let mutations = 0
-  await page.route('**/api/admin/state', route => route.fulfill({ json: { ...state, nodes } }))
+  await page.route('**/api/admin/state', route => route.fulfill({
+    json: { ...state, nodes },
+  }))
   await page.route('**/api/admin/traffic-sources', route => route.fulfill(failRefresh
-    ? { status: 503, json: { error: 'Synthetic refresh failure' } }
-    : { json: { sources: [source], credential_key_ready: true } }))
+    ? {
+        status: 503,
+        json: { error: 'Synthetic refresh failure' },
+      }
+    : {
+        json: {
+          sources: [source],
+          credential_key_ready: true,
+        },
+      }))
   // All traffic source mutations stay inside the test; no provider is contacted.
   await page.route('**/api/admin/traffic-sources/*', async (route) => {
     mutations++
     if (failSave) {
-      await route.fulfill({ status: 503, json: { error: 'Synthetic save failure' } })
+      await route.fulfill({
+        status: 503,
+        json: { error: 'Synthetic save failure' },
+      })
       return
     }
     source.config = route.request().postDataJSON().config
     source.has_credential = true
-    await route.fulfill({ json: { ok: true } })
+    await route.fulfill({
+      json: { ok: true },
+    })
   })
   await page.goto('/admin?section=traffic')
   const nodeSelect = page.getByRole('combobox', { name: '关联节点' })

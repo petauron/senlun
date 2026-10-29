@@ -28,7 +28,9 @@ const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 const offlineTime = computed(() => formatDateTime(props.node.time))
 const appStore = useAppStore()
 const priceTags = computed(() => getPriceTags(props.node, appStore.lang))
-const expiredDate = computed(() => props.node.expired_at && Number.isFinite(Date.parse(props.node.expired_at)) ? formatDateTime(props.node.expired_at, 'YYYY-MM-DD') : '')
+const expiredDate = computed(() => props.node.expired_at && Number.isFinite(Date.parse(props.node.expired_at))
+  ? formatDateTime(props.node.expired_at, 'YYYY-MM-DD')
+  : '')
 
 const cpuStatus = computed(() => getStatus(props.node.cpu ?? 0))
 const memPercentage = computed(() => getMemPercentage(props.node))
@@ -45,7 +47,9 @@ const externalTrafficStale = computed(() => {
 })
 const externalTrafficPercentage = computed(() => {
   const snapshot = externalTraffic.value?.snapshot
-  return snapshot?.limit_bytes ? Math.min((snapshot.used_bytes / snapshot.limit_bytes) * 100, 100) : 0
+  return snapshot?.limit_bytes
+    ? Math.min((snapshot.used_bytes / snapshot.limit_bytes) * 100, 100)
+    : 0
 })
 const customTags = computed(() => parseTags(props.node.tags))
 </script>

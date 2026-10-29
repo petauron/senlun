@@ -95,7 +95,10 @@ export function alignRecordsToTimeWindow<T extends { time?: string, updated_at?:
     dayjs(item.time ?? item.updated_at ?? '').valueOf()
 
   const timedData = data
-    .map(item => ({ item, timeMs: getTime(item) }))
+    .map(item => ({
+      item,
+      timeMs: getTime(item),
+    }))
     .filter(({ timeMs }) =>
       Number.isFinite(timeMs)
       && timeMs >= requestedStartUnixMs
@@ -322,7 +325,9 @@ export function cutPeakValues(
         // 如果有足够的邻近值进行突变检测
         if (neighborValues.length >= 2) {
           const neighborSum = neighborValues.reduce((sum, val) => sum + val, 0)
-          const neighborMean = neighborValues.length > 0 ? neighborSum / neighborValues.length : 0
+          const neighborMean = neighborValues.length > 0
+            ? neighborSum / neighborValues.length
+            : 0
 
           // 检测突变
           if (neighborMean > 0) {

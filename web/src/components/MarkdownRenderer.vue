@@ -75,15 +75,24 @@ function parseMarkdown(text: string): Token[] {
 
     const nextSpecial = remaining.search(NEXT_SPECIAL_REGEX)
     if (nextSpecial === -1) {
-      tokens.push({ type: 'text', content: escapeHtml(remaining) })
+      tokens.push({
+        type: 'text',
+        content: escapeHtml(remaining),
+      })
       break
     }
     else if (nextSpecial === 0) {
-      tokens.push({ type: 'text', content: escapeHtml(remaining[0]!) })
+      tokens.push({
+        type: 'text',
+        content: escapeHtml(remaining[0]!),
+      })
       remaining = remaining.slice(1)
     }
     else {
-      tokens.push({ type: 'text', content: escapeHtml(remaining.slice(0, nextSpecial)) })
+      tokens.push({
+        type: 'text',
+        content: escapeHtml(remaining.slice(0, nextSpecial)),
+      })
       remaining = remaining.slice(nextSpecial)
     }
   }

@@ -101,8 +101,18 @@ const baseTooltipConfig = computed(() => ({
 }))
 
 // 图表边距配置
-const chartMargin = { top: 30, right: 24, bottom: 32, left: 56 }
-const chartMarginWithLegend = { top: 30, right: 24, bottom: 52, left: 56 }
+const chartMargin = {
+  top: 30,
+  right: 24,
+  bottom: 32,
+  left: 56,
+}
+const chartMarginWithLegend = {
+  top: 30,
+  right: 24,
+  bottom: 52,
+  left: 56,
+}
 
 // 与 Emerald 保持相同的常用时间档位；最长历史按 Service 实际保留期展示。
 const presetViews = [
@@ -114,7 +124,9 @@ const presetViews = [
 
 // 可用视图列表
 const availableViews = computed(() => {
-  const views: { label: string, hours?: number }[] = [{ label: '实时' }]
+  const views: { label: string, hours?: number }[] = [
+    { label: '实时' },
+  ]
   const maxHours = maxRecordPreserveTime.value
 
   for (const v of presetViews) {
@@ -219,7 +231,9 @@ async function fetchData() {
   catch (err) {
     if (controller.signal.aborted || generation !== requestGeneration)
       return
-    error.value = err instanceof Error ? err.message : '获取数据失败'
+    error.value = err instanceof Error
+      ? err.message
+      : '获取数据失败'
     remoteData.value = []
     coverage.value = null
   }
@@ -422,7 +436,10 @@ const cpuChartOption = computed(() => ({
     {
       ...baseYAxisConfig.value,
       name: 'CPU %',
-      nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+      nameTextStyle: {
+        color: chartThemeColors.value.textSecondary,
+        padding: [0, 40, 0, 0],
+      },
       min: 0,
       max: 100,
       axisLabel: { ...baseYAxisConfig.value.axisLabel, formatter: '{value}%' },
@@ -430,7 +447,10 @@ const cpuChartOption = computed(() => ({
     {
       ...baseYAxisConfig.value,
       name: '负载',
-      nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 0, 0, 40] },
+      nameTextStyle: {
+        color: chartThemeColors.value.textSecondary,
+        padding: [0, 0, 0, 40],
+      },
       min: 0,
       splitLine: { show: false },
     },
@@ -492,8 +512,12 @@ const memoryChartOption = computed(() => ({
       const ramTotal = record.ram_total ?? nodeInfo.value?.mem_total ?? null
       const swapUsed = record.swap
       const swapTotal = record.swap_total ?? nodeInfo.value?.swap_total ?? null
-      const ramDisplay = ramUsed == null ? '-' : formatBytes(ramUsed)
-      const swapDisplay = swapUsed == null ? '-' : formatBytes(swapUsed)
+      const ramDisplay = ramUsed == null
+        ? '-'
+        : formatBytes(ramUsed)
+      const swapDisplay = swapUsed == null
+        ? '-'
+        : formatBytes(swapUsed)
       const ramPercent = ramUsed != null && ramTotal != null && ramTotal > 0
         ? ` (${((ramUsed / ramTotal) * 100).toFixed(1)}%)`
         : ''
@@ -523,7 +547,10 @@ const memoryChartOption = computed(() => ({
   yAxis: {
     ...baseYAxisConfig.value,
     name: '内存',
-    nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+    nameTextStyle: {
+      color: chartThemeColors.value.textSecondary,
+      padding: [0, 40, 0, 0],
+    },
     axisLabel: {
       ...baseYAxisConfig.value.axisLabel,
       formatter: (val: number) => formatBytes(val),
@@ -582,7 +609,9 @@ const diskChartOption = computed(() => ({
 
       const diskUsed = record.disk
       const diskTotal = record.disk_total ?? nodeInfo.value?.disk_total ?? null
-      const diskDisplay = diskUsed == null ? '-' : formatBytes(diskUsed)
+      const diskDisplay = diskUsed == null
+        ? '-'
+        : formatBytes(diskUsed)
       const diskPercent = diskUsed != null && diskTotal != null && diskTotal > 0
         ? ` (${((diskUsed / diskTotal) * 100).toFixed(1)}%)`
         : ''
@@ -602,7 +631,10 @@ const diskChartOption = computed(() => ({
   yAxis: {
     ...baseYAxisConfig.value,
     name: '磁盘',
-    nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+    nameTextStyle: {
+      color: chartThemeColors.value.textSecondary,
+      padding: [0, 40, 0, 0],
+    },
     axisLabel: {
       ...baseYAxisConfig.value.axisLabel,
       formatter: (val: number) => formatBytes(val),
@@ -656,8 +688,12 @@ const networkChartOption = computed(() => ({
 
       for (const item of p) {
         const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
-        const label = item.seriesName === '下载' ? '↓ 下载' : '↑ 上传'
-        const displayValue = item.value == null ? '-' : `${formatBytes(item.value)}/s`
+        const label = item.seriesName === '下载'
+          ? '↓ 下载'
+          : '↑ 上传'
+        const displayValue = item.value == null
+          ? '-'
+          : `${formatBytes(item.value)}/s`
         html += `<div style="display:flex;align-items:center">${colorDot}<span>${label}</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${displayValue}</span></div>`
       }
       html += '</div>'
@@ -678,7 +714,10 @@ const networkChartOption = computed(() => ({
   yAxis: {
     ...baseYAxisConfig.value,
     name: '速度',
-    nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+    nameTextStyle: {
+      color: chartThemeColors.value.textSecondary,
+      padding: [0, 40, 0, 0],
+    },
     axisLabel: {
       ...baseYAxisConfig.value.axisLabel,
       formatter: (val: number) => `${formatBytes(val)}/s`,
@@ -728,7 +767,9 @@ const connectionsChartOption = computed(() => ({
 
       for (const item of p) {
         const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
-        const displayValue = item.value != null ? Math.round(item.value) : '-'
+        const displayValue = item.value != null
+          ? Math.round(item.value)
+          : '-'
         html += `<div style="display:flex;align-items:center">${colorDot}<span>${item.seriesName}</span><span style="margin-left:auto;font-weight:600;margin-left:16px">${displayValue}</span></div>`
       }
       html += '</div>'
@@ -749,7 +790,10 @@ const connectionsChartOption = computed(() => ({
   yAxis: {
     ...baseYAxisConfig.value,
     name: '连接数',
-    nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+    nameTextStyle: {
+      color: chartThemeColors.value.textSecondary,
+      padding: [0, 40, 0, 0],
+    },
     min: 0,
     axisLabel: {
       ...baseYAxisConfig.value.axisLabel,
@@ -796,7 +840,9 @@ const processChartOption = computed(() => ({
 
       const timeStr = formatTimeForTooltip(record.time, selectedHours.value || 1)
       const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${firstParam.color};margin-right:8px;flex-shrink:0"></span>`
-      const displayValue = firstParam.value != null ? Math.round(firstParam.value) : '-'
+      const displayValue = firstParam.value != null
+        ? Math.round(firstParam.value)
+        : '-'
 
       let html = `<div style="font-weight:600;margin-bottom:6px;color:${chartThemeColors.value.textSecondary}">${timeStr}</div>`
       html += '<div style="display:flex;flex-direction:column;gap:4px">'
@@ -810,7 +856,10 @@ const processChartOption = computed(() => ({
   yAxis: {
     ...baseYAxisConfig.value,
     name: '进程',
-    nameTextStyle: { color: chartThemeColors.value.textSecondary, padding: [0, 40, 0, 0] },
+    nameTextStyle: {
+      color: chartThemeColors.value.textSecondary,
+      padding: [0, 40, 0, 0],
+    },
     min: 0,
     axisLabel: {
       ...baseYAxisConfig.value.axisLabel,
