@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.36](https://github.com/petauron/senlun/compare/v0.1.0-alpha.35...v0.1.0-alpha.36) (2026-10-29)
+
+
+### Bug Fixes
+
+* **security:** update zip to patched release ([1ebbaaf](https://github.com/petauron/senlun/commit/1ebbaaf3845daddfeacc186c9b5d02eed09cc7d9))
+
 ## [0.1.0-alpha.35](https://github.com/petauron/senlun/compare/v0.1.0-alpha.34...v0.1.0-alpha.35) (2026-10-29)
 
 
