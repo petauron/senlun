@@ -31,9 +31,7 @@ export interface ManagedNode {
   traffic_limit_bytes: number
   traffic_limit_type: 'sum' | 'max' | 'min' | 'up' | 'down'
   traffic_reset_day: number
-  traffic_current_reset_day?: number
   traffic_next_reset_unix_ms?: number | null
-  traffic_reset_effective_at_unix_ms?: number | null
   disabled?: boolean
 }
 

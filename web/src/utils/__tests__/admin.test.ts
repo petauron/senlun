@@ -30,9 +30,7 @@ describe('node metadata updates', () => {
       traffic_used_up: 42,
       traffic_used_down: 100,
       disabled_at_ms: null,
-      traffic_current_reset_day: 1,
       traffic_next_reset_unix_ms: 1_800_000_000_000,
-      traffic_reset_effective_at_unix_ms: 1_800_000_000_000,
     }
     expect(nodeMetadata(stateNode)).toEqual(metadata)
     expect(nodeMetadata(stateNode)).not.toHaveProperty('traffic_used_up')

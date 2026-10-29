@@ -745,7 +745,7 @@ mod tests {
             .save_node_options(&node.node_id, &mut options)
             .unwrap();
         let state = storage.admin_state().unwrap();
-        let boundary = state["nodes"][0]["traffic_reset_effective_at_unix_ms"]
+        let boundary = state["nodes"][0]["traffic_next_reset_unix_ms"]
             .as_u64()
             .unwrap();
         let mut traffic = rule("traffic");

@@ -476,25 +476,16 @@ fn traffic_period_changed_reset_preserves_ledger_and_handles_retries_and_correct
         .save_node_options(&node.node_id, &mut options)
         .unwrap();
     let state = storage.admin_state().unwrap();
-    let boundary = state["nodes"][0]["traffic_reset_effective_at_unix_ms"]
+    let boundary = state["nodes"][0]["traffic_next_reset_unix_ms"]
         .as_u64()
         .unwrap();
     assert!(boundary > now);
     assert_eq!(state["nodes"][0]["id"], node.node_id);
-    assert_eq!(state["nodes"][0]["traffic_current_reset_day"], 1);
+    assert_eq!(crate::control::reset_day(Some(&options)), 29);
+    let retained = local_traffic(&storage, &node.node_id, now);
     assert_eq!(
-        crate::control::effective_reset_day(Some(&options), boundary - 1),
-        1
-    );
-    assert_eq!(
-        crate::control::effective_reset_day(Some(&options), boundary),
-        29
-    );
-    assert!(
-        state["nodes"][0]["traffic_next_reset_unix_ms"]
-            .as_u64()
-            .unwrap()
-            <= boundary
+        (retained.up_bytes, retained.down_bytes),
+        (Some(100), Some(200))
     );
     let mut invalid = options.clone();
     invalid.traffic_reset_day = 32;
@@ -609,6 +600,85 @@ fn assert_traffic_after_reset(
     assert_eq!(
         (restored.up_bytes, restored.down_bytes),
         (Some(510), Some(810))
+    );
+}
+
+#[test]
+fn existing_transition_skips_old_boundary_and_preserves_usage_until_new_boundary() {
+    use time::Month::{November, October};
+
+    let (directory, storage, node) = fixture();
+    let token = crate::storage::hash_token(&node.agent_token);
+    let first = utc_midnight(2027, October, 28);
+    let old_boundary = utc_midnight(2027, November, 1);
+    let new_boundary = utc_midnight(2027, November, 29);
+    storage
+        .ingest(&token, &sample(first, 1000, 2000), first)
+        .unwrap();
+    storage
+        .ingest(&token, &sample(first + 1000, 1100, 2200), first + 1000)
+        .unwrap();
+
+    // Match the pending transition already persisted by the previous release.
+    let options = NodeOptions {
+        id: node.node_id.clone(),
+        name: "example".into(),
+        currency: "USD".into(),
+        traffic_limit_bytes: 1000,
+        traffic_limit_type: "sum".into(),
+        traffic_reset_day: 29,
+        ..NodeOptions::default()
+    };
+    let mut data = serde_json::to_value(options).unwrap();
+    data["traffic_reset_transition"] = json!({"previous_day": 1, "effective_at_ms": new_boundary});
+    storage
+        .connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO node_options(node_id,data) VALUES(?1,?2)",
+            rusqlite::params![node.node_id, data.to_string()],
+        )
+        .unwrap();
+
+    let before_old_boundary = local_traffic(&storage, &node.node_id, old_boundary - 1);
+    assert_eq!(
+        (before_old_boundary.up_bytes, before_old_boundary.down_bytes),
+        (Some(100), Some(200))
+    );
+    storage
+        .ingest(
+            &token,
+            &sample(old_boundary + 1000, 1150, 2250),
+            old_boundary + 1000,
+        )
+        .unwrap();
+    let after_old_boundary = local_traffic(&storage, &node.node_id, old_boundary + 1000);
+    assert_eq!(
+        (after_old_boundary.up_bytes, after_old_boundary.down_bytes),
+        (Some(150), Some(250))
+    );
+    storage.flush_monitoring(old_boundary + 2000, true).unwrap();
+    drop(storage);
+
+    let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+    let after_restart = local_traffic(&storage, &node.node_id, old_boundary + 2000);
+    assert_eq!(
+        (after_restart.up_bytes, after_restart.down_bytes),
+        (Some(150), Some(250))
+    );
+    let waiting = local_traffic(&storage, &node.node_id, new_boundary);
+    assert_eq!(waiting.status, "no_data");
+    storage
+        .ingest(
+            &token,
+            &sample(new_boundary + 1000, 1250, 2350),
+            new_boundary + 1000,
+        )
+        .unwrap();
+    let next_cycle = local_traffic(&storage, &node.node_id, new_boundary + 1000);
+    assert_eq!(
+        (next_cycle.up_bytes, next_cycle.down_bytes),
+        (Some(100), Some(100))
     );
 }
 
