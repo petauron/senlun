@@ -20,7 +20,10 @@ use senlun_protocol::{
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, Networks, System};
 use tempfile::NamedTempFile;
-use tokio::time::{MissedTickBehavior, interval};
+use tokio::{
+    sync::watch,
+    time::{MissedTickBehavior, interval},
+};
 use uuid::Uuid;
 
 const DEFAULT_SERVICE_URL: &str = "http://127.0.0.1:8080";
@@ -272,10 +275,28 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut collector = Collector::new().await;
     let mut ticker = interval(config.interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut collected_sequence = 0_u64;
+    // Keep at most the latest unsent snapshot while one request is in flight.
+    // Network stalls therefore cannot delay collection or grow a retry queue.
+    let (snapshots, receiver) = watch::channel(None);
+    let mut sender = tokio::spawn(send_snapshots(
+        client.clone(),
+        config.service_url.clone(),
+        credentials.agent_token.clone(),
+        receiver,
+    ));
 
     loop {
         tokio::select! {
             _ = ticker.tick() => {}
+            result = &mut sender => {
+                return match result {
+                    Ok(Err(SnapshotSendError::Unauthorized)) => Err(
+                        "agent credential was rejected; follow the documented rotate or re-enroll workflow".into()
+                    ),
+                    _ => Err("Agent snapshot sender stopped".into()),
+                };
+            }
             changed = probes.interval.changed() => {
                 changed.map_err(|_| "Agent configuration worker stopped")?;
                 let configured_interval = *probes.interval.borrow_and_update();
@@ -290,26 +311,44 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let extra = extended.collect().await;
         let mut snapshot = collector.collect(&config, extra)?;
         snapshot.region = region.current();
-        match send_snapshot(
-            &client,
-            &config.service_url,
-            &credentials.agent_token,
-            &snapshot,
-        )
-        .await
-        {
+        tracing::debug!(
+            collected_at_unix_ms = snapshot.collected_at_unix_ms,
+            "host snapshot collected"
+        );
+        collected_sequence = collected_sequence.saturating_add(1);
+        snapshots.send_replace(Some((collected_sequence, snapshot)));
+    }
+}
+
+async fn send_snapshots(
+    client: Client,
+    service_url: Url,
+    agent_token: String,
+    mut snapshots: watch::Receiver<Option<(u64, SystemSnapshot)>>,
+) -> Result<(), SnapshotSendError> {
+    let mut previous = 0_u64;
+    while snapshots.changed().await.is_ok() {
+        let snapshot = snapshots.borrow_and_update().clone();
+        let Some((sequence, snapshot)) = snapshot else {
+            continue;
+        };
+        let skipped = sequence.saturating_sub(previous).saturating_sub(1);
+        if skipped > 0 {
+            tracing::warn!(
+                skipped,
+                "snapshot delivery lagged; older pending samples replaced"
+            );
+        }
+        previous = sequence;
+        match send_snapshot(&client, &service_url, &agent_token, &snapshot).await {
             Ok(()) => tracing::debug!("snapshot accepted"),
-            Err(SnapshotSendError::Unauthorized) => {
-                return Err(
-                    "agent credential was rejected; follow the documented rotate or re-enroll workflow"
-                        .into(),
-                );
-            }
+            Err(SnapshotSendError::Unauthorized) => return Err(SnapshotSendError::Unauthorized),
             Err(SnapshotSendError::Transient(error)) => {
                 tracing::warn!(%error, "snapshot delivery failed; the next interval will retry with fresh data");
             }
         }
     }
+    Ok(())
 }
 
 async fn load_or_enroll(
@@ -734,6 +773,86 @@ fn rate_per_second(bytes: u64, elapsed: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn slow_snapshot_delivery_keeps_only_the_latest_pending_sample() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn read_body(stream: &mut tokio::net::TcpStream) -> serde_json::Value {
+            let mut request = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).await.unwrap();
+                request.push(byte[0]);
+                assert!(request.len() < 16 * 1024);
+            }
+            let headers = String::from_utf8(request).unwrap();
+            let length: usize = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse().ok())
+                        .flatten()
+                })
+                .unwrap();
+            let mut body = vec![0_u8; length];
+            stream.read_exact(&mut body).await.unwrap();
+            serde_json::from_slice(&body).unwrap()
+        }
+        async fn reply(stream: &mut tokio::net::TcpStream) {
+            let body = r#"{"accepted":true,"server_time_unix_ms":1,"clock_skew_ms":0}"#;
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        }
+        fn sample(at: u64) -> SystemSnapshot {
+            serde_json::from_value(serde_json::json!({
+                "protocol_version": 2, "sample_id": format!("sample-{at}"), "collected_at_unix_ms": at,
+                "host_name": "test", "agent_version": "test", "operating_system": "Linux",
+                "kernel_version": "test", "architecture": "x86_64", "cpu_name": "test", "cpu_cores": 1,
+                "virtualization": "", "region": "", "group": "", "uptime_seconds": 1,
+                "cpu_usage_percent": 1, "load_one": 0, "load_five": 0, "load_fifteen": 0,
+                "memory_total_bytes": 1, "memory_used_bytes": 1, "swap_total_bytes": 0, "swap_used_bytes": 0,
+                "disk_total_bytes": 1, "disk_used_bytes": 1, "network_receive_bytes_per_second": 0,
+                "network_transmit_bytes_per_second": 0, "network_total_received_bytes": at,
+                "network_total_transmitted_bytes": at
+            })).unwrap()
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let service_url =
+            Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let (tx, rx) = watch::channel(None);
+        let worker = tokio::spawn(send_snapshots(
+            Client::new(),
+            service_url,
+            "test-token".into(),
+            rx,
+        ));
+        tx.send_replace(Some((1, sample(1))));
+        let (mut first, _) = listener.accept().await.unwrap();
+        assert_eq!(read_body(&mut first).await["collected_at_unix_ms"], 1);
+        // While the first response is held back, collection can publish twice.
+        tx.send_replace(Some((2, sample(2))));
+        tx.send_replace(Some((3, sample(3))));
+        reply(&mut first).await;
+        let (mut second, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read_body(&mut second).await["collected_at_unix_ms"], 3);
+        reply(&mut second).await;
+        drop(tx);
+        assert!(worker.await.unwrap().is_ok());
+    }
 
     #[cfg(unix)]
     #[test]

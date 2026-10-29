@@ -124,9 +124,14 @@ listening and non-established sockets; UDP includes unconnected sockets. Running
 the Agent in a container does not turn container metrics into host metrics.
 Extended metrics are collected once per host-reporting tick on a blocking worker,
 not by a separate timer or from a cached sample. The default interval remains
-three seconds. Probe scheduling waits for the next due task, a completed probe,
-or configuration refresh instead of polling every 100 ms; probe intervals,
-timeouts, retry rules and concurrency limits are unchanged.
+three seconds. Host collection and probe scheduling do not wait for a slow
+Service response. At most one host snapshot request is in flight, with one
+latest pending snapshot; at most one probe-result batch is in flight, with
+four pending results per configured task. Replaced pending samples and failed
+deliveries are logged; there is no unbounded offline retry queue. Network stalls
+can therefore leave reporting gaps even while local collection continues.
+Probe intervals, latency calculations, timeouts, retry rules and concurrency
+limits are unchanged.
 
 AMD GPU metrics use readable sysfs fields; NVIDIA uses a fixed `nvidia-smi` command
 with bounded output/time. Hardware, drivers, permissions and hardened systemd

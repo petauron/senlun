@@ -130,6 +130,12 @@ pub fn migrate_storage(source: &Path, destination: &Path, max_bytes: u64) -> Res
         fs::copy(backup.join(name), staging.path().join(name))?;
         fs::File::open(staging.path().join(name))?.sync_all()?;
     }
+    // Themes contain the selected theme and its settings, outside SQLite.
+    let themes = source_parent.join("themes");
+    if themes.try_exists()? {
+        let mut budget = 1024 * 1024 * 1024;
+        copy_theme_assets(&themes, &staging.path().join("themes"), &mut budget, 0)?;
+    }
     let receipt = serde_json::json!({
         "version": 1, "source": source, "backup": backup, "store_id": id
     });
@@ -149,6 +155,36 @@ pub fn migrate_storage(source: &Path, destination: &Path, max_bytes: u64) -> Res
     }
     fs::rename(staging.path(), destination)?;
     fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+fn copy_theme_assets(source: &Path, destination: &Path, budget: &mut u64, depth: u8) -> Result<()> {
+    let metadata = fs::symlink_metadata(source)?;
+    if metadata.file_type().is_symlink() || depth > 32 {
+        return Err("theme migration refuses links or excessive nesting".into());
+    }
+    if metadata.is_dir() {
+        fs::create_dir(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            copy_theme_assets(
+                &entry.path(),
+                &destination.join(entry.file_name()),
+                budget,
+                depth + 1,
+            )?;
+        }
+        fs::set_permissions(destination, metadata.permissions())?;
+        fs::File::open(destination)?.sync_all()?;
+    } else if metadata.is_file() {
+        *budget = budget
+            .checked_sub(metadata.len())
+            .ok_or("theme migration exceeds size limit")?;
+        fs::copy(source, destination)?;
+        fs::File::open(destination)?.sync_all()?;
+    } else {
+        return Err("theme migration requires regular files and directories".into());
+    }
     Ok(())
 }
 

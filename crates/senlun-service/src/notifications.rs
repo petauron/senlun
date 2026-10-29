@@ -701,6 +701,11 @@ mod tests {
         let old_cycle =
             crate::control::period_start(billing_boundary - 1, options.traffic_reset_day);
         let db = storage.connection().unwrap();
+        // This fixture represents a pre-existing UTC schedule.
+        db.execute(
+            "UPDATE node_options SET data=json_remove(data,'$.traffic_reset_transition') WHERE node_id=?1",
+            [&node_id],
+        ).unwrap();
         db.execute(
             "INSERT INTO traffic_periods(node_id,cycle_start_ms,raw_up,raw_down,used_up,used_down) VALUES(?1,?2,40,50,40,50)",
             params![node_id, integer(old_cycle)],
@@ -722,6 +727,82 @@ mod tests {
             )
             .unwrap();
         assert_eq!(retained, 90);
+    }
+
+    #[test]
+    fn traffic_period_alert_fires_and_recovers_on_the_next_approximate_cycle() {
+        let (_directory, storage, node) = crate::control_tests::fixture();
+        let mut options = NodeOptions {
+            id: node.node_id.clone(),
+            name: "test-node".into(),
+            currency: "USD".into(),
+            traffic_limit_bytes: 100,
+            traffic_limit_type: "sum".into(),
+            traffic_reset_day: 29,
+            ..NodeOptions::default()
+        };
+        storage
+            .save_node_options(&node.node_id, &mut options)
+            .unwrap();
+        let state = storage.admin_state().unwrap();
+        let boundary = state["nodes"][0]["traffic_next_reset_unix_ms"]
+            .as_u64()
+            .unwrap();
+        let mut traffic = rule("traffic");
+        traffic.id.clear();
+        traffic.node_ids = vec![node.node_id.clone()];
+        traffic.threshold = 50.0;
+        traffic.duration_seconds = 0;
+        storage.save_alert_rule(&mut traffic).unwrap();
+        let token = crate::storage::hash_token(&node.agent_token);
+        storage
+            .ingest(
+                &token,
+                &crate::control_tests::sample(boundary - 2000, 1000, 2000),
+                boundary - 2000,
+            )
+            .unwrap();
+        storage
+            .ingest(
+                &token,
+                &crate::control_tests::sample(boundary + 1000, 1060, 2000),
+                boundary + 1000,
+            )
+            .unwrap();
+        storage.evaluate_alerts(boundary + 1000, 90_000).unwrap();
+        let status = || -> String {
+            storage
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM alert_incidents WHERE node_id=?1 AND rule_id=?2",
+                    params![node.node_id, traffic.id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(status(), "firing");
+
+        let next = crate::control::period_start(boundary + 35 * 86_400_000, 29);
+        storage.evaluate_alerts(next, 90_000).unwrap();
+        assert_eq!(
+            status(),
+            "firing",
+            "absence of a new sample is not recovery"
+        );
+        storage
+            .ingest(
+                &token,
+                &crate::control_tests::sample(next + 1000, 1070, 2000),
+                next + 1000,
+            )
+            .unwrap();
+        storage.evaluate_alerts(next + 1000, 90_000).unwrap();
+        assert_eq!(
+            status(),
+            "resolved",
+            "a lower new-cycle count recovers automatically"
+        );
     }
 
     fn configured_storage() -> (tempfile::TempDir, Storage, String) {

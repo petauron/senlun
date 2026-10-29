@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { ProbeComparison } from '@/utils/admin'
 import { Icon } from '@iconify/vue'
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
 import { Button } from '@/components/ui/button'
@@ -71,13 +71,22 @@ async function reload(): Promise<void> {
   finally {
     if (current === generation) {
       loading.value = false
-      refreshTimer = setTimeout(() => void reload(), 30000)
+      if (document.visibilityState === 'visible')
+        refreshTimer = setTimeout(() => void reload(), 30000)
     }
   }
 }
 
 watch(() => [task.value?.id, hours.value], () => void reload(), { immediate: true })
+function onVisibilityChange(): void {
+  if (document.visibilityState !== 'visible')
+    clearTimeout(refreshTimer)
+  else if (!loading.value && task.value)
+    void reload()
+}
+onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   clearTimeout(refreshTimer)
   ++generation
   controller?.abort()

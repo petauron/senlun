@@ -4,6 +4,53 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.36](https://github.com/petauron/senlun/compare/v0.1.0-alpha.35...v0.1.0-alpha.36) (2026-10-29)
+
+
+### Bug Fixes
+
+* **security:** update zip to patched release ([1ebbaaf](https://github.com/petauron/senlun/commit/1ebbaaf3845daddfeacc186c9b5d02eed09cc7d9))
+
+## [0.1.0-alpha.35](https://github.com/petauron/senlun/compare/v0.1.0-alpha.34...v0.1.0-alpha.35) (2026-10-29)
+
+
+### Bug Fixes
+
+* hide unavailable IPv6 probe switch ([2ff6b29](https://github.com/petauron/senlun/commit/2ff6b296ac30792a877e00ab304a528fa63c2f98))
+
+## [0.1.0-alpha.34](https://github.com/petauron/senlun/compare/v0.1.0-alpha.33...v0.1.0-alpha.34) (2026-10-29)
+
+
+### Performance Improvements
+
+* reduce monitoring overhead and protect probe scheduling ([b6d0130](https://github.com/petauron/senlun/commit/b6d0130a3a381daa4a5605b8f151367dee5ea35b)), closes [#113](https://github.com/petauron/senlun/issues/113)
+
+## [0.1.0-alpha.33](https://github.com/petauron/senlun/compare/v0.1.0-alpha.32...v0.1.0-alpha.33) (2026-10-29)
+
+
+### Bug Fixes
+
+* apply traffic reset day immediately ([63001e4](https://github.com/petauron/senlun/commit/63001e48cdfc6e43254f3cffb6c8e1567d3b8cfe)), closes [#111](https://github.com/petauron/senlun/issues/111)
+
+## [0.1.0-alpha.32](https://github.com/petauron/senlun/compare/v0.1.0-alpha.31...v0.1.0-alpha.32) (2026-10-29)
+
+
+### Features
+
+* support month-end traffic reset days ([5b1a4ba](https://github.com/petauron/senlun/commit/5b1a4ba536ef004e11961f23a68a81ebfa4cf671)), closes [#111](https://github.com/petauron/senlun/issues/111)
+
+## [0.1.0-alpha.31](https://github.com/petauron/senlun/compare/v0.1.0-alpha.30...v0.1.0-alpha.31) (2026-10-28)
+
+
+### Features
+
+* rename Senulun to Senlun with retained storage migration ([#108](https://github.com/petauron/senlun/issues/108)) ([60c7eea](https://github.com/petauron/senlun/commit/60c7eeabc7ea8a9b1e0e496171a7e10fe5d94e56))
+
+
+### Bug Fixes
+
+* retain installed themes during Senlun storage rename ([#109](https://github.com/petauron/senlun/issues/109)) ([5b54bf5](https://github.com/petauron/senlun/commit/5b54bf53a6edd73f4300d1c963fd775d0ba8d51c))
+
 ## [0.1.0-alpha.30](https://github.com/petauron/senulun/compare/v0.1.0-alpha.29...v0.1.0-alpha.30) (2026-10-27)
 
 

@@ -473,9 +473,9 @@ impl Storage {
             [cutoff],
         )?;
         let removed=transaction.execute("DELETE FROM snapshot_minutes WHERE id IN
-            (SELECT id FROM snapshot_minutes WHERE bucket_ms+60000<=?1 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
+            (SELECT id FROM snapshot_minutes WHERE bucket_ms<=?1-60000 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
         let probe_removed=transaction.execute("DELETE FROM probe_minutes WHERE id IN
-            (SELECT id FROM probe_minutes WHERE bucket_ms+60000<=?1 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
+            (SELECT id FROM probe_minutes WHERE bucket_ms<=?1-60000 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
         rollups::flush(&transaction, now_ms, false)?;
         transaction.commit()?;
         Ok(removed

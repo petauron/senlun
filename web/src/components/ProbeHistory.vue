@@ -84,7 +84,7 @@ watch([autoRefresh, refreshIntervalSeconds], ([enabled, seconds]) => {
   refreshTimer = undefined
   if (enabled) {
     refreshTimer = setInterval(() => {
-      if (document.visibilityState === 'visible')
+      if (document.visibilityState === 'visible' && !loading.value)
         void reload()
     }, seconds * 1000)
   }

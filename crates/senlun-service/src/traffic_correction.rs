@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    control::{TrafficCorrection, options_or_none, period_start, verify_nodes},
+    control::{TrafficCorrection, options_or_none, period_start, reset_day, verify_nodes},
     storage::{Storage, StorageError},
 };
 
@@ -60,7 +60,7 @@ fn fresh_sample(sampled: u64, now: u64, offline_after_seconds: u64) -> Result<()
 fn context(db: &Connection, id: &str, now: u64, offline: u64) -> Result<Value, StorageError> {
     verify_nodes(db, &[id.to_owned()])?;
     let options = options_or_none(db, id)?;
-    let reset_day = options.as_ref().map_or(1, |value| value.traffic_reset_day);
+    let reset_day = reset_day(options.as_ref());
     let direction = options
         .as_ref()
         .map_or("sum", |value| value.traffic_limit_type.as_str());

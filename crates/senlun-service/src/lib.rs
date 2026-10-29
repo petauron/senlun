@@ -1780,6 +1780,7 @@ mod tests {
             "traffic_used_up",
             "traffic_used_down",
             "selected_traffic",
+            "traffic_next_reset_unix_ms",
         ] {
             node.remove(key);
         }

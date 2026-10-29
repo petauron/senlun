@@ -39,6 +39,7 @@ const tagColors: { value: TagColor, label: string }[] = [
 ]
 const invalidTagPattern = /[;<>]/
 const trailingSemicolonsPattern = /;+$/
+const utcTime = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
 const { busy, error, success, run } = useAdminAction(props.refresh)
 const actionLabels = { 'rotate': '轮换 Agent 凭据', 'revoke': '撤销 Agent 凭据', 'delete': '删除节点', 'reset-traffic': '重置本周期流量' }
 const actionHints = {
@@ -217,7 +218,9 @@ async function execute(): Promise<void> {
           <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">当前流量状态：{{ trafficSelectionDetails(selected.selected_traffic) }}</p>
           <label class="grid gap-2 text-sm">每周期额度（GiB；0 为不限）<Input v-model="quotaGiB" type="number" min="0" :max="Number.MAX_SAFE_INTEGER / 1024 ** 3" step="any" required /></label>
           <label class="grid gap-2 text-sm">流量计数方式<select v-model="draft.traffic_limit_type" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring"><option value="sum">上传 + 下载</option><option value="max">上传、下载中较大值</option><option value="min">上传、下载中较小值</option><option value="up">仅上传</option><option value="down">仅下载</option></select></label>
-          <label class="grid gap-2 text-sm">每月重置日（1–28）<Input v-model="draft.traffic_reset_day" type="number" min="1" max="28" step="1" required /></label>
+          <label class="grid gap-2 text-sm">每月重置日（1–31，UTC）<Input v-model="draft.traffic_reset_day" type="number" min="1" max="31" step="1" required /></label>
+          <p class="text-sm text-muted-foreground sm:col-span-3">按 UTC 00:00 重置；当月没有所选日期时，在该月最后一天重置。新日期立即生效，现有计数保留至下一个新日期。流量是近似统计，账单以服务商为准。</p>
+          <p v-if="selected?.traffic_next_reset_unix_ms != null" class="text-sm text-muted-foreground sm:col-span-3">下次重置：{{ utcTime(selected.traffic_next_reset_unix_ms) }}</p>
         </fieldset>
         <div class="flex flex-wrap gap-2">
           <Button class="min-h-11" type="submit" :disabled="busy">
