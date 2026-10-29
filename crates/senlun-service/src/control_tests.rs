@@ -524,19 +524,35 @@ fn traffic_period_changed_reset_preserves_ledger_and_handles_retries_and_correct
         "saving a schedule must retain samples"
     );
 
+    assert_traffic_after_reset(
+        storage,
+        &directory.path().join("senlun.db"),
+        &hash,
+        &node.node_id,
+        boundary,
+    );
+}
+
+fn assert_traffic_after_reset(
+    storage: Storage,
+    db_path: &std::path::Path,
+    hash: &str,
+    node_id: &str,
+    boundary: u64,
+) {
     storage
-        .ingest(&hash, &sample(boundary - 2000, 1200, 2300), boundary - 2000)
+        .ingest(hash, &sample(boundary - 2000, 1200, 2300), boundary - 2000)
         .unwrap();
-    let waiting = local_traffic(&storage, &node.node_id, boundary);
+    let waiting = local_traffic(&storage, node_id, boundary);
     assert_eq!(waiting.status, "no_data");
     assert!(waiting.used_bytes.is_none());
     storage
-        .ingest(&hash, &sample(boundary + 1000, 1300, 2400), boundary + 1000)
+        .ingest(hash, &sample(boundary + 1000, 1300, 2400), boundary + 1000)
         .unwrap();
     let next = sample(boundary + 2000, 1350, 2450);
-    storage.ingest(&hash, &next, boundary + 2000).unwrap();
-    storage.ingest(&hash, &next, boundary + 3000).unwrap();
-    let selection = local_traffic(&storage, &node.node_id, boundary + 3000);
+    storage.ingest(hash, &next, boundary + 2000).unwrap();
+    storage.ingest(hash, &next, boundary + 3000).unwrap();
+    let selection = local_traffic(&storage, node_id, boundary + 3000);
     assert_eq!(selection.status, "ready");
     assert_eq!(
         (selection.up_bytes, selection.down_bytes),
@@ -545,45 +561,39 @@ fn traffic_period_changed_reset_preserves_ledger_and_handles_retries_and_correct
     assert_eq!(selection.percentage, Some(30.0));
 
     storage
-        .ingest(&hash, &sample(boundary + 4000, 25, 30), boundary + 4000)
+        .ingest(hash, &sample(boundary + 4000, 25, 30), boundary + 4000)
         .unwrap();
     let before_restart = sample(boundary + 5000, 35, 40);
     storage
-        .ingest(&hash, &before_restart, boundary + 5000)
+        .ingest(hash, &before_restart, boundary + 5000)
         .unwrap();
-    let current = local_traffic(&storage, &node.node_id, boundary + 5000);
+    let current = local_traffic(&storage, node_id, boundary + 5000);
     assert_eq!(
         (current.up_bytes, current.down_bytes),
         (Some(160), Some(160))
     );
     storage.flush_monitoring(boundary + 5500, true).unwrap();
     drop(storage);
-    let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+    let storage = Storage::open(db_path, 64 * 1024 * 1024).unwrap();
     storage
-        .ingest(&hash, &before_restart, boundary + 5500)
+        .ingest(hash, &before_restart, boundary + 5500)
         .unwrap();
-    let after_restart = local_traffic(&storage, &node.node_id, boundary + 5500);
+    let after_restart = local_traffic(&storage, node_id, boundary + 5500);
     assert_eq!(after_restart.status, "ready");
     assert_eq!(
         (after_restart.up_bytes, after_restart.down_bytes),
         (Some(160), Some(160))
     );
     storage
-        .ingest(&hash, &sample(boundary + 6000, 45, 50), boundary + 6000)
+        .ingest(hash, &sample(boundary + 6000, 45, 50), boundary + 6000)
         .unwrap();
-    let correction = browser_traffic_request(&storage, &node.node_id, boundary + 6000);
+    let correction = browser_traffic_request(&storage, node_id, boundary + 6000);
     let latest = sample(boundary + 7000, 55, 60);
-    storage.ingest(&hash, &latest, boundary + 7000).unwrap();
+    storage.ingest(hash, &latest, boundary + 7000).unwrap();
     storage
-        .correct_browser_traffic(
-            &node.node_id,
-            &correction,
-            "test-admin",
-            boundary + 7000,
-            90,
-        )
+        .correct_browser_traffic(node_id, &correction, "test-admin", boundary + 7000, 90)
         .unwrap();
-    let corrected = local_traffic(&storage, &node.node_id, boundary + 7000);
+    let corrected = local_traffic(&storage, node_id, boundary + 7000);
     assert_eq!(corrected.status, "ready");
     assert_eq!(
         (corrected.up_bytes, corrected.down_bytes),
@@ -592,9 +602,9 @@ fn traffic_period_changed_reset_preserves_ledger_and_handles_retries_and_correct
     storage.flush_monitoring(boundary + 8000, true).unwrap();
     drop(storage);
 
-    let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
-    storage.ingest(&hash, &latest, boundary + 9000).unwrap();
-    let restored = local_traffic(&storage, &node.node_id, boundary + 9000);
+    let storage = Storage::open(db_path, 64 * 1024 * 1024).unwrap();
+    storage.ingest(hash, &latest, boundary + 9000).unwrap();
+    let restored = local_traffic(&storage, node_id, boundary + 9000);
     assert_eq!(restored.status, "ready");
     assert_eq!(
         (restored.up_bytes, restored.down_bytes),
