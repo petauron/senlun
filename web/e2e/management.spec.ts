@@ -21,7 +21,10 @@ test('private monitoring, setup lockout, administrator CSRF, and logout enforce 
   const replay = await mutation(page.request, '/api/auth/setup', { username: testUsername, password: testPassword })
   expect(replay.status()).toBe(409)
   const state = await (await page.request.get('/api/admin/state')).json()
-  const rejected = await page.request.post('/api/admin/settings', { headers: { Origin: 'http://127.0.0.1:18080' }, data: state.settings })
+  const rejected = await page.request.post('/api/admin/settings', {
+    headers: { Origin: 'http://127.0.0.1:18080' },
+    data: state.settings,
+  })
   expect(rejected.status()).toBe(403)
   await page.getByRole('button', { name: '退出登录' }).click()
   await expect(page).toHaveURL('/login')
@@ -43,7 +46,14 @@ test('public mode still hides hidden nodes and never exposes administrator write
     await page.getByLabel('从监控视图隐藏（管理列表保留）').check()
     await page.getByRole('button', { name: '保存节点' }).click()
     await expect(page.getByRole('status').filter({ hasText: '已保存' })).toBeVisible()
-    const dashboard = await request.post('/api/rpc2', { data: { jsonrpc: '2.0', id: 1, method: 'common:getDashboard', params: {} } })
+    const dashboard = await request.post('/api/rpc2', {
+      data: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'common:getDashboard',
+        params: {},
+      },
+    })
     expect(dashboard.ok()).toBe(true)
     expect((await dashboard.json()).result.clients).not.toHaveProperty(id)
     expect((await request.get(`/api/v1/nodes/${id}/probes?hours=24`)).status()).toBe(404)

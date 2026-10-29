@@ -17,7 +17,12 @@ describe('getFlagSrc', () => {
     }
   })
 
-  it.each(['', 'ZZ', '../../api/public', 'unknown'])('uses the packaged placeholder for %s', (region) => {
+  it.each([
+    '',
+    'ZZ',
+    '../../api/public',
+    'unknown',
+  ])('uses the packaged placeholder for %s', (region) => {
     expect(getFlagSrc(region)).toBe('/assets/flags/xx.svg')
   })
 })

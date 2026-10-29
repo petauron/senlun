@@ -253,7 +253,9 @@ export class RpcClient {
     catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         throw new RpcError(
-          timedOut ? -32000 : -32800,
+          timedOut
+            ? -32000
+            : -32800,
           timedOut ? 'RPC request timed out' : 'RPC request cancelled',
         )
       }

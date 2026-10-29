@@ -20,5 +20,7 @@ export function loginDestination(value: unknown): string {
   if (typeof value !== 'string' || !value.startsWith('/') || value.startsWith('//') || value.includes('\\'))
     return '/admin'
   const path = value.split(pathSuffix)[0]
-  return path === '/login' ? '/admin' : value
+  return path === '/login'
+    ? '/admin'
+    : value
 }

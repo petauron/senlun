@@ -41,7 +41,12 @@ const invalidTagPattern = /[;<>]/
 const trailingSemicolonsPattern = /;+$/
 const utcTime = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
 const { busy, error, success, run } = useAdminAction(props.refresh)
-const actionLabels = { 'rotate': '轮换 Agent 凭据', 'revoke': '撤销 Agent 凭据', 'delete': '删除节点', 'reset-traffic': '重置本周期流量' }
+const actionLabels = {
+  'rotate': '轮换 Agent 凭据',
+  'revoke': '撤销 Agent 凭据',
+  'delete': '删除节点',
+  'reset-traffic': '重置本周期流量',
+}
 const actionHints = {
   'rotate': '旧凭据会立即失效。请保存新凭据并更新对应 Agent，否则节点将停止上报。',
   'revoke': '对应 Agent 将无法继续上报。需要重新注册后才能恢复。',
@@ -50,7 +55,9 @@ const actionHints = {
 }
 
 watch(selected, (node) => {
-  draft.value = node ? nodeMetadata(node) : null
+  draft.value = node
+    ? nodeMetadata(node)
+    : null
   newTagText.value = ''
   tagError.value = ''
   quotaGiB.value = (node?.traffic_limit_bytes ?? 0) / 1024 ** 3
@@ -71,7 +78,9 @@ function addTag(): void {
   }
   const tag = `${text}<${newTagColor.value}>`
   const existing = draft.value.tags.trim().replace(trailingSemicolonsPattern, '')
-  const next = existing ? `${existing};${tag}` : tag
+  const next = existing
+    ? `${existing};${tag}`
+    : tag
   if (new TextEncoder().encode(next).length > 512) {
     tagError.value = '标签总长度不能超过 512 个字符。'
     return
@@ -83,13 +92,21 @@ function addTag(): void {
 
 function choose(event: Event): void {
   secret.value = ''
-  void router.replace({ query: { ...route.query, node: (event.target as HTMLSelectElement).value } })
+  void router.replace({
+    query: { ...route.query, node: (event.target as HTMLSelectElement).value },
+  })
 }
 
 async function save(): Promise<void> {
   if (!draft.value)
     return
-  const node = { ...draft.value, expired_at_unix_ms: expires.value ? new Date(expires.value).getTime() : null, traffic_limit_bytes: Math.round(quotaGiB.value * 1024 ** 3) }
+  const node = {
+    ...draft.value,
+    expired_at_unix_ms: expires.value
+      ? new Date(expires.value).getTime()
+      : null,
+    traffic_limit_bytes: Math.round(quotaGiB.value * 1024 ** 3),
+  }
   await run(async () => {
     await getSharedApi().post(`admin/nodes/${encodeURIComponent(node.id)}`, node)
   })

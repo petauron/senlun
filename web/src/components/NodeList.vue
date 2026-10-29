@@ -39,16 +39,66 @@ const { pickSurfaceClass } = useBackgroundSurface()
 const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
 const columns: ColumnConfig[] = [
-  { key: 'status', label: '状态', width: '40px', sortable: true },
-  { key: 'os', label: '系统', width: '40px', sortable: true },
-  { key: 'name', label: '节点', width: 'minmax(160px, 1fr)', sortable: true },
-  { key: 'tags', label: '标签', width: 'minmax(180px, 1fr)', sortable: false },
-  { key: 'cpu', label: 'CPU', width: '100px', sortable: true },
-  { key: 'mem', label: '内存', width: '100px', sortable: true },
-  { key: 'disk', label: '硬盘', width: '100px', sortable: true },
-  { key: 'traffic', label: '流量', width: '100px', sortable: true },
-  { key: 'rate', label: '速率', width: '80px', sortable: true },
-  { key: 'networks', label: '三网', width: '136px', sortable: false },
+  {
+    key: 'status',
+    label: '状态',
+    width: '40px',
+    sortable: true,
+  },
+  {
+    key: 'os',
+    label: '系统',
+    width: '40px',
+    sortable: true,
+  },
+  {
+    key: 'name',
+    label: '节点',
+    width: 'minmax(160px, 1fr)',
+    sortable: true,
+  },
+  {
+    key: 'tags',
+    label: '标签',
+    width: 'minmax(180px, 1fr)',
+    sortable: false,
+  },
+  {
+    key: 'cpu',
+    label: 'CPU',
+    width: '100px',
+    sortable: true,
+  },
+  {
+    key: 'mem',
+    label: '内存',
+    width: '100px',
+    sortable: true,
+  },
+  {
+    key: 'disk',
+    label: '硬盘',
+    width: '100px',
+    sortable: true,
+  },
+  {
+    key: 'traffic',
+    label: '流量',
+    width: '100px',
+    sortable: true,
+  },
+  {
+    key: 'rate',
+    label: '速率',
+    width: '80px',
+    sortable: true,
+  },
+  {
+    key: 'networks',
+    label: '三网',
+    width: '136px',
+    sortable: false,
+  },
 ]
 
 const sortKey = ref<string>('')
@@ -58,7 +108,9 @@ function handleSort(col: ColumnConfig) {
   if (!col.sortable)
     return
   if (sortKey.value === col.key) {
-    sortDir.value = sortDir.value === 1 ? -1 : 1
+    sortDir.value = sortDir.value === 1
+      ? -1
+      : 1
   }
   else {
     sortKey.value = col.key
@@ -78,25 +130,40 @@ const sortedNodes = computed(() => {
       case 'region': {
         const va = (a.region || '').toLowerCase()
         const vb = (b.region || '').toLowerCase()
-        return dir * (va < vb ? -1 : va > vb ? 1 : 0)
+        return dir * (va < vb
+          ? -1
+          : va > vb
+            ? 1
+            : 0)
       }
       case 'name': {
         const va = (a.name || '').toLowerCase()
         const vb = (b.name || '').toLowerCase()
-        return dir * (va < vb ? -1 : va > vb ? 1 : 0)
+        return dir * (va < vb
+          ? -1
+          : va > vb
+            ? 1
+            : 0)
       }
       case 'os': {
         const va = (a.os || '').toLowerCase()
         const vb = (b.os || '').toLowerCase()
-        return dir * (va < vb ? -1 : va > vb ? 1 : 0)
+        return dir * (va < vb
+          ? -1
+          : va > vb
+            ? 1
+            : 0)
       }
       case 'cpu': return dir * ((a.cpu ?? 0) - (b.cpu ?? 0))
       case 'mem': return dir * ((a.ram ?? 0) / (a.mem_total || 1) - (b.ram ?? 0) / (b.mem_total || 1))
       case 'disk': return dir * ((a.disk ?? 0) / (a.disk_total || 1) - (b.disk ?? 0) / (b.disk_total || 1))
       case 'traffic':
         // Unknown source values always sort last, never as zero usage.
-        if (a.selected_traffic?.percentage === null || a.selected_traffic?.percentage === undefined)
-          return b.selected_traffic?.percentage === null || b.selected_traffic?.percentage === undefined ? 0 : 1
+        if (a.selected_traffic?.percentage === null || a.selected_traffic?.percentage === undefined) {
+          return b.selected_traffic?.percentage === null || b.selected_traffic?.percentage === undefined
+            ? 0
+            : 1
+        }
         if (b.selected_traffic?.percentage === null || b.selected_traffic?.percentage === undefined)
           return -1
         return dir * (a.selected_traffic.percentage - b.selected_traffic.percentage)
@@ -122,7 +189,9 @@ const offlineOverlayContentStyle = computed(() => {
     ? nameIndex + 1
     : regionIndex !== -1
       ? regionIndex + 2
-      : statusIndex === -1 ? 1 : statusIndex + 2
+      : statusIndex === -1
+        ? 1
+        : statusIndex + 2
   return { gridColumn: `${startColumn} / -1` }
 })
 
@@ -133,11 +202,15 @@ function handleClick(node: NodeData) {
 function getAriaSort(col: ColumnConfig): 'ascending' | 'descending' | 'none' {
   if (sortKey.value !== col.key)
     return 'none'
-  return sortDir.value === 1 ? 'ascending' : 'descending'
+  return sortDir.value === 1
+    ? 'ascending'
+    : 'descending'
 }
 
 function getRowTransitionKey(node: NodeData): string {
-  return props.transitionKey ? `${props.transitionKey}-${node.uuid}` : node.uuid
+  return props.transitionKey
+    ? `${props.transitionKey}-${node.uuid}`
+    : node.uuid
 }
 
 function getRowTransitionStyle(index: number): Record<string, string> {

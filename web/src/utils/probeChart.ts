@@ -35,14 +35,19 @@ export function probeChartSeries(
   if (!byBucket.size)
     return []
 
-  const indexes = [...byBucket.keys()]
+  const indexes = [
+    ...byBucket.keys(),
+  ]
   const first = Math.min(...indexes)
   const last = Math.max(...indexes)
   const rows = Array.from({ length: last - first + 1 }, (_, offset) => {
     const index = first + offset
     const point = byBucket.get(index)
     const time = point?.received_at_unix_ms ?? Math.min(rangeEndMs, rangeStartMs + (index + 0.5) * bucketMs)
-    return { time: new Date(time).toISOString(), latency: point?.latency_ms ?? null }
+    return {
+      time: new Date(time).toISOString(),
+      latency: point?.latency_ms ?? null,
+    }
   })
   const options = {
     maxGapMultiplier: 6,
@@ -59,7 +64,12 @@ export function probeChartSeries(
         series[index]!.latency = null
     }
   }
-  return series.map(row => [Date.parse(row.time), typeof row.latency === 'number' ? row.latency : null])
+  return series.map(row => [
+    Date.parse(row.time),
+    typeof row.latency === 'number'
+      ? row.latency
+      : null,
+  ])
 }
 
 /** Plot the observed failure ratio in each bucket; never turn missing reports into 0%. */
@@ -84,7 +94,9 @@ export function probeFailureSeries(
     if (!current || point.received_at_unix_ms >= current.received_at_unix_ms)
       byBucket.set(index, point)
   }
-  const observed = [...byBucket.values()].sort((a, b) => a.received_at_unix_ms - b.received_at_unix_ms)
+  const observed = [
+    ...byBucket.values(),
+  ].sort((a, b) => a.received_at_unix_ms - b.received_at_unix_ms)
   if (!observed.length)
     return []
 

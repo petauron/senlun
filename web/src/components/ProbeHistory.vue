@@ -21,12 +21,16 @@ const app = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const presetRanges = [1, 6, 12, 24, 72, 168]
 const configuredHours = app.publicSettings?.theme_settings?.pingChartDefaultHours
-const defaultHours = typeof configuredHours === 'number' && presetRanges.includes(configuredHours) ? configuredHours : 1
+const defaultHours = typeof configuredHours === 'number' && presetRanges.includes(configuredHours)
+  ? configuredHours
+  : 1
 const hours = ref(props.selectedHours ?? defaultHours)
 const showDelay = ref(true)
 const showFailures = ref(true)
 const cutPeak = ref(false)
-const chartLayout = ref<'combined' | 'split'>(app.publicSettings?.theme_settings?.pingChartLayout === 'split' ? 'split' : 'combined')
+const chartLayout = ref<'combined' | 'split'>(app.publicSettings?.theme_settings?.pingChartLayout === 'split'
+  ? 'split'
+  : 'combined')
 const autoRefresh = ref(app.publicSettings?.theme_settings?.pingChartAutoRefresh !== false)
 const combinedChartRef = ref<unknown>(null)
 const latencyChartRef = ref<unknown>(null)
@@ -43,7 +47,9 @@ const availableRanges = computed(() => {
 })
 const refreshIntervalSeconds = computed(() => {
   const value = app.publicSettings?.theme_settings?.pingChartRefreshInterval
-  return typeof value === 'number' && Number.isFinite(value) ? Math.round(Math.min(300, Math.max(10, value))) : 60
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(300, Math.max(10, value)))
+    : 60
 })
 let refreshTimer: ReturnType<typeof setInterval> | undefined
 const data = shallowRef<ProbeHistory | null>(null)
@@ -66,7 +72,9 @@ async function reload(): Promise<void> {
   catch (cause) {
     if (current === generation) {
       data.value = null
-      error.value = cause instanceof Error ? cause.message : String(cause)
+      error.value = cause instanceof Error
+        ? cause.message
+        : String(cause)
     }
   }
   finally {
@@ -136,12 +144,35 @@ const summaryByTask = computed(() => new Map(data.value?.summary.map(summary => 
 const analysisTask = computed(() => tasks.value.find(task => task.id === analysisTaskId.value))
 const analysisSummary = computed(() => summaryByTask.value.get(analysisTaskId.value))
 const names = computed(() => new Map(data.value?.tasks.map(task => [task.id, task.name]) ?? []))
-const recent = computed(() => [...(data.value?.records ?? [])].filter(record => taskIds.value.has(record.task_id)).sort((a, b) => b.received_at_unix_ms - a.received_at_unix_ms).slice(0, 100))
+const recent = computed(() => [
+  ...(data.value?.records ?? []),
+].filter(record => taskIds.value.has(record.task_id)).sort((a, b) => b.received_at_unix_ms - a.received_at_unix_ms).slice(0, 100))
 const date = (value: number) => new Date(value).toLocaleString()
-const latency = (value: number | null | undefined) => value == null ? '无成功样本' : `${value.toFixed(1)} ms`
-const cardLatency = (value: number | null | undefined) => value == null ? '--' : `${Math.round(value)} ms`
-const analysisLatency = (value: number | null | undefined) => value == null ? '--' : `${Math.round(value)} ms`
-const colors = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#60A5FA', '#FFB347', '#F472B6', '#34D399', '#FB923C']
+function latency(value: number | null | undefined) {
+  return value == null
+    ? '无成功样本'
+    : `${value.toFixed(1)} ms`
+}
+function cardLatency(value: number | null | undefined) {
+  return value == null
+    ? '--'
+    : `${Math.round(value)} ms`
+}
+function analysisLatency(value: number | null | undefined) {
+  return value == null
+    ? '--'
+    : `${Math.round(value)} ms`
+}
+const colors = [
+  '#FF6B6B',
+  '#4ECDC4',
+  '#A78BFA',
+  '#60A5FA',
+  '#FFB347',
+  '#F472B6',
+  '#34D399',
+  '#FB923C',
+]
 const hexColor = /^#[0-9a-f]{6}$/i
 function taskColor(id: string): string {
   const configured = app.publicSettings?.theme_settings?.pingTaskColors
@@ -152,24 +183,44 @@ function taskColor(id: string): string {
   }
   return colors[tasks.value.findIndex(task => task.id === id) % colors.length] ?? colors[0]!
 }
-const rangeLabel = (range: number) => range < 24 || range % 24 !== 0 ? `${range} 小时` : `${range / 24} 天`
+function rangeLabel(range: number) {
+  return range < 24 || range % 24 !== 0
+    ? `${range} 小时`
+    : `${range / 24} 天`
+}
 function tooltipTime(value: number): string {
   const date = new Date(value)
   const pad = (number: number) => String(number).padStart(2, '0')
   const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}`
-  return hours.value < 24 ? `${clock}:${pad(date.getSeconds())}` : `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${clock}`
+  return hours.value < 24
+    ? `${clock}:${pad(date.getSeconds())}`
+    : `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${clock}`
 }
 
 function chartTooltip(params: unknown): HTMLElement {
   const root = document.createElement('div')
-  const points = (Array.isArray(params) ? params : [params]) as { seriesId?: unknown, seriesName?: unknown, data?: unknown, value?: unknown, color?: unknown }[]
+  const points = (Array.isArray(params)
+    ? params
+    : [params]) as { seriesId?: unknown, seriesName?: unknown, data?: unknown, value?: unknown, color?: unknown }[]
   const rows = points.flatMap((point) => {
     if (!point || typeof point !== 'object')
       return []
-    const pair = Array.isArray(point.data) ? point.data : point.value
+    const pair = Array.isArray(point.data)
+      ? point.data
+      : point.value
     if (!Array.isArray(pair) || typeof pair[0] !== 'number' || !Number.isFinite(pair[0]) || typeof pair[1] !== 'number' || !Number.isFinite(pair[1]))
       return []
-    return [{ time: pair[0] as number, value: pair[1] as number, name: String(point.seriesName ?? ''), failureRate: typeof point.seriesId === 'string' && point.seriesId.endsWith(':failure-rate'), color: typeof point.color === 'string' ? point.color : colors[0]! }]
+    return [
+      {
+        time: pair[0] as number,
+        value: pair[1] as number,
+        name: String(point.seriesName ?? ''),
+        failureRate: typeof point.seriesId === 'string' && point.seriesId.endsWith(':failure-rate'),
+        color: typeof point.color === 'string'
+          ? point.color
+          : colors[0]!,
+      },
+    ]
   }).sort((a, b) => Number(a.failureRate) - Number(b.failureRate) || a.value - b.value)
   if (!rows.length)
     return root
@@ -191,7 +242,9 @@ function chartTooltip(params: unknown): HTMLElement {
     name.textContent = row.name
     const value = document.createElement('span')
     value.style.cssText = 'margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums'
-    value.textContent = row.failureRate ? `${row.value.toFixed(2)}%` : `${Math.round(row.value)} ms`
+    value.textContent = row.failureRate
+      ? `${row.value.toFixed(2)}%`
+      : `${Math.round(row.value)} ms`
     line.append(dot, name, value)
     list.append(line)
   }
@@ -226,11 +279,15 @@ const chartThresholds = computed(() => {
   const settings = app.publicSettings?.theme_settings
   const value = (key: string, fallback: number, min: number, max: number) => {
     const candidate = settings?.[key]
-    return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= min && candidate <= max ? candidate : fallback
+    return typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= min && candidate <= max
+      ? candidate
+      : fallback
   }
   const color = (key: string, fallback: string) => {
     const candidate = settings?.[key]
-    return typeof candidate === 'string' && hexColor.test(candidate) ? candidate : fallback
+    return typeof candidate === 'string' && hexColor.test(candidate)
+      ? candidate
+      : fallback
   }
   return {
     latencyWarning: value('pingLatencyWarning', 160, 1, 5000),
@@ -257,8 +314,14 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         showSymbol: false,
         symbolSize: 3,
         smooth: cutPeak.value ? 0.6 : 0.1,
-        lineStyle: { width: 1.8, cap: 'round' as const, color: taskColor(task.id) },
-        itemStyle: { color: taskColor(task.id) },
+        lineStyle: {
+          width: 1.8,
+          cap: 'round' as const,
+          color: taskColor(task.id),
+        },
+        itemStyle: {
+          color: taskColor(task.id),
+        },
         connectNulls: false,
         data: taskChartData(task.id),
         markLine: index === 0
@@ -268,15 +331,25 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
               label: { show: true, position: 'insideEndTop' as const, fontSize: 10 },
               lineStyle: { width: 1, type: 'dashed' as const, opacity: 0.65 },
               data: [
-                { name: '延迟警告', yAxis: chartThresholds.value.latencyWarning, lineStyle: { color: chartThresholds.value.warningColor } },
-                { name: '延迟严重', yAxis: chartThresholds.value.latencyCritical, lineStyle: { color: chartThresholds.value.criticalColor } },
+                {
+                  name: '延迟警告',
+                  yAxis: chartThresholds.value.latencyWarning,
+                  lineStyle: { color: chartThresholds.value.warningColor },
+                },
+                {
+                  name: '延迟严重',
+                  yAxis: chartThresholds.value.latencyCritical,
+                  lineStyle: { color: chartThresholds.value.criticalColor },
+                },
               ],
             }
           : undefined,
         markPoint: {
           symbolSize: 28,
           label: { fontSize: 9, formatter: '峰值' },
-          data: [{ type: 'max' as const, name: '峰值' }],
+          data: [
+            { type: 'max' as const, name: '峰值' },
+          ],
         },
       }))
     : []
@@ -287,13 +360,25 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
           id: `${task.id}:failure-rate`,
           name: `${task.name} ${failureRateLabel(task.kind)}`,
           type: 'line' as const,
-          yAxisIndex: mode === 'combined' ? 1 : 0,
+          yAxisIndex: mode === 'combined'
+            ? 1
+            : 0,
           showSymbol: points.length === 1,
           symbolSize: 4,
           step: 'end' as const,
-          lineStyle: { width: 1.4, type: 'dashed' as const, color: taskColor(task.id), opacity: 0.8 },
-          areaStyle: { color: taskColor(task.id), opacity: 0.05 },
-          itemStyle: { color: taskColor(task.id) },
+          lineStyle: {
+            width: 1.4,
+            type: 'dashed' as const,
+            color: taskColor(task.id),
+            opacity: 0.8,
+          },
+          areaStyle: {
+            color: taskColor(task.id),
+            opacity: 0.05,
+          },
+          itemStyle: {
+            color: taskColor(task.id),
+          },
           connectNulls: false,
           data: points,
           markLine: index === 0
@@ -303,8 +388,16 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
                 label: { show: true, position: 'insideEndTop' as const, fontSize: 10 },
                 lineStyle: { width: 1, type: 'dotted' as const, opacity: 0.65 },
                 data: [
-                  { name: `${chartFailureLabel.value}警告`, yAxis: chartThresholds.value.failureWarning, lineStyle: { color: chartThresholds.value.warningColor } },
-                  { name: `${chartFailureLabel.value}严重`, yAxis: chartThresholds.value.failureCritical, lineStyle: { color: chartThresholds.value.criticalColor } },
+                  {
+                    name: `${chartFailureLabel.value}警告`,
+                    yAxis: chartThresholds.value.failureWarning,
+                    lineStyle: { color: chartThresholds.value.warningColor },
+                  },
+                  {
+                    name: `${chartFailureLabel.value}严重`,
+                    yAxis: chartThresholds.value.failureCritical,
+                    lineStyle: { color: chartThresholds.value.criticalColor },
+                  },
                 ],
               }
             : undefined,
@@ -319,19 +412,26 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
     axisLabel: { fontSize: 11, color: secondary },
     axisLine: { show: false },
     axisTick: { show: false },
-    splitLine: { lineStyle: { color: grid, type: 'dashed' as const } },
+    splitLine: {
+      lineStyle: { color: grid, type: 'dashed' as const },
+    },
   }
   const failureAxis = {
     type: 'value' as const,
     name: `${chartFailureLabel.value} (%)`,
     min: 0,
     max: 100,
-    position: mode === 'combined' ? 'right' as const : 'left' as const,
+    position: mode === 'combined'
+      ? 'right' as const
+      : 'left' as const,
     nameTextStyle: { color: secondary },
     axisLabel: { fontSize: 11, color: secondary, formatter: '{value}%' },
     axisLine: { show: false },
     axisTick: { show: false },
-    splitLine: { show: mode === 'failure', lineStyle: { color: grid, type: 'dashed' as const } },
+    splitLine: {
+      show: mode === 'failure',
+      lineStyle: { color: grid, type: 'dashed' as const },
+    },
   }
   return {
     darkMode: app.isDark,
@@ -348,28 +448,69 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
       borderWidth: 0,
       borderRadius: 6,
       textStyle: { color: foreground, fontSize: 12, lineHeight: 20 },
-      axisPointer: { type: 'cross', crossStyle: { color: secondary }, lineStyle: { color: border, width: 1, type: 'dashed' } },
+      axisPointer: {
+        type: 'cross',
+        crossStyle: { color: secondary },
+        lineStyle: { color: border, width: 1, type: 'dashed' },
+      },
       formatter: chartTooltip,
     },
-    legend: { type: 'scroll', bottom: showZoom.value ? 24 : 0, itemWidth: 12, itemHeight: 8, itemGap: 14, icon: 'roundRect', textStyle: { fontSize: 10, color: secondary } },
+    legend: {
+      type: 'scroll',
+      bottom: showZoom.value ? 24 : 0,
+      itemWidth: 12,
+      itemHeight: 8,
+      itemGap: 14,
+      icon: 'roundRect',
+      textStyle: { fontSize: 10, color: secondary },
+    },
     dataZoom: showZoom.value
       ? [
           { type: 'inside', start: 0, end: 100 },
-          { type: 'slider', height: 14, bottom: 0, borderColor: 'transparent', fillerColor: app.isDark ? 'rgba(52,211,153,.16)' : 'rgba(5,150,105,.12)', backgroundColor: grid, showDetail: false },
+          {
+            type: 'slider',
+            height: 14,
+            bottom: 0,
+            borderColor: 'transparent',
+            fillerColor: app.isDark ? 'rgba(52,211,153,.16)' : 'rgba(5,150,105,.12)',
+            backgroundColor: grid,
+            showDetail: false,
+          },
         ]
-      : [{ type: 'inside', start: 0, end: 100 }],
-    grid: { left: 56, right: mode === 'combined' ? 66 : 24, top: 30, bottom: showZoom.value ? 72 : 52 },
+      : [
+          { type: 'inside', start: 0, end: 100 },
+        ],
+    grid: {
+      left: 56,
+      right: mode === 'combined'
+        ? 66
+        : 24,
+      top: 30,
+      bottom: showZoom.value ? 72 : 52,
+    },
     xAxis: {
       type: 'time',
       min: data.value?.range_start_unix_ms,
       max: data.value?.range_end_unix_ms,
       axisLabel: { fontSize: 11, color: secondary, margin: 12 },
-      axisLine: { show: true, lineStyle: { color: border, width: 1 } },
+      axisLine: {
+        show: true,
+        lineStyle: { color: border, width: 1 },
+      },
       axisTick: { show: false },
       splitLine: { show: false },
     },
-    yAxis: mode === 'combined' ? [latencyAxis, failureAxis] : [mode === 'latency' ? latencyAxis : failureAxis],
-    series: [...latencySeries, ...failureSeries],
+    yAxis: mode === 'combined'
+      ? [latencyAxis, failureAxis]
+      : [
+          mode === 'latency'
+            ? latencyAxis
+            : failureAxis,
+        ],
+    series: [
+      ...latencySeries,
+      ...failureSeries,
+    ],
   }
 }
 
@@ -392,19 +533,31 @@ function exportCsv(): void {
   if (!data.value || !selectedTasks.value.length)
     return
   const selected = selectedTasks.value
-  const headers = ['时间', ...selected.flatMap(task => [`${task.name} 延迟(ms)`, `${task.name} ${failureRateLabel(task.kind)}(%)`])]
+  const headers = [
+    '时间',
+    ...selected.flatMap(task => [`${task.name} 延迟(ms)`, `${task.name} ${failureRateLabel(task.kind)}(%)`]),
+  ]
   const series = selected.map(task => ({
     latency: new Map(taskChartData(task.id)),
     failure: new Map(taskFailureData(task.id)),
   }))
-  const times = [...new Set(data.value.chart.filter(point => selectedTaskIds.value.includes(point.task_id)).map(point => point.received_at_unix_ms))].sort((a, b) => a - b)
+  const times = [
+    ...new Set(data.value.chart.filter(point => selectedTaskIds.value.includes(point.task_id)).map(point => point.received_at_unix_ms)),
+  ].sort((a, b) => a - b)
   const escapeCsv = (value: string | number | null | undefined) => {
-    const text = value == null ? '' : String(value)
+    const text = value == null
+      ? ''
+      : String(value)
     // Spreadsheet applications can execute formula-like fields, including task names in headers.
-    const safe = spreadsheetFormulaPrefix.test(text) ? `'${text}` : text
+    const safe = spreadsheetFormulaPrefix.test(text)
+      ? `'${text}`
+      : text
     return `"${safe.replaceAll('"', '""')}"`
   }
-  const rows = times.map(time => [new Date(time).toISOString(), ...series.flatMap(task => [task.latency.get(time) ?? '', task.failure.get(time) ?? ''])])
+  const rows = times.map(time => [
+    new Date(time).toISOString(),
+    ...series.flatMap(task => [task.latency.get(time) ?? '', task.failure.get(time) ?? '']),
+  ])
   const csv = `\uFEFF${[headers, ...rows].map(row => row.map(escapeCsv).join(',')).join('\r\n')}`
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
   download(exportFilename('csv'), url)
@@ -417,7 +570,11 @@ function exportPng(): void {
     ? combinedChartRef.value
     : showDelay.value ? latencyChartRef.value : failureChartRef.value
   const chart = target as { getDataURL?: (options: { type: 'png', pixelRatio: number, backgroundColor: string }) => string } | null
-  const url = chart?.getDataURL?.({ type: 'png', pixelRatio: 2, backgroundColor: app.isDark ? '#111827' : '#ffffff' })
+  const url = chart?.getDataURL?.({
+    type: 'png',
+    pixelRatio: 2,
+    backgroundColor: app.isDark ? '#111827' : '#ffffff',
+  })
   if (!url) {
     exportError.value = '图表尚未准备好，请稍后再试。'
     return

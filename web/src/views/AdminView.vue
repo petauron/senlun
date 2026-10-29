@@ -22,13 +22,28 @@ const router = useRouter()
 const auth = useAuthStore()
 const app = useAppStore()
 const state = shallowRef<AdminState | null>(null)
-const settings = ref<SiteSettings>({ site_name: 'Senlun', private_site: true, agent_interval_seconds: 3, earth_view_mode: 'earth' })
+const settings = ref<SiteSettings>({
+  site_name: 'Senlun',
+  private_site: true,
+  agent_interval_seconds: 3,
+  earth_view_mode: 'earth',
+})
 const loading = ref(false)
 const loadError = ref('')
 let controller: AbortController | null = null
 let disposed = false
-const sections = [{ id: 'nodes', label: '节点' }, { id: 'traffic', label: '外部流量' }, { id: 'probes', label: '探测' }, { id: 'alerts', label: '通知与告警' }, { id: 'themes', label: '主题' }, { id: 'site', label: '站点设置' }, { id: 'security', label: '账号安全' }]
-const section = computed(() => sections.some(item => item.id === route.query.section) ? route.query.section : 'nodes')
+const sections = [
+  { id: 'nodes', label: '节点' },
+  { id: 'traffic', label: '外部流量' },
+  { id: 'probes', label: '探测' },
+  { id: 'alerts', label: '通知与告警' },
+  { id: 'themes', label: '主题' },
+  { id: 'site', label: '站点设置' },
+  { id: 'security', label: '账号安全' },
+]
+const section = computed(() => sections.some(item => item.id === route.query.section)
+  ? route.query.section
+  : 'nodes')
 
 async function refresh(): Promise<void> {
   if (!auth.loggedIn || loading.value)
@@ -41,13 +56,27 @@ async function refresh(): Promise<void> {
     if (!disposed) {
       state.value = response
       settings.value = { ...response.settings }
-      if (app.publicSettings)
-        app.publicSettings = { ...app.publicSettings, sitename: response.settings.site_name, private_site: response.settings.private_site, theme_settings: { ...app.publicSettings.theme_settings, dataUpdateInterval: response.settings.agent_interval_seconds, dailyExchangeRates: response.settings.daily_exchange_rates, earthViewMode: response.settings.earth_view_mode } }
+      if (app.publicSettings) {
+        app.publicSettings = {
+          ...app.publicSettings,
+          sitename: response.settings.site_name,
+          private_site: response.settings.private_site,
+          theme_settings: {
+            ...app.publicSettings.theme_settings,
+            dataUpdateInterval: response.settings.agent_interval_seconds,
+            dailyExchangeRates: response.settings.daily_exchange_rates,
+            earthViewMode: response.settings.earth_view_mode,
+          },
+        }
+      }
     }
   }
   catch (cause) {
-    if (!disposed)
-      loadError.value = cause instanceof Error ? cause.message : String(cause)
+    if (!disposed) {
+      loadError.value = cause instanceof Error
+        ? cause.message
+        : String(cause)
+    }
     throw cause
   }
   finally { loading.value = false }

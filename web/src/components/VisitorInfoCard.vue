@@ -73,14 +73,20 @@ function detectClient(): VisitorClientData {
   const ua = navigator.userAgent
 
   let device = '桌面设备'
-  if (ANDROID_REGEX.test(ua))
-    device = TABLET_REGEX.test(ua) ? 'Android 平板' : 'Android 手机'
-  else if (IPHONE_OR_IPOD_REGEX.test(ua))
+  if (ANDROID_REGEX.test(ua)) {
+    device = TABLET_REGEX.test(ua)
+      ? 'Android 平板'
+      : 'Android 手机'
+  }
+  else if (IPHONE_OR_IPOD_REGEX.test(ua)) {
     device = 'iPhone'
-  else if (IPAD_REGEX.test(ua))
+  }
+  else if (IPAD_REGEX.test(ua)) {
     device = 'iPad'
-  else if (TABLET_REGEX.test(ua))
+  }
+  else if (TABLET_REGEX.test(ua)) {
     device = '平板电脑'
+  }
 
   let browser = '未知浏览器'
   if (EDGE_VERSION_REGEX.test(ua))

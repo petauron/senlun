@@ -21,7 +21,11 @@ export function useAdminAction(refresh?: () => Promise<void>) {
         catch { error.value = '操作已完成，但刷新数据失败，请手动刷新。' }
       }
     }
-    catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
+    catch (cause) {
+      error.value = cause instanceof Error
+        ? cause.message
+        : String(cause)
+    }
     finally { busy.value = false }
   }
 

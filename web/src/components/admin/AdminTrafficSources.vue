@@ -60,7 +60,9 @@ const pendingNodeName = computed(() => props.nodes.find(node => node.id === pend
 const { busy, error, success, run } = useAdminAction(load)
 
 function selectSource(): void {
-  savedDraft.value = current.value ? { ...current.value.config } : emptyConfig()
+  savedDraft.value = current.value
+    ? { ...current.value.config }
+    : emptyConfig()
   draft.value = { ...savedDraft.value }
   username.value = ''
   password.value = ''
@@ -127,7 +129,9 @@ function confirmDeparture(to: RouteLocationNormalized): boolean | Promise<boolea
     return false
   // Keep only one pending decision, including repeated browser Back attempts.
   cancelDiscard()
-  discardFocusTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  discardFocusTarget = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : null
   pendingLeave.value = true
   return new Promise<boolean>((resolve) => {
     resolveLeave = resolve
@@ -150,7 +154,11 @@ async function load(): Promise<void> {
       formLoaded = true
     }
   }
-  catch (cause) { loadError.value = cause instanceof Error ? cause.message : String(cause) }
+  catch (cause) {
+    loadError.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
   finally { loading.value = false }
 }
 

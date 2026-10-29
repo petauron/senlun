@@ -10,17 +10,51 @@ import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 
 const props = defineProps<{ channels: NotificationChannel[], rules: AlertRule[], incidents: Incident[], failures: { happened_at_unix_ms: number, subject: string }[], nodes: ManagedNode[], refresh: () => Promise<void> }>()
-const emptyChannel = (): NotificationChannel => ({ id: '', name: '', kind: 'webhook', url: '', enabled: false })
-const emptyRule = (): AlertRule => ({ id: '', name: '', metric: 'offline', threshold: 0, duration_seconds: 120, cooldown_seconds: 900, node_ids: [], channel_ids: [], enabled: true })
+function emptyChannel(): NotificationChannel {
+  return {
+    id: '',
+    name: '',
+    kind: 'webhook',
+    url: '',
+    enabled: false,
+  }
+}
+function emptyRule(): AlertRule {
+  return {
+    id: '',
+    name: '',
+    metric: 'offline',
+    threshold: 0,
+    duration_seconds: 120,
+    cooldown_seconds: 900,
+    node_ids: [],
+    channel_ids: [],
+    enabled: true,
+  }
+}
 const channel = ref(emptyChannel())
 const rule = ref(emptyRule())
 const removing = ref<{ kind: 'channels' | 'alert-rules', id: string, name: string } | null>(null)
 const { busy, error, success, run } = useAdminAction(props.refresh)
-const metricLabels = { offline: '节点离线', cpu: 'CPU 使用率', memory: '内存使用率', disk: '磁盘使用率', traffic: '所选来源流量额度使用率', expiry: '到期提醒' }
-const thresholdLabel = computed(() => rule.value.metric === 'expiry' ? '提前提醒（天）' : '阈值（%）')
+const metricLabels = {
+  offline: '节点离线',
+  cpu: 'CPU 使用率',
+  memory: '内存使用率',
+  disk: '磁盘使用率',
+  traffic: '所选来源流量额度使用率',
+  expiry: '到期提醒',
+}
+const thresholdLabel = computed(() => rule.value.metric === 'expiry'
+  ? '提前提醒（天）'
+  : '阈值（%）')
 const date = (value: number) => new Date(value).toLocaleString()
 const nodeName = (id: string) => props.nodes.find(node => node.id === id)?.name ?? id
-const incidentLabels: Record<string, string> = { pending: '等待持续条件', firing: '告警中', resolved: '已恢复', superseded: '已结束（不代表恢复）' }
+const incidentLabels: Record<string, string> = {
+  pending: '等待持续条件',
+  firing: '告警中',
+  resolved: '已恢复',
+  superseded: '已结束（不代表恢复）',
+}
 const incidentStatus = (status: string) => incidentLabels[status] ?? status
 
 async function saveChannel(): Promise<void> {

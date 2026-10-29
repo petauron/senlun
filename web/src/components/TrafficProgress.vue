@@ -50,7 +50,9 @@ const isDualColorMode = computed(() => props.trafficLimitType === 'sum')
 const progressHeight = computed(() => {
   if (props.height === undefined)
     return undefined
-  return typeof props.height === 'number' ? `${props.height}px` : props.height
+  return typeof props.height === 'number'
+    ? `${props.height}px`
+    : props.height
 })
 </script>
 

@@ -53,7 +53,9 @@ export class SenlunApi {
   private readonly baseUrl: URL
 
   constructor(baseUrl = import.meta.env.VITE_API_BASE || DEFAULT_API_BASE) {
-    this.baseUrl = new URL(baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`, window.location.origin)
+    this.baseUrl = new URL(baseUrl.endsWith('/')
+      ? baseUrl
+      : `${baseUrl}/`, window.location.origin)
     if (this.baseUrl.origin !== window.location.origin)
       throw new ApiError('Senlun Web API must be served from the same origin')
   }
@@ -69,14 +71,22 @@ export class SenlunApi {
     try {
       const response = await fetch(new URL(path, this.baseUrl), {
         cache: 'no-store',
-        method: body === undefined ? 'GET' : 'POST',
-        headers: body === undefined ? undefined : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        method: body === undefined
+          ? 'GET'
+          : 'POST',
+        headers: body === undefined
+          ? undefined
+          : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+        body: body === undefined
+          ? undefined
+          : JSON.stringify(body),
         credentials: 'same-origin',
         signal: controller.signal,
       })
 
-      const maximumBytes = path === 'admin/state' ? MAX_ADMIN_RESPONSE_BYTES : MAX_RESPONSE_BYTES
+      const maximumBytes = path === 'admin/state'
+        ? MAX_ADMIN_RESPONSE_BYTES
+        : MAX_RESPONSE_BYTES
       const contentLength = Number(response.headers.get('content-length'))
       if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
         controller.abort()
@@ -106,7 +116,9 @@ export class SenlunApi {
 
       let payload: unknown
       try {
-        payload = text ? JSON.parse(text) : null
+        payload = text
+          ? JSON.parse(text)
+          : null
       }
       catch {
         throw new ApiError(`服务返回了无法读取的响应（HTTP ${response.status}）`, response.status)
@@ -115,7 +127,9 @@ export class SenlunApi {
         if (response.status === 401 && !path.startsWith('auth/'))
           requireLogin(generation)
         const failure = payload as { error?: string | { message?: string }, message?: string } | null
-        const message = typeof failure?.error === 'string' ? failure.error : failure?.error?.message
+        const message = typeof failure?.error === 'string'
+          ? failure.error
+          : failure?.error?.message
         throw new ApiError(message || failure?.message || `请求失败（HTTP ${response.status}）`, response.status)
       }
       if (!wrapped)
@@ -131,7 +145,9 @@ export class SenlunApi {
         throw new ApiError('API request timed out')
       if (error instanceof ApiError)
         throw error
-      throw new ApiError(error instanceof Error ? error.message : String(error))
+      throw new ApiError(error instanceof Error
+        ? error.message
+        : String(error))
     }
     finally {
       window.clearTimeout(timer)
@@ -173,8 +189,11 @@ export class SenlunApi {
       catch {
         throw new ApiError('无法读取主题安装响应', response.status)
       }
-      if (!response.ok || !('status' in result && result.status === 'success'))
-        throw new ApiError('error' in result ? result.error?.message || '主题安装失败' : '主题安装失败', response.status)
+      if (!response.ok || !('status' in result && result.status === 'success')) {
+        throw new ApiError('error' in result
+          ? result.error?.message || '主题安装失败'
+          : '主题安装失败', response.status)
+      }
       return result.data
     }
     catch (error) {
@@ -182,7 +201,9 @@ export class SenlunApi {
         throw new ApiError('主题安装超时')
       if (error instanceof ApiError)
         throw error
-      throw new ApiError(error instanceof Error ? error.message : String(error))
+      throw new ApiError(error instanceof Error
+        ? error.message
+        : String(error))
     }
     finally {
       window.clearTimeout(timer)

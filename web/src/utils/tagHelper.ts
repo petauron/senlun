@@ -265,11 +265,15 @@ export function getExpireText(expiredAt: string | number | undefined, lang: 'zh-
   const status = getExpireStatus(expiredAt)
 
   if (status === 'expired') {
-    return lang === 'zh-CN' ? '已过期' : 'Expired'
+    return lang === 'zh-CN'
+      ? '已过期'
+      : 'Expired'
   }
 
   if (status === 'long_term') {
-    return lang === 'zh-CN' ? '长期' : 'Long-term'
+    return lang === 'zh-CN'
+      ? '长期'
+      : 'Long-term'
   }
 
   if (lang === 'zh-CN') {
@@ -315,10 +319,19 @@ export function parseTags(tags: string | undefined): Array<{ text: string, color
 
   const tagList = tags.split(';')
     .map(tag => parseTagWithColor(tag.trim()))
-    .map(({ text, color }) => ({ text: text.trim(), color }))
+    .map(({ text, color }) => ({
+      text: text.trim(),
+      color,
+    }))
     .filter(({ text }) => text !== '')
 
-  const defaultColors: readonly TagColor[] = ['gray', 'green', 'blue', 'violet', 'amber']
+  const defaultColors: readonly TagColor[] = [
+    'gray',
+    'green',
+    'blue',
+    'violet',
+    'amber',
+  ]
 
   return tagList.map(({ text, color }, index) => {
     const defaultColor = defaultColors[index % defaultColors.length] ?? 'gray'
@@ -339,10 +352,16 @@ export function parseTags(tags: string | undefined): Array<{ text: string, color
  * @returns 价格显示文本
  */
 export function formatPrice(price: number, currency: string = 'CNY', lang: 'zh-CN' | 'en-US' = 'zh-CN'): string {
-  if (price === 0)
-    return lang === 'zh-CN' ? '免费' : 'Free'
-  if (price === -1)
-    return lang === 'zh-CN' ? '免费' : 'Free'
+  if (price === 0) {
+    return lang === 'zh-CN'
+      ? '免费'
+      : 'Free'
+  }
+  if (price === -1) {
+    return lang === 'zh-CN'
+      ? '免费'
+      : 'Free'
+  }
   const code = normalizeCurrency(currency)
   const symbol = CURRENCY_SYMBOLS[code]
   return `${symbol}${price}`
@@ -364,7 +383,9 @@ export function formatPriceWithCycle(
 ): string {
   const priceText = formatPrice(price, currency, lang)
   const cycleText = getBillingCycleText(billingCycle, lang)
-  return price > 0 ? `${priceText}/${cycleText}` : priceText
+  return price > 0
+    ? `${priceText}/${cycleText}`
+    : priceText
 }
 
 /**

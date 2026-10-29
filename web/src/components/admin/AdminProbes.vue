@@ -10,7 +10,19 @@ import { useAdminAction } from '@/composables/useAdminAction'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ probes: ProbeTask[], nodes: ManagedNode[], refresh: () => Promise<void> }>()
-const blank = (): ProbeTask => ({ id: '', name: '', weight: 0, kind: 'icmp', target: '', interval_seconds: 60, timeout_seconds: 5, enabled: true, node_ids: [] })
+function blank(): ProbeTask {
+  return {
+    id: '',
+    name: '',
+    weight: 0,
+    kind: 'icmp',
+    target: '',
+    interval_seconds: 60,
+    timeout_seconds: 5,
+    enabled: true,
+    node_ids: [],
+  }
+}
 const draft = ref(blank())
 const removing = ref<ProbeTask | null>(null)
 const visibleNodes = computed(() => props.nodes.filter(node => !node.hidden && !node.disabled))

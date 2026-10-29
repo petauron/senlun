@@ -20,7 +20,9 @@ const hasIPv6Probes = computed(() => selectHomeProbes(
   'ipv6',
 ).some(probe => probe !== null))
 const probeIPVersion = computed<'ipv4' | 'ipv6'>({
-  get: () => hasIPv6Probes.value ? app.getHomeProbeIPVersion(props.node.uuid) : 'ipv4',
+  get: () => hasIPv6Probes.value
+    ? app.getHomeProbeIPVersion(props.node.uuid)
+    : 'ipv4',
   set: value => app.setHomeProbeIPVersion(props.node.uuid, value),
 })
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))

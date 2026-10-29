@@ -8,7 +8,13 @@ describe('post-login destination', () => {
   })
 
   it('rejects external, protocol-relative and backslash destinations', () => {
-    for (const value of ['https://example.org', '//example.org', '/\\example.org', undefined, ['/', '/admin']])
+    for (const value of [
+      'https://example.org',
+      '//example.org',
+      '/\\example.org',
+      undefined,
+      ['/', '/admin'],
+    ])
       expect(loginDestination(value)).toBe('/admin')
   })
 

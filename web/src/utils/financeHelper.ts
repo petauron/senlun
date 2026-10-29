@@ -64,7 +64,10 @@ const symbolCounts = Object.values(CURRENCY_SYMBOL_CONFIG).reduce<Record<string,
 const UNIQUE_CURRENCY_SYMBOL_ALIASES = Object.fromEntries(
   Object.entries(CURRENCY_SYMBOL_CONFIG)
     .filter(([, symbol]) => symbolCounts[symbol.toUpperCase()] === 1)
-    .map(([code, symbol]) => [symbol.toUpperCase(), code as CurrencyCode]),
+    .map(([code, symbol]) => [
+      symbol.toUpperCase(),
+      code as CurrencyCode,
+    ]),
 ) as Record<string, CurrencyCode>
 
 export function normalizeCurrency(currency: string | null | undefined): CurrencyCode {

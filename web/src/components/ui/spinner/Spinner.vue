@@ -18,7 +18,9 @@ const props = withDefaults(defineProps<Props>(), {
 })
 
 function toSize(v: number | string) {
-  return typeof v === 'number' ? `${v}px` : v
+  return typeof v === 'number'
+    ? `${v}px`
+    : v
 }
 </script>
 

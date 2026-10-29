@@ -34,7 +34,9 @@ export const useAuthStore = defineStore('auth', () => {
     if (pending)
       return pending
     pending = getSharedApi().get<AuthStatus>('auth/status').then(accept).catch((cause) => {
-      error.value = cause instanceof Error ? cause.message : String(cause)
+      error.value = cause instanceof Error
+        ? cause.message
+        : String(cause)
       throw cause
     }).finally(() => { pending = null })
     return pending
@@ -61,5 +63,14 @@ export const useAuthStore = defineStore('auth', () => {
     clear()
   }
 
-  return { status, error, epoch, loggedIn, refresh, clear, authenticate, logout }
+  return {
+    status,
+    error,
+    epoch,
+    loggedIn,
+    refresh,
+    clear,
+    authenticate,
+    logout,
+  }
 })

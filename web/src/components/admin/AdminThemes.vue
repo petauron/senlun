@@ -50,7 +50,9 @@ async function action(task: () => Promise<void>, done: string): Promise<void> {
     success.value = done
   }
   catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
   }
   finally {
     busy.value = false
@@ -74,7 +76,9 @@ async function install(): Promise<void> {
 async function activate(short: string): Promise<void> {
   await action(async () => {
     await getSharedApi().post('admin/theme/set', { theme: short })
-  }, short === 'emerald' ? '已恢复内置 Emerald 主题。' : '主题已启用，刷新首页即可查看。')
+  }, short === 'emerald'
+    ? '已恢复内置 Emerald 主题。'
+    : '主题已启用，刷新首页即可查看。')
 }
 
 async function saveSettings(): Promise<void> {
@@ -99,7 +103,9 @@ async function saveSettings(): Promise<void> {
 }
 
 onMounted(() => void refresh().catch((cause) => {
-  error.value = cause instanceof Error ? cause.message : String(cause)
+  error.value = cause instanceof Error
+    ? cause.message
+    : String(cause)
 }))
 </script>
 

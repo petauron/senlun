@@ -14,7 +14,11 @@ const app = useAppStore()
 const store = useNodesStore()
 const router = useRouter()
 const kind = ref<'icmp' | 'tcp' | 'http'>('tcp')
-const modes = [{ kind: 'icmp', label: 'ICMP 延迟详情' }, { kind: 'tcp', label: 'TCP 连接质量' }, { kind: 'http', label: 'HTTP 可用性' }] as const
+const modes = [
+  { kind: 'icmp', label: 'ICMP 延迟详情' },
+  { kind: 'tcp', label: 'TCP 连接质量' },
+  { kind: 'http', label: 'HTTP 可用性' },
+] as const
 const ranges = [1, 6, 12, 24, 168, 720, 1440, 2160]
 const availableRanges = computed(() => {
   const max = app.publicSettings?.ping_record_preserve_time ?? 168
@@ -23,14 +27,20 @@ const availableRanges = computed(() => {
     available.push(max)
   return available
 })
-const rangeLabel = (range: number) => range < 24 || range % 24 !== 0 ? `${range} 小时` : `${range / 24} 天`
+function rangeLabel(range: number) {
+  return range < 24 || range % 24 !== 0
+    ? `${range} 小时`
+    : `${range / 24} 天`
+}
 const hours = ref(1)
 watch(availableRanges, (available) => {
   if (!available.includes(hours.value))
     hours.value = available.at(-1) ?? 1
 })
 const taskId = ref('')
-const tasks = computed(() => [...new Map(store.nodes.flatMap(node => node.probes ?? []).filter(task => task.kind === kind.value).map(task => [task.id, task])).values()])
+const tasks = computed(() => [
+  ...new Map(store.nodes.flatMap(node => node.probes ?? []).filter(task => task.kind === kind.value).map(task => [task.id, task])).values(),
+])
 const task = computed(() => tasks.value.find(item => item.id === taskId.value) ?? tasks.value[0])
 const selectedId = ref('')
 const nodes = computed(() => store.nodes.filter(node => node.probes?.some(probe => probe.id === task.value?.id)))
@@ -65,7 +75,9 @@ async function reload(): Promise<void> {
   catch (cause) {
     if (current === generation) {
       summary.value = []
-      error.value = cause instanceof Error ? cause.message : '读取探测汇总失败'
+      error.value = cause instanceof Error
+        ? cause.message
+        : '读取探测汇总失败'
     }
   }
   finally {
@@ -94,7 +106,12 @@ onBeforeUnmount(() => {
 const summaryByNode = computed(() => new Map(summary.value.map(row => [row.node_id, row])))
 const comparisons = computed(() => nodes.value.map((node) => {
   const row = summaryByNode.value.get(node.uuid)
-  return { node, samples: row?.samples ?? 0, latency: row?.avg_latency_ms?.toFixed(1) ?? '—', loss: row?.loss_percent.toFixed(1) ?? '—' }
+  return {
+    node,
+    samples: row?.samples ?? 0,
+    latency: row?.avg_latency_ms?.toFixed(1) ?? '—',
+    loss: row?.loss_percent.toFixed(1) ?? '—',
+  }
 }))
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
 </script>

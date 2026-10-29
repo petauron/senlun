@@ -45,10 +45,16 @@ const placementClass: Record<DataTooltipPlacement, string> = {
 
 const sizeStyle = computed(() => {
   const style: Record<string, string> = {}
-  if (props.width != null)
-    style.width = typeof props.width === 'number' ? `${props.width}px` : props.width
-  if (props.height != null)
-    style.height = typeof props.height === 'number' ? `${props.height}px` : props.height
+  if (props.width != null) {
+    style.width = typeof props.width === 'number'
+      ? `${props.width}px`
+      : props.width
+  }
+  if (props.height != null) {
+    style.height = typeof props.height === 'number'
+      ? `${props.height}px`
+      : props.height
+  }
   return style
 })
 

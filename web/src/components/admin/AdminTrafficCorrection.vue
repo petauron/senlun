@@ -18,7 +18,9 @@ const down = ref('')
 const reason = ref('')
 const preview = ref<{ up: string, down: string, reason: string } | null>(null)
 const { busy, error, success, run } = useAdminAction(props.refresh)
-const unitLabel = computed(() => unit.value === 'gb' ? 'GB' : 'GiB')
+const unitLabel = computed(() => unit.value === 'gb'
+  ? 'GB'
+  : 'GiB')
 const display = (bytes: string) => `${formatTrafficAmount(bytes, unit.value)} ${unitLabel.value}`
 const utc = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
 const beforeBilled = computed(() => context.value
@@ -71,7 +73,9 @@ function changeUnit(event: Event): void {
   }
   catch (cause) {
     select.value = unit.value
-    error.value = cause instanceof Error ? cause.message : String(cause)
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
   }
 }
 
@@ -79,11 +83,19 @@ function showPreview(): void {
   try {
     if (!reason.value.trim() || new TextEncoder().encode(reason.value.trim()).length > 512)
       throw new Error('请填写校正原因（最多 512 字节）。')
-    preview.value = { up: parseTrafficAmount(up.value, unit.value), down: parseTrafficAmount(down.value, unit.value), reason: reason.value.trim() }
+    preview.value = {
+      up: parseTrafficAmount(up.value, unit.value),
+      down: parseTrafficAmount(down.value, unit.value),
+      reason: reason.value.trim(),
+    }
     error.value = ''
     void nextTick(() => document.getElementById(`confirm-traffic-${props.node.id}`)?.focus())
   }
-  catch (cause) { error.value = cause instanceof Error ? cause.message : String(cause) }
+  catch (cause) {
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
 }
 
 async function save(): Promise<void> {
