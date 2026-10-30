@@ -32,17 +32,20 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 
 <template>
   <div @click.stop>
-    <div v-if="hasIPv6Probes" role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="mb-1 flex justify-end gap-0.5">
-      <Button
-        v-for="version in probeIPVersions" :key="version"
-        variant="ghost" size="xs" class="rounded-sm px-2"
-        :aria-pressed="probeIPVersion === version"
-        :aria-label="`${node.name} 显示 ${version === 'ipv4' ? 'IPv4' : 'IPv6'} 延迟`"
-        :class="probeIPVersion === version ? 'bg-emerald-500/10 text-emerald-600' : ''"
-        @click="probeIPVersion = version"
-      >
-        {{ version === 'ipv4' ? 'IPv4' : 'IPv6' }}
-      </Button>
+    <!-- Keep probe rows aligned when the IPv6 switch is unavailable. -->
+    <div class="mb-1 h-6">
+      <div v-if="hasIPv6Probes" role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="flex h-full justify-end gap-0.5">
+        <Button
+          v-for="version in probeIPVersions" :key="version"
+          variant="ghost" size="xs" class="rounded-sm px-2"
+          :aria-pressed="probeIPVersion === version"
+          :aria-label="`${node.name} 显示 ${version === 'ipv4' ? 'IPv4' : 'IPv6'} 延迟`"
+          :class="probeIPVersion === version ? 'bg-emerald-500/10 text-emerald-600' : ''"
+          @click="probeIPVersion = version"
+        >
+          {{ version === 'ipv4' ? 'IPv4' : 'IPv6' }}
+        </Button>
+      </div>
     </div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
