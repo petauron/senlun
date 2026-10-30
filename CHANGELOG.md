@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.38](https://github.com/petauron/senlun/compare/v0.1.0-alpha.37...v0.1.0-alpha.38) (2026-10-30)
+
+
+### Bug Fixes
+
+* align probe panels when IPv6 switch is hidden ([3a755cd](https://github.com/petauron/senlun/commit/3a755cd0dfc2bb9642ec18e353ed873e5cdd02a9)), closes [#138](https://github.com/petauron/senlun/issues/138)
+
 ## [0.1.0-alpha.37](https://github.com/petauron/senlun/compare/v0.1.0-alpha.36...v0.1.0-alpha.37) (2026-10-29)
 
 
