@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -20,7 +21,6 @@ const username = ref('')
 const password = ref('')
 const bearerToken = ref('')
 const confirmRemove = ref(false)
-const nodeSelect = ref<HTMLSelectElement | null>(null)
 const pendingNodeId = ref<string | null>(null)
 const pendingLeave = ref(false)
 let resolveLeave: ((leave: boolean) => void) | null = null
@@ -76,15 +76,11 @@ function switchNode(id: string): void {
   success.value = ''
 }
 
-function requestNodeChange(event: Event): void {
-  const select = event.target as HTMLSelectElement
-  const id = select.value
-  // Keep the native control on the active node until a discard is confirmed.
-  select.value = selectedId.value
+function requestNodeChange(id: string): void {
   if (id === selectedId.value || busy.value || loading.value)
     return
   if (hasUnsavedChanges.value) {
-    discardFocusTarget = select
+    discardFocusTarget = document.getElementById('traffic-source-node')
     pendingNodeId.value = id
   }
   else {
@@ -224,9 +220,7 @@ const statusText: Record<string, string> = {
       </p>
       <Button type="button" variant="outline" :disabled="loading || busy" @click="load">{{ loading ? '正在刷新…' : '刷新同步状态' }}</Button>
       <label class="grid gap-2 text-sm">关联节点
-        <select ref="nodeSelect" :value="selectedId" class="min-h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring" :disabled="busy || loading" @change="requestNodeChange">
-          <option v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }}</option>
-        </select>
+        <SelectControl id="traffic-source-node" aria-label="关联节点" :model-value="selectedId" :options="nodes.map(node => ({ value: node.id, label: node.name }))" :disabled="busy || loading" @update:model-value="requestNodeChange" />
       </label>
       <p v-if="hasUnsavedChanges" role="status" class="text-sm text-muted-foreground">有未保存修改；刷新同步状态不会清空输入。凭据只保留在当前页面内存中。</p>
       <p v-if="!nodes.length" class="text-sm text-muted-foreground">请先注册节点。</p>
@@ -243,9 +237,7 @@ const statusText: Record<string, string> = {
           <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="draft.enabled" type="checkbox" class="size-4 accent-primary">启用定时同步</label>
           <label class="grid gap-2 text-sm sm:col-span-2">流量查询网址（HTTPS，GET，必填）<Input v-model="draft.traffic_url" type="url" required maxlength="2048" autocomplete="off" placeholder="https://example.com/api/usage" /></label>
           <label class="grid gap-2 text-sm">登录方式
-            <select v-model="draft.auth_mode" class="min-h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring">
-              <option value="none">无需认证</option><option value="bearer">固定 Bearer Token</option><option value="login_refresh">登录 + Refresh Token</option>
-            </select>
+            <SelectControl aria-label="登录方式" v-model="draft.auth_mode" :disabled="busy || !keyReady" :options="[{ value: 'none', label: '无需认证' }, { value: 'bearer', label: '固定 Bearer Token' }, { value: 'login_refresh', label: '登录 + Refresh Token' }]" />
           </label>
           <label v-if="draft.auth_mode === 'bearer'" class="grid gap-2 text-sm">Bearer Token（留空保留已存凭据）<Input v-model="bearerToken" type="password" autocomplete="new-password" :required="!canReuseCredential" /></label>
         </fieldset>
@@ -269,9 +261,7 @@ const statusText: Record<string, string> = {
           <label class="grid gap-2 text-sm">计费已用路径（可选）<Input v-model="draft.used_pointer" /></label>
           <label class="grid gap-2 text-sm">额度路径（可选）<Input v-model="draft.limit_pointer" /></label>
           <label class="grid gap-2 text-sm">额度单位
-            <select v-model="draft.limit_unit" class="min-h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring">
-              <option value="bytes">字节</option><option value="gb">GB（1000³）</option><option value="gib">GiB（1024³）</option>
-            </select>
+            <SelectControl aria-label="额度单位" v-model="draft.limit_unit" :disabled="busy || !keyReady" :options="[{ value: 'bytes', label: '字节' }, { value: 'gb', label: 'GB（1000³）' }, { value: 'gib', label: 'GiB（1024³）' }]" />
           </label>
           <label class="grid gap-2 text-sm">周期重置时间路径（可选）<Input v-model="draft.reset_pointer" /></label>
         </fieldset>

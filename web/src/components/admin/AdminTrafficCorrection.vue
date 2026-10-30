@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { ManagedNode } from '@/utils/admin'
 import type { TrafficCorrectionContext, TrafficUnit } from '@/utils/trafficCorrection'
 import { computed, nextTick, ref, watch } from 'vue'
@@ -60,9 +61,7 @@ async function open(): Promise<void> {
   await load(true)
 }
 
-function changeUnit(event: Event): void {
-  const select = event.target as HTMLSelectElement
-  const next = select.value as TrafficUnit
+function changeUnit(next: TrafficUnit): void {
   try {
     const upBytes = parseTrafficAmount(up.value, unit.value)
     const downBytes = parseTrafficAmount(down.value, unit.value)
@@ -72,7 +71,6 @@ function changeUnit(event: Event): void {
     error.value = ''
   }
   catch (cause) {
-    select.value = unit.value
     error.value = cause instanceof Error
       ? cause.message
       : String(cause)
@@ -152,9 +150,7 @@ async function save(): Promise<void> {
           <form v-if="!preview" class="space-y-4" :aria-busy="busy" @submit.prevent="showPreview">
             <fieldset :disabled="busy" class="grid gap-4 sm:grid-cols-2">
               <label class="grid gap-2 text-sm sm:col-span-2">输入单位
-                <select :value="unit" class="min-h-11 rounded-md border border-input bg-background px-3" @change="changeUnit">
-                  <option value="gb">GB（1000³ 字节）</option><option value="gib">GiB（1024³ 字节）</option>
-                </select>
+                <SelectControl aria-label="输入单位" :model-value="unit" :disabled="busy" :options="[{ value: 'gb', label: 'GB（1000³ 字节）' }, { value: 'gib', label: 'GiB（1024³ 字节）' }]" @update:model-value="changeUnit" />
               </label>
               <label class="grid gap-2 text-sm">目标上传已用量<Input v-model="up" inputmode="decimal" required maxlength="64" /></label>
               <label class="grid gap-2 text-sm">目标下载已用量<Input v-model="down" inputmode="decimal" required maxlength="64" /></label>

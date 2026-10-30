@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { ManagedNode, ProbeTask } from '@/utils/admin'
 import { computed, ref, watch } from 'vue'
 import ProbeHistory from '@/components/ProbeHistory.vue'
@@ -86,7 +87,7 @@ async function remove(): Promise<void> {
         <fieldset :disabled="busy" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <label class="grid gap-2 text-sm">名称<Input v-model="draft.name" required maxlength="128" /></label>
           <label class="grid gap-2 text-sm">显示顺序<Input v-model.number="draft.weight" type="number" min="-100000" max="100000" step="1" required /></label>
-          <label class="grid gap-2 text-sm">类型<select v-model="draft.kind" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring"><option value="icmp">ICMP</option><option value="tcp">TCP</option><option value="http">HTTP / HTTPS</option></select></label>
+          <label class="grid gap-2 text-sm">类型<SelectControl aria-label="类型" v-model="draft.kind" :disabled="busy" :options="[{ value: 'icmp', label: 'ICMP' }, { value: 'tcp', label: 'TCP' }, { value: 'http', label: 'HTTP / HTTPS' }]" /></label>
           <label class="grid gap-2 text-sm">目标<Input v-model="draft.target" :placeholder="draft.kind === 'http' ? 'https://example.com' : draft.kind === 'tcp' ? 'example.com:443' : 'example.com'" maxlength="2048" required /></label>
           <label class="grid gap-2 text-sm">间隔（秒）<Input v-model="draft.interval_seconds" type="number" min="5" max="3600" required /></label>
           <label class="grid gap-2 text-sm">超时（秒）<Input v-model="draft.timeout_seconds" type="number" min="1" :max="Math.min(30, draft.interval_seconds)" required /></label>
@@ -112,7 +113,7 @@ async function remove(): Promise<void> {
       </form>
     </CardX>
     <CardX v-if="visibleNodes.length" title="探测结果">
-      <label for="probe-result-node" class="grid gap-2 text-sm">选择节点<select id="probe-result-node" v-model="resultNode" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring"><option v-for="node in visibleNodes" :key="node.id" :value="node.id">{{ node.name }}</option></select></label>
+      <label for="probe-result-node" class="grid gap-2 text-sm">选择节点<SelectControl id="probe-result-node" aria-label="选择节点" v-model="resultNode" :options="visibleNodes.map(node => ({ value: node.id, label: node.name }))" /></label>
     </CardX>
     <ProbeHistory v-if="resultNode" :uuid="resultNode" />
     <Dialog :open="removing !== null" @update:open="value => { if (!value && !busy) removing = null }">

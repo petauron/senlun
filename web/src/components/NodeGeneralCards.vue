@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { NodeData } from '@/stores/nodes'
 import type { CurrencyCode } from '@/utils/financeHelper'
 import { Icon } from '@iconify/vue'
@@ -320,15 +321,7 @@ const cardGridClass = computed(() => showVisualPanel.value
                   {{ dailyRates ? '今日汇率' : '参考汇率估算' }}
                   <Icon icon="lucide:info" :width="12" :height="12" aria-hidden="true" />
                 </DataTooltip>
-                <select
-                  v-model="financeCurrency"
-                  class="shrink-0 rounded-sm border border-border/70 bg-background/70 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus:text-foreground"
-                  aria-label="切换汇率基准币种"
-                >
-                  <option v-for="currency in FINANCE_CURRENCIES.filter(code => rates[code])" :key="currency" :value="currency">
-                    {{ currency }}
-                  </option>
-                </select>
+                <SelectControl v-model="financeCurrency" aria-label="切换汇率基准币种" :options="FINANCE_CURRENCIES.filter(code => rates[code]).map(value => ({ value, label: value }))" />
               </div>
               <div class="h-15 grid grid-cols-2 gap-y-1 gap-x-4 overflow-auto">
                 <div v-for="row in exchangeRateRows" :key="row.currency" class="text-[11px] flex justify-between gap-2">

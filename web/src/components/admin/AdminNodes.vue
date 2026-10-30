@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { ManagedNode } from '@/utils/admin'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, ref, watch } from 'vue'
@@ -90,10 +91,10 @@ function addTag(): void {
   tagError.value = ''
 }
 
-function choose(event: Event): void {
+function choose(id: string): void {
   secret.value = ''
   void router.replace({
-    query: { ...route.query, node: (event.target as HTMLSelectElement).value },
+    query: { ...route.query, node: id },
   })
 }
 
@@ -167,9 +168,7 @@ async function execute(): Promise<void> {
     </CardX>
     <CardX title="节点管理" content-class="space-y-4">
       <label v-if="nodes.length" for="managed-node" class="grid gap-2 text-sm">选择节点
-        <select id="managed-node" :value="selected?.id" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring" :disabled="busy" @change="choose">
-          <option v-for="node in nodes" :key="node.id" :value="node.id">{{ node.name }} · {{ node.id.slice(0, 8) }}{{ node.hidden ? ' · 已隐藏' : '' }}{{ node.disabled ? ' · 凭据已撤销' : '' }}</option>
-        </select>
+        <SelectControl id="managed-node" aria-label="选择节点" :model-value="selected?.id ?? ''" :disabled="busy" :options="nodes.map(node => ({ value: node.id, label: `${node.name} · ${node.id.slice(0, 8)}${node.hidden ? ' · 已隐藏' : ''}${node.disabled ? ' · 凭据已撤销' : ''}` }))" @update:model-value="choose" />
       </label>
       <p v-else class="text-sm text-muted-foreground">
         尚无节点。生成注册令牌并安装 Agent 后，节点会出现在这里。
@@ -195,9 +194,7 @@ async function execute(): Promise<void> {
             <div class="flex flex-wrap items-end gap-2">
               <label class="grid min-w-36 flex-1 gap-1">标签文字<Input v-model="newTagText" maxlength="40" placeholder="例如：带宽1G" @keydown.enter.prevent="addTag" /></label>
               <label class="grid gap-1">颜色
-                <select v-model="newTagColor" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring">
-                  <option v-for="color in tagColors" :key="color.value" :value="color.value">{{ color.label }}</option>
-                </select>
+                <SelectControl aria-label="颜色" v-model="newTagColor" :disabled="busy" :options="tagColors" />
               </label>
               <Button type="button" variant="outline" class="min-h-11" @click="addTag">添加标签</Button>
             </div>
@@ -227,14 +224,12 @@ async function execute(): Promise<void> {
             流量周期
           </legend>
           <label class="grid gap-2 text-sm sm:col-span-3">卡片、列表及额度告警的数据来源
-            <select v-model="draft.traffic_source" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring">
-              <option value="local">本地网卡周期流量</option><option value="provider">服务商记录流量</option>
-            </select>
+            <SelectControl aria-label="流量数据来源" v-model="draft.traffic_source" :disabled="busy" :options="[{ value: 'local', label: '本地网卡周期流量' }, { value: 'provider', label: '服务商记录流量' }]" />
           </label>
           <p class="text-sm text-muted-foreground sm:col-span-3">保存后同时应用于此节点的流量显示与额度告警。服务商未配置、过期或失败时不会切回本地；下列额度、计数方式及重置日只用于本地统计。切换会结束旧来源的阈值评估，不发送恢复通知。</p>
           <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">当前流量状态：{{ trafficSelectionDetails(selected.selected_traffic) }}</p>
           <label class="grid gap-2 text-sm">每周期额度（GiB；0 为不限）<Input v-model="quotaGiB" type="number" min="0" :max="Number.MAX_SAFE_INTEGER / 1024 ** 3" step="any" required /></label>
-          <label class="grid gap-2 text-sm">流量计数方式<select v-model="draft.traffic_limit_type" class="h-11 rounded-md border border-input bg-background px-3 focus-visible:ring-2 focus-visible:ring-ring"><option value="sum">上传 + 下载</option><option value="max">上传、下载中较大值</option><option value="min">上传、下载中较小值</option><option value="up">仅上传</option><option value="down">仅下载</option></select></label>
+          <label class="grid gap-2 text-sm">流量计数方式<SelectControl aria-label="流量计数方式" v-model="draft.traffic_limit_type" :disabled="busy" :options="[{ value: 'sum', label: '上传 + 下载' }, { value: 'max', label: '上传、下载中较大值' }, { value: 'min', label: '上传、下载中较小值' }, { value: 'up', label: '仅上传' }, { value: 'down', label: '仅下载' }]" /></label>
           <label class="grid gap-2 text-sm">每月重置日（1–31，UTC）<Input v-model="draft.traffic_reset_day" type="number" min="1" max="31" step="1" required /></label>
           <p class="text-sm text-muted-foreground sm:col-span-3">按 UTC 00:00 重置；当月没有所选日期时，在该月最后一天重置。新日期立即生效，现有计数保留至下一个新日期。流量是近似统计，账单以服务商为准。</p>
           <p v-if="selected?.traffic_next_reset_unix_ms != null" class="text-sm text-muted-foreground sm:col-span-3">下次重置：{{ utcTime(selected.traffic_next_reset_unix_ms) }}</p>

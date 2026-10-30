@@ -150,3 +150,33 @@
     justify-content: center;
   }
 }
+
+/* Consistent checkbox styling while retaining native form and keyboard behavior. */
+input[type="checkbox"]:not(.sr-only) {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  border: 1px solid var(--input);
+  border-radius: 0.25rem;
+  background: var(--background);
+}
+input[type="checkbox"]:not(.sr-only):checked {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+input[type="checkbox"]:not(.sr-only):checked::before {
+  content: "";
+  width: 0.7rem;
+  height: 0.7rem;
+  background: var(--primary-foreground);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 12l4 4L19 6' fill='none' stroke='black' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+input[type="checkbox"]:not(.sr-only):focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+input[type="checkbox"]:not(.sr-only):disabled { opacity: 0.5; cursor: not-allowed; }
+@media (forced-colors: active) {
+  input[type="checkbox"]:not(.sr-only) { appearance: auto; }
+  input[type="checkbox"]:not(.sr-only)::before { display: none; }
+}

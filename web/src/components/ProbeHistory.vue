@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import SelectControl from '@/components/ui/SelectControl.vue'
 import type { EChartsOption } from 'echarts'
 import type { ProbeHistory } from '@/utils/admin'
 import { Icon } from '@iconify/vue'
@@ -628,11 +629,7 @@ function exportPng(): void {
             </h3>
             <label class="flex items-center gap-2 text-xs text-muted-foreground">
               分析任务
-              <select v-model="analysisTaskId" aria-label="分析任务" class="h-8 max-w-44 cursor-pointer rounded-md border border-border bg-background/60 px-2 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 sm:text-xs">
-                <option v-for="task in tasks" :key="task.id" :value="task.id">
-                  {{ task.name }}
-                </option>
-              </select>
+              <SelectControl v-model="analysisTaskId" aria-label="分析任务" :options="tasks.map(task => ({ value: task.id, label: task.name }))" class="max-w-44" />
             </label>
           </div>
           <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
