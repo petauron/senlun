@@ -36,6 +36,7 @@ const metricSwitchTransitionProps = computed(() => ({
 }))
 
 const openFinanceCard = ref(false)
+const financeSelectOpen = ref(false)
 const financeId = useId()
 const closeFinanceButton = ref<HTMLButtonElement | null>(null)
 
@@ -55,6 +56,8 @@ function closeFinanceCard(): void {
 }
 
 function onFinanceFocusOut(event: FocusEvent): void {
+  if (financeSelectOpen.value)
+    return
   if (event.currentTarget instanceof HTMLElement
     && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
     openFinanceCard.value = false
@@ -321,7 +324,7 @@ const cardGridClass = computed(() => showVisualPanel.value
                   {{ dailyRates ? '今日汇率' : '参考汇率估算' }}
                   <Icon icon="lucide:info" :width="12" :height="12" aria-hidden="true" />
                 </DataTooltip>
-                <SelectControl v-model="financeCurrency" aria-label="切换汇率基准币种" :options="FINANCE_CURRENCIES.filter(code => rates[code]).map(value => ({ value, label: value }))" />
+                <SelectControl v-model="financeCurrency" aria-label="切换汇率基准币种" :options="FINANCE_CURRENCIES.filter(code => rates[code]).map(value => ({ value, label: value }))" @update:open="financeSelectOpen = $event" />
               </div>
               <div class="h-15 grid grid-cols-2 gap-y-1 gap-x-4 overflow-auto">
                 <div v-for="row in exchangeRateRows" :key="row.currency" class="text-[11px] flex justify-between gap-2">

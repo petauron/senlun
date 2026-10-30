@@ -3,11 +3,11 @@ import { Icon } from '@iconify/vue'
 import { SelectContent, SelectItem, SelectItemIndicator, SelectItemText, SelectPortal, SelectRoot, SelectTrigger, SelectValue, SelectViewport } from 'reka-ui'
 
 defineProps<{ modelValue: T, options: { value: T, label: string }[], disabled?: boolean, ariaLabel?: string, id?: string }>()
-const emit = defineEmits<{ 'update:modelValue': [value: T] }>()
+const emit = defineEmits<{ 'update:modelValue': [value: T], 'update:open': [value: boolean] }>()
 </script>
 
 <template>
-  <SelectRoot :model-value="modelValue" :disabled="disabled" @update:model-value="value => { if (value !== undefined) emit('update:modelValue', value as T) }">
+  <SelectRoot :model-value="modelValue" :disabled="disabled" @update:open="value => emit('update:open', value)" @update:model-value="value => { if (value !== undefined) emit('update:modelValue', value as T) }">
     <SelectTrigger :id="id" :aria-label="ariaLabel" class="flex min-h-11 min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
       <SelectValue />
       <Icon icon="lucide:chevron-down" class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
