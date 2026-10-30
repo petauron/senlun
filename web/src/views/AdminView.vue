@@ -11,6 +11,7 @@ import AdminTrafficSources from '@/components/admin/AdminTrafficSources.vue'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Input } from '@/components/ui/input'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
@@ -152,13 +153,7 @@ async function logout(): Promise<void> {
             <label class="grid gap-2 text-sm">站点名称<Input v-model="settings.site_name" required maxlength="128" /></label>
             <label class="grid gap-2 text-sm">Agent 上报间隔（秒）<Input v-model="settings.agent_interval_seconds" type="number" min="1" max="300" step="1" required /></label>
             <label class="grid gap-2 text-sm">首页头部展示模式
-              <select v-model="settings.earth_view_mode" class="h-9 w-full rounded-md border border-border bg-background px-3">
-                <option value="earth">旋转地球</option>
-                <option value="earth-stop">静止地球</option>
-                <option value="maps">点状地图</option>
-                <option value="cards">仅汇总卡片</option>
-                <option value="hide">隐藏头部</option>
-              </select>
+              <SelectControl aria-label="首页头部展示模式" v-model="settings.earth_view_mode" :disabled="busy" :options="[{ value: 'earth', label: '旋转地球' }, { value: 'earth-stop', label: '静止地球' }, { value: 'maps', label: '点状地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
             </label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.private_site" type="checkbox" class="size-4 accent-primary">私有站点：登录后才能查看监控数据</label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.ip_info_enabled" type="checkbox" class="size-4 accent-primary" aria-describedby="ip-info-privacy">启用 IP 信息查询（仅管理员）</label>

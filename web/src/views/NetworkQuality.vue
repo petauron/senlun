@@ -5,6 +5,7 @@ import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, shallo
 import { useRouter } from 'vue-router'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
 import { Button } from '@/components/ui/button'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { fetchProbeComparison } from '@/utils/admin'
@@ -133,9 +134,7 @@ const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistor
       </div>
       <label v-if="nodes.length" class="flex items-center gap-2 text-sm">
         节点
-        <select :value="selected?.uuid" class="max-w-full rounded-md border border-border bg-background p-2" @change="selectedId = ($event.target as HTMLSelectElement).value">
-          <option v-for="node in nodes" :key="node.uuid" :value="node.uuid">{{ node.name }}</option>
-        </select>
+        <SelectControl aria-label="节点" :model-value="selected?.uuid ?? ''" :options="nodes.map(node => ({ value: node.uuid, label: node.name }))" @update:model-value="selectedId = $event" />
       </label>
     </div>
     <nav class="flex flex-wrap gap-1 rounded-md bg-muted/70 p-1" aria-label="网络质量分析视图">
@@ -144,7 +143,7 @@ const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistor
       </button>
     </nav>
     <div class="flex flex-wrap items-center justify-between gap-3">
-      <label v-if="tasks.length" class="flex items-center gap-2 text-sm">线路目标<select :value="task?.id" class="rounded-md border border-border bg-background p-2" @change="taskId = ($event.target as HTMLSelectElement).value"><option v-for="item in tasks" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+      <label v-if="tasks.length" class="flex items-center gap-2 text-sm">线路目标<SelectControl aria-label="线路目标" :model-value="task?.id ?? ''" :options="tasks.map(item => ({ value: item.id, label: item.name }))" @update:model-value="taskId = $event" /></label>
       <div class="flex flex-wrap gap-1 rounded-md bg-muted/70 p-1" role="group" aria-label="统计范围">
         <button v-for="range in availableRanges" :key="range" type="button" class="rounded px-2 py-1 text-xs" :aria-pressed="hours === range" :class="hours === range ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'" @click="hours = range">
           {{ rangeLabel(range) }}
