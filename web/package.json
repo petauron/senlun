@@ -45,7 +45,7 @@
   "devDependencies": {
     "@antfu/eslint-config": "^10.0.0",
     "@axe-core/playwright": "^4.13.0",
-    "@iconify/json": "^2.2.442",
+    "@iconify/json": "^2.2.548",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tsconfig/node24": "^24.0.4",
