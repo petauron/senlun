@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -8,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { getSharedApi } from '@/utils/api'
 

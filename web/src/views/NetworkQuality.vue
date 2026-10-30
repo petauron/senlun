@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { ProbeComparison } from '@/utils/admin'
 import { Icon } from '@iconify/vue'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
 import { Button } from '@/components/ui/button'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { fetchProbeComparison } from '@/utils/admin'

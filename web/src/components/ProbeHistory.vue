@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { EChartsOption } from 'echarts'
 import type { ProbeHistory } from '@/utils/admin'
 import { Icon } from '@iconify/vue'
@@ -8,6 +7,7 @@ import VChart from 'vue-echarts'
 import { Button } from '@/components/ui/button'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { Empty } from '@/components/ui/empty'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'

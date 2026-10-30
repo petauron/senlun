@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { AdminState, SiteSettings } from '@/utils/admin'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -12,6 +11,7 @@ import AdminTrafficSources from '@/components/admin/AdminTrafficSources.vue'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Input } from '@/components/ui/input'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'

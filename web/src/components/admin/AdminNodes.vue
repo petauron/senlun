@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { ManagedNode } from '@/utils/admin'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, ref, watch } from 'vue'
@@ -10,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { nodeMetadata } from '@/utils/admin'
 import { getSharedApi } from '@/utils/api'
@@ -224,7 +224,7 @@ async function execute(): Promise<void> {
             流量周期
           </legend>
           <label class="grid gap-2 text-sm sm:col-span-3">卡片、列表及额度告警的数据来源
-            <SelectControl aria-label="流量数据来源" v-model="draft.traffic_source" :disabled="busy" :options="[{ value: 'local', label: '本地网卡周期流量' }, { value: 'provider', label: '服务商记录流量' }]" />
+            <SelectControl aria-label="流量数据来源" :model-value="draft.traffic_source ?? 'local'" @update:model-value="draft.traffic_source = $event" :disabled="busy" :options="[{ value: 'local', label: '本地网卡周期流量' }, { value: 'provider', label: '服务商记录流量' }]" />
           </label>
           <p class="text-sm text-muted-foreground sm:col-span-3">保存后同时应用于此节点的流量显示与额度告警。服务商未配置、过期或失败时不会切回本地；下列额度、计数方式及重置日只用于本地统计。切换会结束旧来源的阈值评估，不发送恢复通知。</p>
           <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">当前流量状态：{{ trafficSelectionDetails(selected.selected_traffic) }}</p>

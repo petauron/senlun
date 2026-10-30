@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import SelectControl from '@/components/ui/SelectControl.vue'
 import type { NodeData } from '@/stores/nodes'
 import type { CurrencyCode } from '@/utils/financeHelper'
 import { Icon } from '@iconify/vue'
@@ -8,6 +7,7 @@ import { computed, defineAsyncComponent, nextTick, ref, useId, watch } from 'vue
 import NodeEarthGlobe from '@/components/NodeEarthGlobe.vue'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useExchangeRates } from '@/composables/useExchangeRates'
 import { useAppStore } from '@/stores/app'
