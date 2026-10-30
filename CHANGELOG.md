@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Bug Fixes
 
-* restore traffic directions on node cards ([37beef9](https://github.com/petauron/senlun/commit/37beef96ff97d1712305459ec775be626a314f4d)), closes [#70](https://github.com/petauron/senlun/issues/70)
+* restore traffic directions on node cards ([37beef9](https://github.com/petauron/senlun/commit/37beef96ff97d1712305459ec775be626a314f4d)), refs [#70](https://github.com/petauron/senlun/issues/70)
 
 ## [0.1.0-alpha.38](https://github.com/petauron/senlun/compare/v0.1.0-alpha.37...v0.1.0-alpha.38) (2026-10-30)
 
