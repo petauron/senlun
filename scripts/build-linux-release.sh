@@ -40,6 +40,7 @@ docker run --rm \
       cargo build --locked --release --target "$SENLUN_MUSL_TARGET" -p senlun-agent
     probe="target/$SENLUN_MUSL_TARGET/release/senlun-agent"
     if readelf --program-headers "$probe" | grep -q INTERP || readelf --dynamic "$probe" | grep -q NEEDED; then
+      readelf --file-header --program-headers --dynamic "$probe" >&2
       echo "Agent must not require a host dynamic loader or shared libc" >&2; exit 1
     fi
     install -m 0755 "$probe" target/release/senlun-agent
