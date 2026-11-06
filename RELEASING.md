@@ -140,3 +140,19 @@ Caches stay within GitHub's repository cache quota and normal eviction policy;
 there are no per-commit cache keys or downloadable CI artifacts. PR caches cannot
 seed main, so the first run on a new scope is cold. Compare actual job/step times
 and cache hit logs separately from runner queue time when measuring improvements.
+
+## Alpine probe runtime
+
+The Linux Agent is built as static musl for each existing architecture. The
+Service retains its GNU/Debian 12 baseline. `scripts/Dockerfile.native-builder`
+adds only the approved musl C compiler and the pinned Rust musl standard library
+target to the existing reviewed Rust base. No new application crate is added.
+`build-linux-release.sh` rejects an Agent with an ELF interpreter or shared
+library dependency, then retains the existing GNU runtime smoke checks.
+
+For managed Alpine/OpenRC deployments, Vastora owns service/account creation,
+private runtime credential copies and reboot recovery. The probe keeps its
+existing persistent credential file across package upgrades; it does not enroll
+again. This does not claim Alpine support for the Senlun Service or enable a
+remote administration channel. Track the combined isolated acceptance in the
+[Vastora Alpine/OpenRC issue](https://redirect.github.com/petauron/vastora/issues/1182); do not deploy from a build-only result.
