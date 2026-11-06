@@ -15,7 +15,7 @@ RUN apt-get update \
     && install --directory --owner senlun --group senlun --mode 0700 /var/lib/senlun
 COPY ${TARGETARCH}/senlun-service /usr/local/bin/senlun-service
 COPY ${TARGETARCH}/senlun-agent /usr/local/bin/senlun-agent
-COPY ${TARGETARCH}/LICENSE ${TARGETARCH}/NOTICE ${TARGETARCH}/RUST_THIRD_PARTY_LICENSES.html ${TARGETARCH}/RUST_STDLIB_LICENSES.html /usr/share/doc/senlun/
+COPY ${TARGETARCH}/LICENSE ${TARGETARCH}/NOTICE ${TARGETARCH}/RUST_THIRD_PARTY_LICENSES.html ${TARGETARCH}/RUST_STDLIB_LICENSES.html ${TARGETARCH}/MUSL_COPYRIGHT.txt /usr/share/doc/senlun/
 COPY ${TARGETARCH}/web/THIRD_PARTY_NOTICES.md ${TARGETARCH}/web/LICENSE.* /usr/share/doc/senlun/web/
 COPY ${TARGETARCH}/web/THIRD_PARTY_LICENSES.md /usr/share/doc/senlun/web/
 USER 65532:65532

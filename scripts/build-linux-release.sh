@@ -36,7 +36,10 @@ docker run --rm \
     cargo build --locked --release -p senlun-service
     linker_key="CARGO_TARGET_$(printf %s "$SENLUN_MUSL_TARGET" | tr "a-z-" "A-Z_")_LINKER"
     cc_key="CC_$(printf %s "$SENLUN_MUSL_TARGET" | tr - _)"
-    env "$linker_key=musl-gcc" "$cc_key=musl-gcc" RUSTFLAGS="-C target-feature=+crt-static" \
+    # Debian musl-gcc specs inject an interpreter even into static PIE output.
+    # Use Rust CRT objects and explicitly suppress that interpreter, retaining PIE.
+    env "$linker_key=musl-gcc" "$cc_key=musl-gcc" \
+      RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=yes -C link-arg=-Wl,--no-dynamic-linker" \
       cargo build --locked --release --target "$SENLUN_MUSL_TARGET" -p senlun-agent
     probe="target/$SENLUN_MUSL_TARGET/release/senlun-agent"
     if readelf --program-headers "$probe" | grep -q INTERP || readelf --dynamic "$probe" | grep -q NEEDED; then
