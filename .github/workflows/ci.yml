@@ -210,7 +210,7 @@ jobs:
       - name: Cache Debian 12 Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          shared-key: bookworm-native-${{ hashFiles('scripts/build-linux-release.sh') }}
+          shared-key: bookworm-native-${{ hashFiles('scripts/build-linux-release.sh', 'scripts/Dockerfile.native-builder') }}
           cache-bin: false
       - name: Install Node.js for embedded Web assets
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -232,6 +232,7 @@ jobs:
           mkdir -p image/amd64/web
           install -m 0755 target/release/senlun-service target/release/senlun-agent image/amd64/
           install -m 0644 LICENSE NOTICE RUST_THIRD_PARTY_LICENSES.html RUST_STDLIB_LICENSES.html image/amd64/
+          install -m 0644 target/release/MUSL_COPYRIGHT.txt image/amd64/
           install -m 0644 web/THIRD_PARTY_NOTICES.md web/LICENSE.* web/dist/THIRD_PARTY_LICENSES.md image/amd64/web/
           docker build --file Dockerfile.release --build-arg "SENLUN_BUILD_GIT_HASH=$SENLUN_BUILD_GIT_HASH" --tag senlun-ci image
       - name: Verify runtime identity and health

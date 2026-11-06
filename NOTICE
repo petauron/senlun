@@ -21,3 +21,7 @@ web/THIRD_PARTY_NOTICES.md for versions and required notices.
 
 Licenses and notices for JavaScript dependencies included in the production
 bundle are distributed as web/dist/THIRD_PARTY_LICENSES.md.
+
+The Linux Agent statically includes musl libc (MIT license). Its complete
+compiler-sysroot copyright notice is included as MUSL_COPYRIGHT.txt in each
+Linux release archive. The Service retains its GNU libc baseline.
