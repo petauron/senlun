@@ -40,7 +40,7 @@ reject_legacy_resource() {
     fi
 }
 
-# Only a complete, owned Senlun entry can upgrade beside retained legacy files.
+# An existing managed executable and configuration may retain legacy files.
 # Run this preflight before executing the candidate or changing any resources.
 if [ -z "$old_target" ] || [ ! -f "$current_link" ] ||
    [ ! -x "$current_link" ] || [ ! -f "/etc/senlun/$component.env" ]; then
