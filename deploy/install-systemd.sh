@@ -11,11 +11,6 @@ usage() {
 
 component=$1
 binary=$2
-# Preflight only: do not create an empty new installation beside retained data.
-if [ -e "/etc/senulun/$component.env" ] && [ ! -e "/etc/senlun/$component.env" ]; then
-    echo "legacy installation found: complete the documented offline brand migration before installing; running services were not changed" >&2
-    exit 1
-fi
 case "$component" in
     service) account=senlun ; state_directory=/var/lib/senlun ;;
     agent) account=senlun-agent ; state_directory=/var/lib/senlun-agent ;;
@@ -24,6 +19,46 @@ esac
 
 [ "${binary#/}" != "$binary" ] || { echo "binary path must be absolute" >&2; exit 1; }
 [ -f "$binary" ] && [ -x "$binary" ] || { echo "binary must be a regular executable file" >&2; exit 1; }
+
+current_link=/usr/local/bin/senlun-$component
+old_target=
+if [ -L "$current_link" ]; then
+    old_target=$(readlink "$current_link")
+    case "$old_target" in
+        "/opt/senlun/releases/$component/"*/senlun-"$component") ;;
+        *) echo "$current_link points outside the managed release directory" >&2; exit 1 ;;
+    esac
+elif [ -e "$current_link" ]; then
+    echo "$current_link exists and is not a symbolic link" >&2
+    exit 1
+fi
+
+reject_legacy_resource() {
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        echo "legacy installation resource found: $1; complete the documented offline brand migration before installing; running services were not changed" >&2
+        exit 1
+    fi
+}
+
+# Only a complete, owned Senlun entry can upgrade beside retained legacy files.
+# Run this preflight before executing the candidate or changing any resources.
+if [ -z "$old_target" ] || [ ! -f "$current_link" ] ||
+   [ ! -x "$current_link" ] || [ ! -f "/etc/senlun/$component.env" ]; then
+    for legacy_prefix in pulse senulun; do
+        legacy_state_directory=/var/lib/$legacy_prefix
+        if [ "$component" = agent ]; then
+            legacy_state_directory=$legacy_state_directory-agent
+        fi
+        reject_legacy_resource "/etc/$legacy_prefix/$component.env"
+        reject_legacy_resource "$legacy_state_directory"
+        for unit_directory in /etc/systemd/system /run/systemd/system /usr/lib/systemd/system /lib/systemd/system; do
+            reject_legacy_resource "$unit_directory/$legacy_prefix-$component.service"
+            if [ "$component" = agent ]; then
+                reject_legacy_resource "$unit_directory/vastora-$legacy_prefix-agent.service"
+            fi
+        done
+    done
+fi
 
 version_output=$("$binary" --version)
 case "$version_output" in
@@ -43,21 +78,8 @@ esac
 script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 release_directory=/opt/senlun/releases/$component/$version-$binary_sha256
 target_binary=$release_directory/senlun-$component
-current_link=/usr/local/bin/senlun-$component
 previous_link=/opt/senlun/previous-$component
 temporary_link=/usr/local/bin/.senlun-$component.new
-
-old_target=
-if [ -L "$current_link" ]; then
-    old_target=$(readlink "$current_link")
-    case "$old_target" in
-        "/opt/senlun/releases/$component/"*/senlun-"$component") ;;
-        *) echo "$current_link points outside the managed release directory" >&2; exit 1 ;;
-    esac
-elif [ -e "$current_link" ]; then
-    echo "$current_link exists and is not a symbolic link" >&2
-    exit 1
-fi
 
 if [ "$component" = agent ]; then
     echo "Privacy notice: without a manual region, Agent country discovery defaults to GeoJS."
