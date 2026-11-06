@@ -45,6 +45,8 @@ const metricLabels = {
   traffic: '所选来源流量额度使用率',
   expiry: '到期提醒',
 }
+const metricOptions = Object.entries(metricLabels).map(([value, label]) => ({ value, label }))
+const metricLabel = (metric: keyof typeof metricLabels) => metricLabels[metric]
 const thresholdLabel = computed(() => rule.value.metric === 'expiry'
   ? '提前提醒（天）'
   : '阈值（%）')
@@ -140,7 +142,7 @@ async function remove(): Promise<void> {
             <p class="font-medium">
               {{ item.name }} <span class="text-sm text-muted-foreground">{{ item.enabled ? '启用' : '停用' }}</span>
             </p><p class="text-sm text-muted-foreground">
-              {{ metricLabels[item.metric] }} · 持续 {{ item.duration_seconds }} 秒 · 冷却 {{ item.cooldown_seconds }} 秒
+              {{ metricLabel(item.metric) }} · 持续 {{ item.duration_seconds }} 秒 · 冷却 {{ item.cooldown_seconds }} 秒
             </p>
           </div><div class="flex gap-2">
             <Button variant="outline" :disabled="busy" @click="rule = { ...item, node_ids: [...item.node_ids], channel_ids: [...item.channel_ids] }">
@@ -157,7 +159,7 @@ async function remove(): Promise<void> {
         </h3>
         <fieldset :disabled="busy" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <label class="grid gap-2 text-sm">规则名称<Input v-model="rule.name" required maxlength="128" /></label>
-          <label class="grid gap-2 text-sm">监测条件<SelectControl aria-label="监测条件" v-model="rule.metric" :disabled="busy" :options="(Object.keys(metricLabels) as (keyof typeof metricLabels)[]).map(value => ({ value, label: metricLabels[value] }))" /></label>
+          <label class="grid gap-2 text-sm">监测条件<SelectControl aria-label="监测条件" v-model="rule.metric" :disabled="busy" :options="metricOptions" /></label>
           <label v-if="rule.metric !== 'offline'" class="grid gap-2 text-sm">{{ thresholdLabel }}<Input v-model="rule.threshold" type="number" min="0" :max="rule.metric === 'expiry' ? 3650 : 100" step="any" required /></label>
           <label class="grid gap-2 text-sm">持续时间（秒）<Input v-model="rule.duration_seconds" type="number" min="0" max="86400" required /></label>
           <label class="grid gap-2 text-sm">通知冷却（秒）<Input v-model="rule.cooldown_seconds" type="number" min="60" max="604800" required /></label>
