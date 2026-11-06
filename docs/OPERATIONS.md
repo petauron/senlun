@@ -57,6 +57,8 @@ sudo systemctl start senlun-service
 
 The installer creates a dedicated account and mode-0700 state directory, records the previous binary, installs a hardened unit, and enables it without starting an unconfigured first installation. An update restarts the unit only if it was already running.
 
+Before a new or incomplete installation, it rejects the selected component's retained Pulse or Senulun configuration, state directories and units, including dangling links and old managed Agent units. Complete the documented offline brand migration first. A validated Senlun release link with an executable target and existing configuration can still be upgraded while old recovery resources are retained; this check does not copy, delete or migrate those resources.
+
 Create an enrollment token locally against the Service database. The JSON response contains an ID, the only display of the token, and its expiry time:
 
 ```bash
