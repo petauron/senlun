@@ -45,17 +45,17 @@
   "devDependencies": {
     "@antfu/eslint-config": "^10.0.0",
     "@axe-core/playwright": "^4.13.0",
-    "@iconify/json": "^2.2.442",
+    "@iconify/json": "^2.2.552",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tsconfig/node24": "^24.0.4",
-    "@types/node": "^26.1.1",
+    "@types/node": "^26.6.6",
     "@vitejs/plugin-vue": "^6.0.4",
     "@vue/eslint-config-typescript": "^14.6.0",
     "@vue/tsconfig": "^0.8.1",
     "eslint": "^9.39.2",
     "eslint-plugin-format": "^2.0.1",
-    "eslint-plugin-vue": "~10.8.0",
+    "eslint-plugin-vue": "~10.12.0",
     "flag-icons": "^7.5.0",
     "jiti": "^2.6.1",
     "npm-run-all2": "^9.0.3",
@@ -65,7 +65,7 @@
     "vite": "^8.3.5",
     "vite-plugin-static-copy": "^4.1.1",
     "vitest": "^5.0.3",
-    "vue-tsc": "^3.2.4"
+    "vue-tsc": "^3.3.14"
   },
   "overrides": {
     "oxfmt": {
