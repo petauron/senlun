@@ -4,6 +4,20 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.42](https://github.com/petauron/senlun/compare/v0.1.0-alpha.41...v0.1.0-alpha.42) (2026-11-08)
+
+
+### Features
+
+* **agent:** build native musl probes for Alpine ([#150](https://github.com/petauron/senlun/issues/150)) ([3d335b3](https://github.com/petauron/senlun/commit/3d335b3d5a5f17b0c85325eadad1ed1d030d7f90))
+
+
+### Bug Fixes
+
+* **deps:** consolidate compatible monitoring dependencies ([#149](https://github.com/petauron/senlun/issues/149)) ([6148a6f](https://github.com/petauron/senlun/commit/6148a6fceb2c3bef328ea34a21f573cec9a06c54))
+* **installer:** refuse fresh installs beside legacy runtimes ([f8d3735](https://github.com/petauron/senlun/commit/f8d373571de401dffde5b97021a559f36c489af8))
+* select the available probe family on single-stack nodes ([#155](https://github.com/petauron/senlun/issues/155)) ([edf6d39](https://github.com/petauron/senlun/commit/edf6d39e6f22672235b651eb3366daef9efbb749))
+
 ## [0.1.0-alpha.41](https://github.com/petauron/senlun/compare/v0.1.0-alpha.40...v0.1.0-alpha.41) (2026-10-30)
 
 
