@@ -26,8 +26,11 @@ const defaultHours = typeof configuredHours === 'number' && presetRanges.include
   ? configuredHours
   : 1
 const hours = ref(props.selectedHours ?? defaultHours)
-const showDelay = ref(true)
-const showFailures = ref(true)
+const chartMetric = ref<'latency' | 'failure' | 'combined'>('latency')
+const showDelay = computed(() => chartMetric.value !== 'failure')
+const showFailures = computed(() => chartMetric.value !== 'latency')
+const showThresholds = ref(false)
+const showPeaks = ref(false)
 const cutPeak = ref(false)
 const chartLayout = ref<'combined' | 'split'>(app.publicSettings?.theme_settings?.pingChartLayout === 'split'
   ? 'split'
@@ -142,6 +145,29 @@ watch(() => [props.uuid, props.taskId, props.kind], () => {
 })
 const selectedTasks = computed(() => tasks.value.filter(task => selectedTaskIds.value.includes(task.id)))
 const summaryByTask = computed(() => new Map(data.value?.summary.map(summary => [summary.task_id, summary]) ?? []))
+
+const lineSelection = computed({
+  get: () => selectedTaskIds.value.length === tasks.value.length
+    ? 'all'
+    : selectedTaskIds.value.length === 1
+      ? selectedTaskIds.value[0]!
+      : 'custom',
+  set: (value: string) => {
+    if (value === 'all')
+      selectedTaskIds.value = tasks.value.map(task => task.id)
+    else if (taskIds.value.has(value)) {
+      selectedTaskIds.value = [value]
+      analysisTaskId.value = value
+    }
+  },
+})
+const lineOptions = computed(() => [
+  { value: 'all', label: '全部线路' },
+  ...(lineSelection.value === 'custom' ? [{ value: 'custom', label: `已选 ${selectedTaskIds.value.length} 条` }] : []),
+  ...tasks.value.map(task => ({ value: task.id, label: task.name })),
+])
+const chartLatencyLabel = computed(() => tasks.value.some(task => task.kind === 'http') ? '延迟' : 'RTT')
+
 const analysisTask = computed(() => tasks.value.find(task => task.id === analysisTaskId.value))
 const analysisSummary = computed(() => summaryByTask.value.get(analysisTaskId.value))
 const names = computed(() => new Map(data.value?.tasks.map(task => [task.id, task.name]) ?? []))
@@ -157,7 +183,7 @@ function latency(value: number | null | undefined) {
 function cardLatency(value: number | null | undefined) {
   return value == null
     ? '--'
-    : `${Math.round(value)} ms`
+    : `${value.toFixed(2)} ms`
 }
 function analysisLatency(value: number | null | undefined) {
   return value == null
@@ -166,11 +192,11 @@ function analysisLatency(value: number | null | undefined) {
 }
 const colors = [
   '#FF6B6B',
-  '#4ECDC4',
-  '#A78BFA',
+  '#F59E0B',
+  '#10B981',
+  '#22D3EE',
   '#60A5FA',
-  '#FFB347',
-  '#F472B6',
+  '#A78BFA',
   '#34D399',
   '#FB923C',
 ]
@@ -216,13 +242,14 @@ function chartTooltip(params: unknown): HTMLElement {
         time: pair[0] as number,
         value: pair[1] as number,
         name: String(point.seriesName ?? ''),
+        order: tasks.value.findIndex(task => String(point.seriesId ?? '').startsWith(`${task.id}:`)),
         failureRate: typeof point.seriesId === 'string' && point.seriesId.endsWith(':failure-rate'),
         color: typeof point.color === 'string'
           ? point.color
           : colors[0]!,
       },
     ]
-  }).sort((a, b) => Number(a.failureRate) - Number(b.failureRate) || a.value - b.value)
+  }).sort((a, b) => Number(a.failureRate) - Number(b.failureRate) || a.order - b.order)
   if (!rows.length)
     return root
 
@@ -258,23 +285,38 @@ function toggleTask(id: string): void {
     : [...selectedTaskIds.value, id]
 }
 
-function taskChartData(id: string): Array<[number, number | null]> {
-  const records = (data.value?.chart ?? []).filter(record => record.task_id === id)
+type ChartSeries = Array<[number, number | null]>
+const seriesByTask = computed(() => {
+  const result = new Map<string, { latency: ChartSeries, failure: ChartSeries }>()
   if (!data.value)
-    return []
-  return probeChartSeries(records, data.value.range_start_unix_ms, data.value.range_end_unix_ms, data.value.chart_bucket_ms, cutPeak.value)
+    return result
+  const history = data.value
+  const grouped = new Map(tasks.value.map(task => [task.id, [] as ProbeHistory['chart']]))
+  for (const point of history.chart)
+    grouped.get(point.task_id)?.push(point)
+  for (const [id, points] of grouped) {
+    result.set(id, {
+      latency: probeChartSeries(points, history.range_start_unix_ms, history.range_end_unix_ms, history.chart_bucket_ms, cutPeak.value),
+      failure: probeFailureSeries(points, history.range_start_unix_ms, history.range_end_unix_ms, history.chart_bucket_ms),
+    })
+  }
+  return result
+})
+function taskChartData(id: string): ChartSeries {
+  return seriesByTask.value.get(id)?.latency ?? []
 }
-
-function taskFailureData(id: string): Array<[number, number | null]> {
-  const records = (data.value?.chart ?? []).filter(record => record.task_id === id)
-  if (!data.value)
-    return []
-  return probeFailureSeries(records, data.value.range_start_unix_ms, data.value.range_end_unix_ms, data.value.chart_bucket_ms)
+function taskFailureData(id: string): ChartSeries {
+  return seriesByTask.value.get(id)?.failure ?? []
 }
 
 const chartFailureLabel = computed(() => failureRateLabelForKinds(
   (selectedTasks.value.length ? selectedTasks.value : tasks.value).map(task => task.kind),
 ))
+const mainChartLabel = computed(() => chartMetric.value === 'combined'
+  ? `探测延迟和${chartFailureLabel.value}曲线，左右轴分别为毫秒和百分比，长时间缺报为断点`
+  : chartMetric.value === 'latency'
+    ? '独立延迟曲线，纵轴为毫秒，长时间缺报为断点'
+    : `独立${chartFailureLabel.value}曲线，纵轴为百分比，长时间缺报为断点`)
 const showZoom = computed(() => app.publicSettings?.theme_settings?.pingChartShowZoom !== false)
 const chartThresholds = computed(() => {
   const settings = app.publicSettings?.theme_settings
@@ -300,6 +342,57 @@ const chartThresholds = computed(() => {
   }
 })
 
+function lineStatus(id: string): { label: string, className: string } {
+  const summary = summaryByTask.value.get(id)
+  if (!summary?.samples)
+    return { label: '无样本', className: 'bg-muted text-muted-foreground' }
+  const thresholds = chartThresholds.value
+  if (summary.avg_latency_ms == null || summary.avg_latency_ms >= thresholds.latencyCritical || summary.loss_percent >= thresholds.failureCritical)
+    return { label: '异常', className: 'bg-rose-500/10 text-rose-700 dark:text-rose-400' }
+  if (summary.avg_latency_ms >= thresholds.latencyWarning || summary.loss_percent >= thresholds.failureWarning)
+    return { label: '波动', className: 'bg-amber-500/10 text-amber-700 dark:text-amber-400' }
+  return { label: '正常', className: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' }
+}
+
+// Previews reuse the already loaded chart buckets. Keep at most 48 SVG points,
+// preserve peaks, and break a preview segment whenever its bucket contains a gap.
+function sparkline(points: ChartSeries): { line: string, area: string } {
+  const stride = Math.max(1, Math.ceil(points.length / 48))
+  const values: Array<number | null> = []
+  for (let start = 0; start < points.length; start += stride) {
+    const bucket = points.slice(start, start + stride).map(point => point[1])
+    const observed = bucket.filter((value): value is number => value != null)
+    values.push(observed.length === bucket.length ? Math.max(...observed) : null)
+  }
+  const present = values.filter((value): value is number => value != null)
+  if (!present.length)
+    return { line: '', area: '' }
+  const min = Math.min(...present)
+  const span = Math.max(1, Math.max(...present) - min)
+  const segments: Array<Array<[number, number]>> = []
+  let segment: Array<[number, number]> = []
+  for (const [index, value] of values.entries()) {
+    if (value == null) {
+      if (segment.length)
+        segments.push(segment)
+      segment = []
+    }
+    else {
+      segment.push([2 + index * 60 / Math.max(1, values.length - 1), 26 - (value - min) * 22 / span])
+    }
+  }
+  if (segment.length)
+    segments.push(segment)
+  return {
+    line: segments.map(part => `M${part.map(point => point.join(',')).join(' L')}${part.length === 1 ? ' l0.1,0' : ''}`).join(' '),
+    area: segments.map(part => `M${part[0]![0]},28 L${part.map(point => point.join(',')).join(' L')} L${part.at(-1)![0]},28 Z`).join(' '),
+  }
+}
+const sparklines = computed(() => new Map(tasks.value.map(task => [
+  task.id,
+  sparkline(chartMetric.value === 'failure' ? taskFailureData(task.id) : taskChartData(task.id)),
+])))
+
 function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
   const style = getComputedStyle(document.documentElement)
   const foreground = style.getPropertyValue('--foreground').trim()
@@ -309,7 +402,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
   const latencySeries = showDelay.value && mode !== 'failure'
     ? selectedTasks.value.map((task, index) => ({
         id: `${task.id}:latency`,
-        name: `${task.name} 延迟`,
+        name: mode === 'combined' ? `${task.name} 延迟` : task.name,
         type: 'line' as const,
         yAxisIndex: 0,
         showSymbol: false,
@@ -325,7 +418,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         },
         connectNulls: false,
         data: taskChartData(task.id),
-        markLine: index === 0
+        markLine: showThresholds.value && index === 0
           ? {
               silent: true,
               symbol: ['none', 'none'] as [string, string],
@@ -345,13 +438,17 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
               ],
             }
           : undefined,
-        markPoint: {
-          symbolSize: 28,
-          label: { fontSize: 9, formatter: '峰值' },
-          data: [
-            { type: 'max' as const, name: '峰值' },
-          ],
-        },
+        areaStyle: { color: taskColor(task.id), opacity: 0.045 },
+        emphasis: { focus: 'series' as const },
+        markPoint: showPeaks.value
+          ? {
+              symbolSize: 28,
+              label: { fontSize: 9, formatter: '峰值' },
+              data: [
+                { type: 'max' as const, name: '峰值' },
+              ],
+            }
+          : undefined,
       }))
     : []
   const failureSeries = showFailures.value && mode !== 'latency'
@@ -359,7 +456,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         const points = taskFailureData(task.id)
         return {
           id: `${task.id}:failure-rate`,
-          name: `${task.name} ${failureRateLabel(task.kind)}`,
+          name: mode === 'combined' ? `${task.name} ${failureRateLabel(task.kind)}` : task.name,
           type: 'line' as const,
           yAxisIndex: mode === 'combined'
             ? 1
@@ -382,7 +479,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
           },
           connectNulls: false,
           data: points,
-          markLine: index === 0
+          markLine: showThresholds.value && index === 0
             ? {
                 silent: true,
                 symbol: ['none', 'none'] as [string, string],
@@ -407,7 +504,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
     : []
   const latencyAxis = {
     type: 'value' as const,
-    name: '延迟 (ms)',
+    name: `${chartLatencyLabel.value} (ms)`,
     min: 0,
     nameTextStyle: { color: secondary },
     axisLabel: { fontSize: 11, color: secondary },
@@ -458,6 +555,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
     },
     legend: {
       type: 'scroll',
+      selectedMode: false,
       bottom: showZoom.value ? 24 : 0,
       itemWidth: 12,
       itemHeight: 8,
@@ -515,7 +613,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
   }
 }
 
-const combinedOption = computed<EChartsOption>(() => chartOption('combined'))
+const combinedOption = computed<EChartsOption>(() => chartOption(chartMetric.value))
 const latencyOption = computed<EChartsOption>(() => chartOption('latency'))
 const failureOption = computed<EChartsOption>(() => chartOption('failure'))
 
@@ -586,26 +684,27 @@ function exportPng(): void {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4">
-    <div class="flex flex-wrap items-center gap-2">
+  <div class="flex min-w-0 flex-col gap-4">
+    <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
       <Tabs v-if="selectedHours === undefined" class="min-w-0 max-w-full flex-1" :model-value="String(hours)" @update:model-value="hours = Number($event)">
         <div class="min-w-0 overflow-x-auto">
           <TabsList :class="pickSurfaceClass('w-max h-8 bg-background/60 rounded-md', 'w-max h-8 bg-background/50 backdrop-blur-xl rounded-md')" aria-label="探测历史时间范围">
             <TabsTrigger
               v-for="range in availableRanges" :key="range" :value="String(range)"
-              class="h-6.5 shrink-0 text-xs border-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400 shadow-none rounded-sm"
+              class="h-6.5 shrink-0 rounded-sm border-none text-xs shadow-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400"
             >
               {{ rangeLabel(range) }}
             </TabsTrigger>
           </TabsList>
         </div>
       </Tabs>
-      <div class="flex items-center gap-2">
-        <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="selectedTaskIds.length === tasks.length && 'bg-background !text-emerald-700 dark:!text-emerald-400'" @click="selectedTaskIds = tasks.map(task => task.id)">
-          全选
+      <div class="flex shrink-0 items-center gap-1">
+        <Button variant="ghost" size="xs" class="h-8 rounded-md text-xs" :class="autoRefresh && 'text-emerald-700 dark:text-emerald-400'" @click="toggleAutoRefresh">
+          <Icon :icon="autoRefresh ? 'lucide:pause' : 'lucide:play'" :width="13" :height="13" aria-hidden="true" />
+          {{ autoRefresh ? '暂停刷新' : '自动刷新' }}
         </Button>
-        <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="!selectedTaskIds.length && 'bg-background !text-emerald-700 dark:!text-emerald-400'" @click="selectedTaskIds = []">
-          全不选
+        <Button variant="ghost" size="icon-xs" class="size-8 rounded-md" aria-label="立即刷新" title="立即刷新" :disabled="loading" @click="reload">
+          <Icon icon="lucide:refresh-cw" :class="loading && 'animate-spin'" :width="14" :height="14" aria-hidden="true" />
         </Button>
       </div>
     </div>
@@ -619,140 +718,141 @@ function exportPng(): void {
       </div>
       <Empty v-else-if="!loading && (!data || !tasks.length)" description="暂无延迟数据" />
       <template v-else-if="data && tasks.length">
-        <p v-if="data.history_resolution_ms" class="text-xs text-muted-foreground">
-          较早历史按分钟汇总，峰值、失败次数和延迟分位数保留。
-        </p>
-        <section aria-label="延迟数据分析" class="flex flex-col gap-3">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-sm font-semibold">
-              延迟数据分析
-            </h3>
-            <label class="flex items-center gap-2 text-xs text-muted-foreground">
-              分析任务
-              <SelectControl v-model="analysisTaskId" aria-label="分析任务" :options="tasks.map(task => ({ value: task.id, label: task.name }))" class="max-w-44" />
-            </label>
-          </div>
-          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            <div
-              v-for="task in tasks" :key="task.id"
-              class="min-w-0 rounded-md border bg-background/60 p-3 transition-colors"
-              :class="[
-                selectedTaskIds.includes(task.id) ? 'border-emerald-600/25' : 'border-border opacity-60',
-                analysisTaskId === task.id && 'ring-1 ring-emerald-600/40',
-              ]"
-            >
-              <div class="flex min-w-0 items-center gap-2">
-                <span class="h-5 w-1 shrink-0 rounded" :style="{ backgroundColor: taskColor(task.id) }" aria-hidden="true" />
-                <span class="min-w-0 flex-1 truncate text-sm font-semibold" :title="task.name">{{ task.name }}</span>
-                <button type="button" class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`${selectedTaskIds.includes(task.id) ? '隐藏' : '显示'} ${task.name} 曲线`" :aria-pressed="selectedTaskIds.includes(task.id)" @click="toggleTask(task.id)">
+        <div class="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_23rem]">
+          <section aria-label="线路趋势" class="min-w-0 rounded-xl border border-border/60" :class="pickSurfaceClass('bg-background/70', 'bg-background/50 backdrop-blur-xl')">
+            <div class="flex min-w-0 flex-wrap items-center gap-3 px-4 pt-4 pb-2">
+              <div class="min-w-0 flex-1">
+                <h3 class="text-sm font-semibold">
+                  {{ tasks.length }} 条线路 {{ chartMetric === 'failure' ? chartFailureLabel : chartLatencyLabel }} 趋势
+                </h3>
+                <p class="mt-1 text-[11px] text-muted-foreground">悬停对比同一时刻的线路数据</p>
+              </div>
+              <div role="group" aria-label="趋势指标" class="flex items-center rounded-lg bg-muted/70 p-1">
+                <Button variant="ghost" size="xs" class="h-7 rounded-md px-3 text-xs" :class="chartMetric === 'latency' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white'" :aria-pressed="chartMetric === 'latency'" @click="chartMetric = 'latency'">
+                  {{ chartLatencyLabel }}
+                </Button>
+                <Button variant="ghost" size="xs" class="h-7 rounded-md px-3 text-xs" :class="chartMetric === 'failure' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white'" :aria-pressed="chartMetric === 'failure'" @click="chartMetric = 'failure'">
+                  {{ failureRateLabelForKinds(tasks.map(task => task.kind), true) }}
+                </Button>
+              </div>
+              <SelectControl v-model="lineSelection" aria-label="显示线路" :options="lineOptions" class="w-32 text-xs" />
+            </div>
+            <template v-if="data.chart.length && selectedTasks.length">
+              <div v-if="chartLayout === 'combined'" class="h-88 min-w-0 p-3 md:h-104">
+                <VChart :key="`${app.resolvedThemeMode}:${chartMetric}`" ref="combinedChartRef" :option="combinedOption" autoresize style="height: 100%; width: 100%" :aria-label="mainChartLabel" />
+              </div>
+              <template v-else>
+                <div v-if="showDelay" class="h-72 min-w-0 p-3 md:h-80">
+                  <VChart :key="app.resolvedThemeMode" ref="latencyChartRef" :option="latencyOption" autoresize style="height: 100%; width: 100%" aria-label="独立延迟曲线，纵轴为毫秒，长时间缺报为断点" />
+                </div>
+                <div v-if="showFailures" class="h-72 min-w-0 p-3 md:h-80">
+                  <VChart :key="app.resolvedThemeMode" ref="failureChartRef" :option="failureOption" autoresize style="height: 100%; width: 100%" :aria-label="`独立${chartFailureLabel}曲线，纵轴为百分比，长时间缺报为断点`" />
+                </div>
+              </template>
+            </template>
+            <div v-else class="flex h-88 items-center justify-center px-6 text-center text-sm text-muted-foreground md:h-104">
+              {{ !selectedTasks.length ? '请选择要显示的线路。' : '此时间范围暂无上报样本。' }}
+            </div>
+            <details class="border-t border-border/50 px-4 py-3">
+              <summary class="cursor-pointer text-xs font-medium text-muted-foreground">图表选项与导出</summary>
+              <div class="mt-3 flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="xs" :aria-pressed="showDelay" @click="chartMetric = showDelay ? 'failure' : 'combined'">延迟</Button>
+                <Button variant="outline" size="xs" :aria-pressed="showFailures" @click="chartMetric = showFailures ? 'latency' : 'combined'">{{ chartFailureLabel }}</Button>
+                <Button variant="outline" size="xs" :aria-pressed="cutPeak" @click="cutPeak = !cutPeak">平滑峰值</Button>
+                <DataTooltip content="使用 EWMA 算法平滑曲线并过滤突变值；汇总仍按原始样本计算" placement="top" content-class="max-w-56 text-[11px] leading-relaxed">
+                  <button type="button" class="flex size-8 items-center justify-center rounded-md text-muted-foreground focus-visible:outline-2 focus-visible:outline-emerald-600" aria-label="平滑峰值说明">
+                    <Icon icon="lucide:info" :width="14" :height="14" aria-hidden="true" />
+                  </button>
+                </DataTooltip>
+                <Button variant="outline" size="xs" :aria-pressed="showThresholds" @click="showThresholds = !showThresholds">阈值线</Button>
+                <Button variant="outline" size="xs" :aria-pressed="showPeaks" @click="showPeaks = !showPeaks">峰值标记</Button>
+                <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-muted/60 p-1">
+                  <Button variant="ghost" size="xs" :class="chartLayout === 'combined' && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="chartLayout === 'combined'" @click="chartLayout = 'combined'">合图</Button>
+                  <Button variant="ghost" size="xs" :class="chartLayout === 'split' && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="chartLayout === 'split'" @click="chartLayout = 'split'">分图</Button>
+                </div>
+                <Button variant="outline" size="xs" :disabled="!data.chart.length || !selectedTasks.length" @click="exportPng">
+                  <Icon icon="lucide:image-down" :width="13" :height="13" aria-hidden="true" />PNG
+                </Button>
+                <Button variant="outline" size="xs" :disabled="!data.chart.length || !selectedTasks.length" @click="exportCsv">
+                  <Icon icon="lucide:file-down" :width="13" :height="13" aria-hidden="true" />CSV
+                </Button>
+              </div>
+              <p v-if="data.history_resolution_ms" class="mt-3 text-xs text-muted-foreground">较早历史按分钟汇总，峰值、失败次数和延迟分位数保留。</p>
+            </details>
+            <p v-if="exportError" role="alert" class="px-4 pb-3 text-sm text-destructive">{{ exportError }}</p>
+          </section>
+          <section aria-label="延迟数据分析" class="min-w-0 rounded-xl border border-border/60" :class="pickSurfaceClass('bg-background/70', 'bg-background/50 backdrop-blur-xl')">
+            <div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-3">
+              <h3 class="text-sm font-semibold">线路检查器</h3>
+              <div class="flex items-center gap-1">
+                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectedTaskIds = tasks.map(task => task.id)">全选</Button>
+                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectedTaskIds = []">全不选</Button>
+              </div>
+            </div>
+            <div class="px-1 pb-1">
+              <div
+                v-for="task in tasks" :key="task.id" role="group" :aria-label="`线路 ${task.name}`"
+                class="grid min-w-0 grid-cols-[minmax(0,1fr)_4.5rem_3rem_2.75rem] items-center sm:grid-cols-[minmax(0,1fr)_4.5rem_3rem_3rem_2.75rem] gap-1 rounded-lg border-t border-border/40 px-3 py-2 transition-colors"
+                :class="[!selectedTaskIds.includes(task.id) && 'opacity-40', analysisTaskId === task.id && 'bg-emerald-500/5']"
+              >
+                <button type="button" class="min-w-0 cursor-pointer rounded-md py-1 text-left focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`分析 ${task.name}`" :aria-pressed="analysisTaskId === task.id" @click="analysisTaskId = task.id">
+                  <span class="flex min-w-0 items-center gap-1.5">
+                    <span class="size-1.5 shrink-0 rounded-full" :style="{ backgroundColor: taskColor(task.id) }" aria-hidden="true" />
+                    <span class="min-w-0 text-xs font-semibold break-words sm:truncate" :title="task.name">{{ task.name.replace(/ipv6/gi, 'V6') }}</span>
+                  </span>
+                  <span class="mt-1 inline-flex rounded px-1.5 py-0.5 text-[10px] font-medium" :class="lineStatus(task.id).className" :title="`按当前时间范围的平均延迟和${failureRateLabel(task.kind)}判断`">{{ lineStatus(task.id).label }}</span>
+                </button>
+                <div class="min-w-0">
+                  <span class="block text-[10px] text-muted-foreground">平均 {{ chartLatencyLabel }}</span>
+                  <span class="block whitespace-nowrap text-[11px] font-semibold tabular-nums">{{ cardLatency(summaryByTask.get(task.id)?.avg_latency_ms) }}</span>
+                </div>
+                <div class="min-w-0">
+                  <span class="block truncate text-[10px] text-muted-foreground">{{ failureRateLabel(task.kind, true) }}</span>
+                  <span class="block whitespace-nowrap text-[11px] font-semibold tabular-nums">{{ summaryByTask.get(task.id)?.samples ? `${summaryByTask.get(task.id)!.loss_percent.toFixed(2)}%` : '--' }}</span>
+                </div>
+                <svg viewBox="0 0 64 28" class="hidden h-7 w-12 sm:block" :style="{ color: taskColor(task.id) }" aria-hidden="true" focusable="false">
+                  <path :d="sparklines.get(task.id)?.area" fill="currentColor" fill-opacity="0.08" />
+                  <path :d="sparklines.get(task.id)?.line" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+                </svg>
+                <button type="button" class="flex size-11 cursor-pointer items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`${selectedTaskIds.includes(task.id) ? '隐藏' : '显示'} ${task.name} 曲线`" :aria-pressed="selectedTaskIds.includes(task.id)" @click="toggleTask(task.id)">
                   <Icon :icon="selectedTaskIds.includes(task.id) ? 'lucide:eye' : 'lucide:eye-off'" :width="15" :height="15" aria-hidden="true" />
                 </button>
-                <button type="button" class="flex h-11 shrink-0 cursor-pointer items-center rounded-sm px-1 text-xs font-medium hover:text-emerald-600 focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`分析 ${task.name}`" :aria-pressed="analysisTaskId === task.id" @click="analysisTaskId = task.id">
-                  分析
-                </button>
-              </div>
-              <div class="mt-3 grid grid-cols-3 gap-2">
-                <span class="min-w-0"><span class="block text-[11px] text-muted-foreground">平均</span><span class="block truncate text-sm font-semibold tabular-nums">{{ cardLatency(summaryByTask.get(task.id)?.avg_latency_ms) }}</span></span>
-                <span class="min-w-0"><span class="block text-[11px] text-muted-foreground">{{ failureRateLabel(task.kind, true) }}</span><span class="block truncate text-sm font-semibold tabular-nums">{{ summaryByTask.get(task.id)?.samples ? `${summaryByTask.get(task.id)!.loss_percent.toFixed(2)}%` : '--' }}</span></span>
-                <span class="min-w-0"><span class="block text-[11px] text-muted-foreground">P95</span><span class="block truncate text-sm font-semibold tabular-nums">{{ cardLatency(summaryByTask.get(task.id)?.p95_latency_ms) }}</span></span>
               </div>
             </div>
-          </div>
-          <div v-if="analysisTask" class="min-w-0 rounded-md border border-emerald-600/20 bg-background/70 p-3 sm:p-4">
-            <div class="mb-3 flex min-w-0 flex-wrap items-center gap-2">
-              <span class="h-5 w-1 shrink-0 rounded" :style="{ backgroundColor: taskColor(analysisTask.id) }" aria-hidden="true" />
-              <h4 class="min-w-0 flex-1 truncate text-sm font-semibold" :title="analysisTask.name">
-                {{ analysisTask.name }}
-              </h4>
-              <Button variant="ghost" size="xs" class="h-8 rounded-sm" @click="selectedTaskIds = [analysisTask.id]">
-                仅看此任务
-              </Button>
-            </div>
-            <dl class="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4 lg:grid-cols-6">
-              <div v-for="metric in [
-                { label: '最小延迟', value: analysisLatency(analysisSummary?.min_latency_ms) },
-                { label: '平均延迟', value: analysisLatency(analysisSummary?.avg_latency_ms) },
-                { label: '最大延迟', value: analysisLatency(analysisSummary?.max_latency_ms) },
-                { label: '最新延迟', value: analysisLatency(analysisSummary?.latest_latency_ms) },
-                { label: 'P50', value: analysisLatency(analysisSummary?.p50_latency_ms) },
-                { label: 'P95', value: analysisLatency(analysisSummary?.p95_latency_ms) },
-                { label: 'P99', value: analysisLatency(analysisSummary?.p99_latency_ms) },
-                { label: failureRateLabel(analysisTask.kind), value: analysisSummary?.samples ? `${analysisSummary.loss_percent.toFixed(2)}%` : '无样本' },
-                { label: '波动率', value: analysisSummary?.p99_p50_ratio == null ? '—' : analysisSummary.p99_p50_ratio.toFixed(2) },
-                { label: '样本数', value: String(analysisSummary?.samples ?? 0) },
-                { label: '采集间隔', value: `${analysisTask.interval_seconds}s` },
-                { label: '协议', value: analysisTask.kind.toUpperCase() },
-              ]" :key="metric.label">
-                <dt class="text-[11px] text-muted-foreground">{{ metric.label }}</dt>
-                <dd class="mt-0.5 text-sm font-semibold tabular-nums">{{ metric.value }}</dd>
+            <details v-if="analysisTask" class="border-t border-border/50 px-4 py-3">
+              <summary class="cursor-pointer text-xs font-medium text-muted-foreground">详细统计</summary>
+              <div class="mt-3 flex flex-col gap-4">
+                <label class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  分析任务
+                  <SelectControl v-model="analysisTaskId" aria-label="分析任务" :options="tasks.map(task => ({ value: task.id, label: task.name }))" class="max-w-44" />
+                </label>
+                <div class="flex min-w-0 items-center justify-between gap-2">
+                  <h4 class="truncate text-sm font-semibold" :title="analysisTask.name">{{ analysisTask.name }}</h4>
+                  <Button variant="ghost" size="xs" class="shrink-0" @click="selectedTaskIds = [analysisTask.id]">仅看此任务</Button>
+                </div>
+                <dl class="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4 lg:grid-cols-2">
+                  <div v-for="metric in [
+                    { label: '最小延迟', value: analysisLatency(analysisSummary?.min_latency_ms) },
+                    { label: '平均延迟', value: analysisLatency(analysisSummary?.avg_latency_ms) },
+                    { label: '最大延迟', value: analysisLatency(analysisSummary?.max_latency_ms) },
+                    { label: '最新延迟', value: analysisLatency(analysisSummary?.latest_latency_ms) },
+                    { label: 'P50', value: analysisLatency(analysisSummary?.p50_latency_ms) },
+                    { label: 'P95', value: analysisLatency(analysisSummary?.p95_latency_ms) },
+                    { label: 'P99', value: analysisLatency(analysisSummary?.p99_latency_ms) },
+                    { label: failureRateLabel(analysisTask.kind), value: analysisSummary?.samples ? `${analysisSummary.loss_percent.toFixed(2)}%` : '无样本' },
+                    { label: '波动率', value: analysisSummary?.p99_p50_ratio == null ? '—' : analysisSummary.p99_p50_ratio.toFixed(2) },
+                    { label: '样本数', value: String(analysisSummary?.samples ?? 0) },
+                    { label: '采集间隔', value: `${analysisTask.interval_seconds}s` },
+                    { label: '协议', value: analysisTask.kind.toUpperCase() },
+                  ]" :key="metric.label">
+                    <dt class="text-[11px] text-muted-foreground">{{ metric.label }}</dt>
+                    <dd class="mt-0.5 text-sm font-semibold tabular-nums">{{ metric.value }}</dd>
+                  </div>
+                </dl>
               </div>
-            </dl>
-          </div>
-        </section>
-        <div class="flex flex-wrap items-center gap-2 py-2">
-          <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="showDelay && 'bg-background !text-emerald-700 dark:!text-emerald-400'" :aria-pressed="showDelay" @click="showDelay = !showDelay">
-            延迟
-          </Button>
-          <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="showFailures && 'bg-background !text-emerald-700 dark:!text-emerald-400'" :aria-pressed="showFailures" @click="showFailures = !showFailures">
-            {{ chartFailureLabel }}
-          </Button>
-          <div class="flex items-center gap-1">
-            <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="cutPeak && 'bg-background !text-emerald-700 dark:!text-emerald-400'" :aria-pressed="cutPeak" @click="cutPeak = !cutPeak">
-              平滑峰值
-            </Button>
-            <DataTooltip content="使用 EWMA 算法平滑曲线并过滤突变值；汇总仍按原始样本计算" placement="top" content-class="max-w-56 text-[11px] leading-relaxed">
-              <button type="button" class="flex h-7 w-7 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-emerald-600" aria-label="平滑峰值说明">
-                <Icon icon="lucide:info" :width="14" :height="14" aria-hidden="true" />
-              </button>
-            </DataTooltip>
-          </div>
-          <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-background/60 p-0.5">
-            <Button variant="ghost" size="xs" class="h-6 rounded-sm border-none" :class="chartLayout === 'combined' && 'bg-background !text-emerald-700 dark:!text-emerald-400'" :aria-pressed="chartLayout === 'combined'" @click="chartLayout = 'combined'">
-              合图
-            </Button>
-            <Button variant="ghost" size="xs" class="h-6 rounded-sm border-none" :class="chartLayout === 'split' && 'bg-background !text-emerald-700 dark:!text-emerald-400'" :aria-pressed="chartLayout === 'split'" @click="chartLayout = 'split'">
-              分图
-            </Button>
-          </div>
-          <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :class="autoRefresh && '!text-emerald-600'" @click="toggleAutoRefresh">
-            <Icon :icon="autoRefresh ? 'lucide:pause' : 'lucide:play'" :width="13" :height="13" aria-hidden="true" />
-            {{ autoRefresh ? '暂停刷新' : '自动刷新' }}
-          </Button>
-          <Button variant="ghost" size="icon-xs" class="size-7 rounded-sm border-none bg-background/60 hover:bg-background" aria-label="立即刷新" title="立即刷新" :disabled="loading" @click="reload">
-            <Icon icon="lucide:refresh-cw" :class="loading && 'animate-spin'" :width="14" :height="14" aria-hidden="true" />
-          </Button>
-          <div class="min-w-0 flex-1" />
-          <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :disabled="!data.chart.length || !selectedTasks.length || (!showDelay && !showFailures)" @click="exportPng">
-            <Icon icon="lucide:image-down" :width="13" :height="13" aria-hidden="true" />
-            PNG
-          </Button>
-          <Button variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background" :disabled="!data.chart.length || !selectedTasks.length" @click="exportCsv">
-            <Icon icon="lucide:file-down" :width="13" :height="13" aria-hidden="true" />
-            CSV
-          </Button>
+            </details>
+          </section>
         </div>
-        <p v-if="exportError" role="alert" class="text-sm text-destructive">
-          {{ exportError }}
-        </p>
-        <template v-if="data.chart.length && (showDelay || showFailures)">
-          <div v-if="chartLayout === 'combined'" class="h-88 rounded-md p-3 md:h-104" :class="pickSurfaceClass('bg-background/60', 'bg-background/50 backdrop-blur-xl')">
-            <VChart :key="app.resolvedThemeMode" ref="combinedChartRef" :option="combinedOption" autoresize style="height: 100%; width: 100%" :aria-label="`探测延迟和${chartFailureLabel}曲线，左右轴分别为毫秒和百分比，长时间缺报为断点`" />
-          </div>
-          <template v-else>
-            <div v-if="showDelay" class="h-72 rounded-md p-3 md:h-80" :class="pickSurfaceClass('bg-background/60', 'bg-background/50 backdrop-blur-xl')">
-              <VChart :key="app.resolvedThemeMode" ref="latencyChartRef" :option="latencyOption" autoresize style="height: 100%; width: 100%" aria-label="独立延迟曲线，纵轴为毫秒，长时间缺报为断点" />
-            </div>
-            <div v-if="showFailures" class="h-72 rounded-md p-3 md:h-80" :class="pickSurfaceClass('bg-background/60', 'bg-background/50 backdrop-blur-xl')">
-              <VChart :key="app.resolvedThemeMode" ref="failureChartRef" :option="failureOption" autoresize style="height: 100%; width: 100%" :aria-label="`独立${chartFailureLabel}曲线，纵轴为百分比，长时间缺报为断点`" />
-            </div>
-          </template>
-        </template>
-        <p v-else-if="!data.chart.length" class="text-sm text-muted-foreground">
-          此时间范围暂无上报样本。
-        </p>
-        <p v-else class="text-sm text-muted-foreground">
-          请选择要显示的曲线。
-        </p>
         <details v-if="recent.length" class="relative rounded-md border p-3 bg-background/50">
           <summary class="cursor-pointer text-sm font-medium">
             查看最近 {{ recent.length }} 条记录
