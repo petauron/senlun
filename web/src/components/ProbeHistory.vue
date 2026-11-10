@@ -153,8 +153,9 @@ const lineSelection = computed({
       ? selectedTaskIds.value[0]!
       : 'custom',
   set: (value: string) => {
-    if (value === 'all')
+    if (value === 'all') {
       selectedTaskIds.value = tasks.value.map(task => task.id)
+    }
     else if (taskIds.value.has(value)) {
       selectedTaskIds.value = [value]
       analysisTaskId.value = value
@@ -163,10 +164,16 @@ const lineSelection = computed({
 })
 const lineOptions = computed(() => [
   { value: 'all', label: '全部线路' },
-  ...(lineSelection.value === 'custom' ? [{ value: 'custom', label: `已选 ${selectedTaskIds.value.length} 条` }] : []),
+  ...(lineSelection.value === 'custom'
+    ? [
+        { value: 'custom', label: `已选 ${selectedTaskIds.value.length} 条` },
+      ]
+    : []),
   ...tasks.value.map(task => ({ value: task.id, label: task.name })),
 ])
-const chartLatencyLabel = computed(() => tasks.value.some(task => task.kind === 'http') ? '延迟' : 'RTT')
+const chartLatencyLabel = computed(() => tasks.value.some(task => task.kind === 'http')
+  ? '延迟'
+  : 'RTT')
 
 const analysisTask = computed(() => tasks.value.find(task => task.id === analysisTaskId.value))
 const analysisSummary = computed(() => summaryByTask.value.get(analysisTaskId.value))
@@ -362,7 +369,9 @@ function sparkline(points: ChartSeries): { line: string, area: string } {
   for (let start = 0; start < points.length; start += stride) {
     const bucket = points.slice(start, start + stride).map(point => point[1])
     const observed = bucket.filter((value): value is number => value != null)
-    values.push(observed.length === bucket.length ? Math.max(...observed) : null)
+    values.push(observed.length === bucket.length
+      ? Math.max(...observed)
+      : null)
   }
   const present = values.filter((value): value is number => value != null)
   if (!present.length)
@@ -384,13 +393,20 @@ function sparkline(points: ChartSeries): { line: string, area: string } {
   if (segment.length)
     segments.push(segment)
   return {
-    line: segments.map(part => `M${part.map(point => point.join(',')).join(' L')}${part.length === 1 ? ' l0.1,0' : ''}`).join(' '),
+    line: segments.map(part => {
+      const path = `M${part.map(point => point.join(',')).join(' L')}`
+      return part.length === 1
+        ? `${path} l0.1,0`
+        : path
+    }).join(' '),
     area: segments.map(part => `M${part[0]![0]},28 L${part.map(point => point.join(',')).join(' L')} L${part.at(-1)![0]},28 Z`).join(' '),
   }
 }
 const sparklines = computed(() => new Map(tasks.value.map(task => [
   task.id,
-  sparkline(chartMetric.value === 'failure' ? taskFailureData(task.id) : taskChartData(task.id)),
+  sparkline(chartMetric.value === 'failure'
+    ? taskFailureData(task.id)
+    : taskChartData(task.id)),
 ])))
 
 function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
@@ -402,7 +418,9 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
   const latencySeries = showDelay.value && mode !== 'failure'
     ? selectedTasks.value.map((task, index) => ({
         id: `${task.id}:latency`,
-        name: mode === 'combined' ? `${task.name} 延迟` : task.name,
+        name: mode === 'combined'
+          ? `${task.name} 延迟`
+          : task.name,
         type: 'line' as const,
         yAxisIndex: 0,
         showSymbol: false,
@@ -443,7 +461,10 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         markPoint: showPeaks.value
           ? {
               symbolSize: 28,
-              label: { fontSize: 9, formatter: '峰值' },
+              label: {
+                fontSize: 9,
+                formatter: '峰值',
+              },
               data: [
                 { type: 'max' as const, name: '峰值' },
               ],
@@ -456,7 +477,9 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         const points = taskFailureData(task.id)
         return {
           id: `${task.id}:failure-rate`,
-          name: mode === 'combined' ? `${task.name} ${failureRateLabel(task.kind)}` : task.name,
+          name: mode === 'combined'
+            ? `${task.name} ${failureRateLabel(task.kind)}`
+            : task.name,
           type: 'line' as const,
           yAxisIndex: mode === 'combined'
             ? 1
