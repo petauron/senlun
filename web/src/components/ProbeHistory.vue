@@ -393,7 +393,7 @@ function sparkline(points: ChartSeries): { line: string, area: string } {
   if (segment.length)
     segments.push(segment)
   return {
-    line: segments.map(part => {
+    line: segments.map((part) => {
       const path = `M${part.map(point => point.join(',')).join(' L')}`
       return part.length === 1
         ? `${path} l0.1,0`
@@ -456,7 +456,10 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
               ],
             }
           : undefined,
-        areaStyle: { color: taskColor(task.id), opacity: 0.045 },
+        areaStyle: {
+          color: taskColor(task.id),
+          opacity: 0.045,
+        },
         emphasis: { focus: 'series' as const },
         markPoint: showPeaks.value
           ? {
