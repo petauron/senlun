@@ -5,7 +5,6 @@ import { Icon } from '@iconify/vue'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import VChart from 'vue-echarts'
 import { Button } from '@/components/ui/button'
-import { DataTooltip } from '@/components/ui/data-tooltip'
 import { Empty } from '@/components/ui/empty'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { Spinner } from '@/components/ui/spinner'
@@ -231,38 +230,62 @@ function tooltipTime(value: number): string {
     : `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${clock}`
 }
 
-function chartTooltip(params: unknown): HTMLElement {
+function chartTooltip(params: unknown, mode: 'combined' | 'latency' | 'failure'): HTMLElement {
   const root = document.createElement('div')
   const points = (Array.isArray(params)
     ? params
-    : [params]) as { seriesId?: unknown, seriesName?: unknown, data?: unknown, value?: unknown, color?: unknown }[]
-  const rows = points.flatMap((point) => {
+    : [params]) as { axisValue?: unknown, data?: unknown, value?: unknown }[]
+  let time: number | undefined
+  for (const point of points) {
     if (!point || typeof point !== 'object')
-      return []
+      continue
     const pair = Array.isArray(point.data)
       ? point.data
       : point.value
-    if (!Array.isArray(pair) || typeof pair[0] !== 'number' || !Number.isFinite(pair[0]) || typeof pair[1] !== 'number' || !Number.isFinite(pair[1]))
-      return []
-    return [
-      {
-        time: pair[0] as number,
-        value: pair[1] as number,
-        name: String(point.seriesName ?? ''),
-        order: tasks.value.findIndex(task => String(point.seriesId ?? '').startsWith(`${task.id}:`)),
-        failureRate: typeof point.seriesId === 'string' && point.seriesId.endsWith(':failure-rate'),
-        color: typeof point.color === 'string'
-          ? point.color
-          : colors[0]!,
-      },
-    ]
-  }).sort((a, b) => Number(a.failureRate) - Number(b.failureRate) || a.order - b.order)
-  if (!rows.length)
+    const candidate = typeof point.axisValue === 'number'
+      ? point.axisValue
+      : Array.isArray(pair)
+        ? pair[0]
+        : undefined
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      time = candidate
+      break
+    }
+  }
+  if (time === undefined)
     return root
+
+  // Time-axis callbacks can contain just the closest series. Resolve every
+  // visible line within that same bucket rather than borrowing a stale value.
+  const rows: Array<{ name: string, value: number | null, failureRate: boolean, color: string }> = []
+  if (mode !== 'failure') {
+    for (const task of selectedTasks.value) {
+      rows.push({
+        name: mode === 'combined'
+          ? `${task.name} 延迟`
+          : task.name,
+        value: tooltipBucketValue(taskChartData(task.id), time),
+        failureRate: false,
+        color: taskColor(task.id),
+      })
+    }
+  }
+  if (mode !== 'latency') {
+    for (const task of selectedTasks.value) {
+      rows.push({
+        name: mode === 'combined'
+          ? `${task.name} ${failureRateLabel(task.kind)}`
+          : task.name,
+        value: tooltipBucketValue(taskFailureData(task.id), time),
+        failureRate: true,
+        color: taskColor(task.id),
+      })
+    }
+  }
 
   const title = document.createElement('div')
   title.style.cssText = 'font-weight:600;margin-bottom:6px'
-  title.textContent = tooltipTime(rows[0]!.time)
+  title.textContent = tooltipTime(time)
   root.append(title)
   const list = document.createElement('div')
   list.style.cssText = 'display:flex;flex-direction:column;gap:4px'
@@ -277,9 +300,11 @@ function chartTooltip(params: unknown): HTMLElement {
     name.textContent = row.name
     const value = document.createElement('span')
     value.style.cssText = 'margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums'
-    value.textContent = row.failureRate
-      ? `${row.value.toFixed(2)}%`
-      : `${Math.round(row.value)} ms`
+    value.textContent = row.value == null
+      ? '--'
+      : row.failureRate
+        ? `${row.value.toFixed(2)}%`
+        : `${Math.round(row.value)} ms`
     line.append(dot, name, value)
     list.append(line)
   }
@@ -314,6 +339,29 @@ function taskChartData(id: string): ChartSeries {
 }
 function taskFailureData(id: string): ChartSeries {
   return seriesByTask.value.get(id)?.failure ?? []
+}
+
+function tooltipBucketValue(series: ChartSeries, time: number): number | null {
+  const history = data.value
+  if (!history || !Number.isFinite(history.chart_bucket_ms) || history.chart_bucket_ms < 1)
+    return null
+  const bucket = Math.floor((time - history.range_start_unix_ms) / history.chart_bucket_ms)
+  let low = 0
+  let high = series.length
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2)
+    const pointBucket = Math.floor((series[middle]![0] - history.range_start_unix_ms) / history.chart_bucket_ms)
+    if (pointBucket < bucket)
+      low = middle + 1
+    else
+      high = middle
+  }
+  const point = series[low]
+  if (!point || Math.floor((point[0] - history.range_start_unix_ms) / history.chart_bucket_ms) !== bucket)
+    return null
+  return typeof point[1] === 'number' && Number.isFinite(point[1])
+    ? point[1]
+    : null
 }
 
 const chartFailureLabel = computed(() => failureRateLabelForKinds(
@@ -425,7 +473,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
         yAxisIndex: 0,
         showSymbol: false,
         symbolSize: 3,
-        smooth: cutPeak.value ? 0.6 : 0.1,
+        smooth: cutPeak.value ? 0.6 : false,
         lineStyle: {
           width: 1.8,
           cap: 'round' as const,
@@ -565,6 +613,8 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
     textStyle: { color: foreground },
     tooltip: {
       trigger: 'axis',
+      showDelay: 0,
+      transitionDuration: 0,
       renderMode: 'html',
       confine: true,
       backgroundColor: app.isDark ? 'rgba(40,40,40,0.95)' : 'rgba(255,255,255,0.8)',
@@ -573,11 +623,13 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
       borderRadius: 6,
       textStyle: { color: foreground, fontSize: 12, lineHeight: 20 },
       axisPointer: {
+        axis: 'x',
         type: 'cross',
+        snap: true,
         crossStyle: { color: secondary },
         lineStyle: { color: border, width: 1, type: 'dashed' },
       },
-      formatter: chartTooltip,
+      formatter: (params: unknown) => chartTooltip(params, mode),
     },
     legend: {
       type: 'scroll',
@@ -754,18 +806,21 @@ function exportPng(): void {
                 <p class="mt-1 text-[11px] text-muted-foreground">悬停对比同一时刻的线路数据</p>
               </div>
               <div role="group" aria-label="趋势指标" class="flex items-center rounded-lg bg-muted/70 p-1">
-                <Button variant="ghost" size="xs" class="h-7 rounded-md px-3 text-xs" :class="chartMetric === 'latency' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white'" :aria-pressed="chartMetric === 'latency'" @click="chartMetric = 'latency'">
+                <Button variant="ghost" size="xs" class="h-7 cursor-pointer rounded-md px-3 text-xs transition-colors duration-100 motion-reduce:transition-none" :class="chartMetric === 'latency' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white'" :aria-pressed="chartMetric === 'latency'" @click="chartMetric = 'latency'">
                   {{ chartLatencyLabel }}
                 </Button>
-                <Button variant="ghost" size="xs" class="h-7 rounded-md px-3 text-xs" :class="chartMetric === 'failure' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white'" :aria-pressed="chartMetric === 'failure'" @click="chartMetric = 'failure'">
+                <Button variant="ghost" size="xs" class="h-7 cursor-pointer rounded-md px-3 text-xs transition-colors duration-100 motion-reduce:transition-none" :class="chartMetric === 'failure' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white'" :aria-pressed="chartMetric === 'failure'" @click="chartMetric = 'failure'">
                   {{ failureRateLabelForKinds(tasks.map(task => task.kind), true) }}
                 </Button>
               </div>
+              <Button variant="outline" size="xs" class="h-8 cursor-pointer rounded-lg px-3 transition-colors duration-100 motion-reduce:transition-none" :class="cutPeak && 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400'" aria-label="平滑峰值" :aria-pressed="cutPeak" :disabled="!showDelay" title="仅平滑 RTT 曲线显示，汇总和丢包率仍按原始样本计算" @click="cutPeak = !cutPeak">
+                平滑
+              </Button>
               <SelectControl v-model="lineSelection" aria-label="显示线路" :options="lineOptions" class="w-32 text-xs" />
             </div>
             <template v-if="data.chart.length && selectedTasks.length">
               <div v-if="chartLayout === 'combined'" class="h-88 min-w-0 p-3 md:h-104">
-                <VChart :key="`${app.resolvedThemeMode}:${chartMetric}`" ref="combinedChartRef" :option="combinedOption" autoresize style="height: 100%; width: 100%" :aria-label="mainChartLabel" />
+                <VChart :key="app.resolvedThemeMode" ref="combinedChartRef" :option="combinedOption" autoresize style="height: 100%; width: 100%" :aria-label="mainChartLabel" />
               </div>
               <template v-else>
                 <div v-if="showDelay" class="h-72 min-w-0 p-3 md:h-80">
@@ -784,12 +839,6 @@ function exportPng(): void {
               <div class="mt-3 flex flex-wrap items-center gap-2">
                 <Button variant="outline" size="xs" :aria-pressed="showDelay" @click="chartMetric = showDelay ? 'failure' : 'combined'">延迟</Button>
                 <Button variant="outline" size="xs" :aria-pressed="showFailures" @click="chartMetric = showFailures ? 'latency' : 'combined'">{{ chartFailureLabel }}</Button>
-                <Button variant="outline" size="xs" :aria-pressed="cutPeak" @click="cutPeak = !cutPeak">平滑峰值</Button>
-                <DataTooltip content="使用 EWMA 算法平滑曲线并过滤突变值；汇总仍按原始样本计算" placement="top" content-class="max-w-56 text-[11px] leading-relaxed">
-                  <button type="button" class="flex size-8 items-center justify-center rounded-md text-muted-foreground focus-visible:outline-2 focus-visible:outline-emerald-600" aria-label="平滑峰值说明">
-                    <Icon icon="lucide:info" :width="14" :height="14" aria-hidden="true" />
-                  </button>
-                </DataTooltip>
                 <Button variant="outline" size="xs" :aria-pressed="showThresholds" @click="showThresholds = !showThresholds">阈值线</Button>
                 <Button variant="outline" size="xs" :aria-pressed="showPeaks" @click="showPeaks = !showPeaks">峰值标记</Button>
                 <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-muted/60 p-1">
