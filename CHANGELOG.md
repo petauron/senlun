@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.43](https://github.com/petauron/senlun/compare/v0.1.0-alpha.42...v0.1.0-alpha.43) (2026-11-10)
+
+
+### Features
+
+* **web:** simplify probe history with a line inspector ([#157](https://github.com/petauron/senlun/issues/157)) ([ff1a159](https://github.com/petauron/senlun/commit/ff1a159e324bd427129b4488d44caadb3c828139))
+
 ## [0.1.0-alpha.42](https://github.com/petauron/senlun/compare/v0.1.0-alpha.41...v0.1.0-alpha.42) (2026-11-08)
 
 
