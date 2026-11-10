@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.44](https://github.com/petauron/senlun/compare/v0.1.0-alpha.43...v0.1.0-alpha.44) (2026-11-10)
+
+
+### Bug Fixes
+
+* **web:** make probe chart controls and tooltips responsive ([#159](https://github.com/petauron/senlun/issues/159)) ([3b4a0ea](https://github.com/petauron/senlun/commit/3b4a0eaf631d276a302838b01cee11437efef5ed))
+
 ## [0.1.0-alpha.43](https://github.com/petauron/senlun/compare/v0.1.0-alpha.42...v0.1.0-alpha.43) (2026-11-10)
 
 
