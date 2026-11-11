@@ -151,30 +151,6 @@ watch(() => [props.uuid, props.taskId, props.kind], () => {
 const selectedTasks = computed(() => tasks.value.filter(task => selectedTaskIds.value.includes(task.id)))
 const summaryByTask = computed(() => new Map(data.value?.summary.map(summary => [summary.task_id, summary]) ?? []))
 
-const lineSelection = computed({
-  get: () => selectedTaskIds.value.length === tasks.value.length
-    ? 'all'
-    : selectedTaskIds.value.length === 1
-      ? selectedTaskIds.value[0]!
-      : 'custom',
-  set: (value: string) => {
-    if (value === 'all') {
-      selectLines(tasks.value.map(task => task.id))
-    }
-    else if (taskIds.value.has(value)) {
-      focusTask(value)
-    }
-  },
-})
-const lineOptions = computed(() => [
-  { value: 'all', label: '全部线路' },
-  ...(lineSelection.value === 'custom'
-    ? [
-        { value: 'custom', label: `已选 ${selectedTaskIds.value.length} 条` },
-      ]
-    : []),
-  ...tasks.value.map(task => ({ value: task.id, label: task.name })),
-])
 // Use the same task-name family convention as the node-card probe rows.
 const linePresets = computed(() => {
   const ipv4 = tasks.value.filter(task => !isIPv6Probe(task.name)).map(task => task.id)
@@ -883,7 +859,9 @@ function exportPng(): void {
                   {{ preset.label }}
                 </Button>
               </div>
-              <SelectControl v-model="lineSelection" aria-label="显示线路" :options="lineOptions" class="w-32 text-xs" />
+              <span aria-live="polite" aria-atomic="true" class="text-xs tabular-nums text-muted-foreground">
+                已选 {{ selectedTasks.length }} / {{ tasks.length }}
+              </span>
             </div>
             <template v-if="data.chart.length && selectedTasks.length">
               <div v-if="chartLayout === 'combined'" class="h-88 min-w-0 p-3 md:h-104">
