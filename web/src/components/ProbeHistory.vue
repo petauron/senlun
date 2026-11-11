@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { EChartsOption } from 'echarts'
+import type { EChartsOption, EChartsType } from 'echarts'
 import type { ProbeHistory } from '@/utils/admin'
 import { Icon } from '@iconify/vue'
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { fetchProbeHistory } from '@/utils/admin'
+import { isIPv6Probe } from '@/utils/nodeHelpers'
 import { probeChartSeries, probeFailureSeries } from '@/utils/probeChart'
 import { failureRateLabel, failureRateLabelForKinds } from '@/utils/probeLabels'
 import '@/utils/echarts'
@@ -122,6 +123,8 @@ const tasks = computed(() => (data.value?.tasks ?? []).filter(task => (!props.ki
 const taskIds = computed(() => new Set(tasks.value.map(task => task.id)))
 const selectedTaskIds = ref<string[]>([])
 const analysisTaskId = ref('')
+const focusedTaskId = ref('')
+let comparisonSelection: string[] | null = null
 let selectionInitialized = false
 watch(tasks, (available) => {
   const ids = available.map(task => task.id)
@@ -135,12 +138,15 @@ watch(tasks, (available) => {
   }
   else if (selectionInitialized) {
     selectedTaskIds.value = selectedTaskIds.value.filter(id => ids.includes(id))
+    if (focusedTaskId.value && !ids.includes(focusedTaskId.value))
+      clearLineFocus()
   }
 })
 watch(() => [props.uuid, props.taskId, props.kind], () => {
   selectionInitialized = false
   selectedTaskIds.value = []
   analysisTaskId.value = ''
+  clearLineFocus()
 })
 const selectedTasks = computed(() => tasks.value.filter(task => selectedTaskIds.value.includes(task.id)))
 const summaryByTask = computed(() => new Map(data.value?.summary.map(summary => [summary.task_id, summary]) ?? []))
@@ -153,11 +159,10 @@ const lineSelection = computed({
       : 'custom',
   set: (value: string) => {
     if (value === 'all') {
-      selectedTaskIds.value = tasks.value.map(task => task.id)
+      selectLines(tasks.value.map(task => task.id))
     }
     else if (taskIds.value.has(value)) {
-      selectedTaskIds.value = [value]
-      analysisTaskId.value = value
+      focusTask(value)
     }
   },
 })
@@ -170,6 +175,55 @@ const lineOptions = computed(() => [
     : []),
   ...tasks.value.map(task => ({ value: task.id, label: task.name })),
 ])
+// Use the same task-name family convention as the node-card probe rows.
+const linePresets = computed(() => {
+  const ipv4 = tasks.value.filter(task => !isIPv6Probe(task.name)).map(task => task.id)
+  const ipv6 = tasks.value.filter(task => isIPv6Probe(task.name)).map(task => task.id)
+  return [
+    { label: '全部', ids: tasks.value.map(task => task.id) },
+    ...(ipv4.length && ipv6.length
+      ? [{ label: 'V4', ids: ipv4 }, { label: 'V6', ids: ipv6 }]
+      : []),
+  ]
+})
+function isLinePresetSelected(ids: string[]): boolean {
+  return ids.length === selectedTaskIds.value.length && ids.every(id => selectedTaskIds.value.includes(id))
+}
+function clearLineFocus(): void {
+  focusedTaskId.value = ''
+  comparisonSelection = null
+}
+function selectLines(ids: string[]): void {
+  clearLineFocus()
+  selectedTaskIds.value = ids
+}
+function focusTask(id: string): void {
+  analysisTaskId.value = id
+  if (focusedTaskId.value === id) {
+    const restored = comparisonSelection ?? []
+    clearLineFocus()
+    selectedTaskIds.value = restored.filter(selected => taskIds.value.has(selected))
+  }
+  else {
+    if (!focusedTaskId.value)
+      comparisonSelection = [...selectedTaskIds.value]
+    focusedTaskId.value = id
+    selectedTaskIds.value = [id]
+  }
+}
+function highlightTask(id?: string): void {
+  // Dispatch emphasis only: keep the chart instance, zoom and cached series.
+  for (const value of [combinedChartRef.value, latencyChartRef.value, failureChartRef.value]) {
+    const chart = value as Pick<EChartsType, 'dispatchAction'> | null
+    chart?.dispatchAction({ type: 'downplay' })
+    if (id && selectedTaskIds.value.includes(id)) {
+      chart?.dispatchAction({
+        type: 'highlight',
+        seriesId: [`${id}:latency`, `${id}:failure-rate`],
+      })
+    }
+  }
+}
 const chartLatencyLabel = computed(() => tasks.value.some(task => task.kind === 'http')
   ? '延迟'
   : 'RTT')
@@ -312,6 +366,7 @@ function chartTooltip(params: unknown, mode: 'combined' | 'latency' | 'failure')
   return root
 }
 function toggleTask(id: string): void {
+  clearLineFocus()
   selectedTaskIds.value = selectedTaskIds.value.includes(id)
     ? selectedTaskIds.value.filter(selected => selected !== id)
     : [...selectedTaskIds.value, id]
@@ -553,6 +608,7 @@ function chartOption(mode: 'combined' | 'latency' | 'failure'): EChartsOption {
           },
           connectNulls: false,
           data: points,
+          emphasis: { focus: 'series' as const },
           markLine: showThresholds.value && index === 0
             ? {
                 silent: true,
@@ -816,6 +872,11 @@ function exportPng(): void {
               <Button variant="outline" size="xs" class="h-8 cursor-pointer rounded-lg px-3 transition-colors duration-100 motion-reduce:transition-none" :class="cutPeak && 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400'" aria-label="平滑峰值" :aria-pressed="cutPeak" :disabled="!showDelay" title="仅平滑 RTT 曲线显示，汇总和丢包率仍按原始样本计算" @click="cutPeak = !cutPeak">
                 平滑
               </Button>
+              <div v-if="tasks.length > 1" role="group" aria-label="线路快捷筛选" class="flex items-center rounded-lg bg-muted/70 p-1">
+                <Button v-for="preset in linePresets" :key="preset.label" variant="ghost" size="xs" class="h-8 cursor-pointer rounded-md px-3 text-xs" :class="isLinePresetSelected(preset.ids) && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="isLinePresetSelected(preset.ids)" @click="selectLines(preset.ids)">
+                  {{ preset.label }}
+                </Button>
+              </div>
               <SelectControl v-model="lineSelection" aria-label="显示线路" :options="lineOptions" class="w-32 text-xs" />
             </div>
             <template v-if="data.chart.length && selectedTasks.length">
@@ -860,8 +921,8 @@ function exportPng(): void {
             <div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-4 pb-3">
               <h3 class="text-sm font-semibold">线路检查器</h3>
               <div class="flex items-center gap-1">
-                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectedTaskIds = tasks.map(task => task.id)">全选</Button>
-                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectedTaskIds = []">全不选</Button>
+                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectLines(tasks.map(task => task.id))">全选</Button>
+                <Button variant="ghost" size="xs" class="h-7 px-2 text-[11px]" @click="selectLines([])">全不选</Button>
               </div>
             </div>
             <div class="px-1 pb-1">
@@ -870,7 +931,7 @@ function exportPng(): void {
                 class="grid min-w-0 grid-cols-[minmax(0,1fr)_4.5rem_3rem_2.75rem] items-center sm:grid-cols-[minmax(0,1fr)_4.5rem_3rem_3rem_2.75rem] gap-1 rounded-lg border-t border-border/40 px-3 py-2 transition-colors"
                 :class="[!selectedTaskIds.includes(task.id) && 'opacity-40', analysisTaskId === task.id && 'bg-emerald-500/5']"
               >
-                <button type="button" class="min-w-0 cursor-pointer rounded-md py-1 text-left focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`分析 ${task.name}`" :aria-pressed="analysisTaskId === task.id" @click="analysisTaskId = task.id">
+                <button type="button" class="min-w-0 cursor-pointer rounded-md py-1 text-left focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`仅看 ${task.name}`" :aria-pressed="focusedTaskId === task.id" :title="focusedTaskId === task.id ? '再次点击恢复先前选择' : '点击只看此线路，再次点击恢复先前选择'" @click="focusTask(task.id)" @mouseenter="highlightTask(task.id)" @mouseleave="highlightTask()" @focus="highlightTask(task.id)" @blur="highlightTask()">
                   <span class="flex min-w-0 items-center gap-1.5">
                     <span class="size-1.5 shrink-0 rounded-full" :style="{ backgroundColor: taskColor(task.id) }" aria-hidden="true" />
                     <span class="min-w-0 text-xs font-semibold break-words sm:truncate" :title="task.name">{{ task.name.replace(/ipv6/gi, 'V6') }}</span>
@@ -903,7 +964,7 @@ function exportPng(): void {
                 </label>
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <h4 class="truncate text-sm font-semibold" :title="analysisTask.name">{{ analysisTask.name }}</h4>
-                  <Button variant="ghost" size="xs" class="shrink-0" @click="selectedTaskIds = [analysisTask.id]">仅看此任务</Button>
+                  <Button variant="ghost" size="xs" class="shrink-0" @click="focusTask(analysisTask.id)">{{ focusedTaskId === analysisTask.id ? '恢复先前选择' : '仅看此任务' }}</Button>
                 </div>
                 <dl class="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4 lg:grid-cols-2">
                   <div v-for="metric in [

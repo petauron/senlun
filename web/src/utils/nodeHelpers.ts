@@ -175,6 +175,10 @@ export function getProbeToneColor(metric: 'latency' | 'loss', value: number | nu
 
 const ipv6ProbeName = /\b(?:ipv6|v6)\b/i
 
+export function isIPv6Probe(name: string): boolean {
+  return ipv6ProbeName.test(name)
+}
+
 export function selectHomeProbes(probes: NodeProbe[], nodeUuid: string, settings?: Record<string, unknown> | null, ipVersion: 'ipv4' | 'ipv6' = 'ipv4'): Array<NodeProbe | null> {
   const configuredCount = settings?.homePingRowCount
   const rowCount = typeof configuredCount === 'number' && Number.isFinite(configuredCount)
@@ -187,6 +191,6 @@ export function selectHomeProbes(probes: NodeProbe[], nodeUuid: string, settings
   const selected = Array.isArray(taskIds)
     ? Array.from(new Set(taskIds.filter(id => typeof id === 'string' || (typeof id === 'number' && Number.isInteger(id) && id >= 0)).map(String)), id => probes.find(task => task.id === id) ?? null)
     : probes
-  const matching = selected.filter(task => !task || ipv6ProbeName.test(task.name) === (ipVersion === 'ipv6'))
+  const matching = selected.filter(task => !task || isIPv6Probe(task.name) === (ipVersion === 'ipv6'))
   return Array.from({ length: rowCount }, (_, index) => matching[index] ?? null)
 }
