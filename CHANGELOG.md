@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.45](https://github.com/petauron/senlun/compare/v0.1.0-alpha.44...v0.1.0-alpha.45) (2026-11-11)
+
+
+### Bug Fixes
+
+* **web:** add quick focus and family filters to probe history ([#161](https://github.com/petauron/senlun/issues/161)) ([251d09f](https://github.com/petauron/senlun/commit/251d09fdbab59c21f3fe899f06907ff1470e40bc))
+
 ## [0.1.0-alpha.44](https://github.com/petauron/senlun/compare/v0.1.0-alpha.43...v0.1.0-alpha.44) (2026-11-10)
 
 
