@@ -180,9 +180,15 @@ const linePresets = computed(() => {
   const ipv4 = tasks.value.filter(task => !isIPv6Probe(task.name)).map(task => task.id)
   const ipv6 = tasks.value.filter(task => isIPv6Probe(task.name)).map(task => task.id)
   return [
-    { label: '全部', ids: tasks.value.map(task => task.id) },
+    {
+      label: '全部',
+      ids: tasks.value.map(task => task.id),
+    },
     ...(ipv4.length && ipv6.length
-      ? [{ label: 'V4', ids: ipv4 }, { label: 'V6', ids: ipv6 }]
+      ? [
+          { label: 'V4', ids: ipv4 },
+          { label: 'V6', ids: ipv6 },
+        ]
       : []),
   ]
 })
