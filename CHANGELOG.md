@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.46](https://github.com/petauron/senlun/compare/v0.1.0-alpha.45...v0.1.0-alpha.46) (2026-11-11)
+
+
+### Bug Fixes
+
+* **web:** show live probe selection count without redundant picker ([#163](https://github.com/petauron/senlun/issues/163)) ([19269d7](https://github.com/petauron/senlun/commit/19269d74d662a246983edc3192caf6f49d90d5c2))
+
 ## [0.1.0-alpha.45](https://github.com/petauron/senlun/compare/v0.1.0-alpha.44...v0.1.0-alpha.45) (2026-11-11)
 
 
