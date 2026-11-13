@@ -40,6 +40,7 @@ mod komari;
 mod luminaplus;
 mod management;
 mod notifications;
+mod return_routes;
 mod session_gate;
 mod storage;
 mod themes;
@@ -445,6 +446,7 @@ pub fn router(state: AppState) -> Router {
         .merge(management::routes())
         .merge(external_traffic::routes())
         .merge(ip_info::routes())
+        .merge(return_routes::routes())
         .route("/api/rpc2", post(rpc_handler))
         .route(
             "/admin/ping",

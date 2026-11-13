@@ -229,7 +229,7 @@ async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
     Ok(Json(
         json!({"ok":true,"data":{"available":enabled,"version":"senlun-1","schema_version":6,
         "mainland_china_excluded":true,"capabilities":{"geo":enabled,"network":enabled,
-        "native_classification":enabled,"global_latency":enabled,"reputation":false,"media_unlock":false,"ai_unlock":false}}}),
+        "native_classification":enabled,"global_latency":enabled,"reputation":enabled,"media_unlock":false,"ai_unlock":false}}}),
     ))
 }
 async fn validate(state: &AppState, input: &Input) -> Result<IpAddr, ApiError> {
@@ -344,6 +344,8 @@ pub(crate) async fn enrich_nodes(
         return Ok(());
     };
     enrich(value, nodes);
+    let cache = state.ip_info.inner.lock().await;
+    enrich_scores(value, &cache, crate::current_time()? / 1000);
     Ok(())
 }
 
@@ -366,6 +368,36 @@ fn enrich(value: &mut Value, nodes: &[Value]) {
         }
     }
 }
+// Dashboard reads never call the provider. Cache keys include the actual address,
+// so changing a registered IP cannot reuse another address's score.
+fn enrich_scores(value: &mut Value, cache: &Cache, now: u64) {
+    if value["uuid"].is_string() {
+        let scores: Vec<Value> = [("ipv4", 4), ("ipv6", 6)]
+            .into_iter()
+            .filter_map(|(key, family)| {
+                let ip = value[key].as_str()?.parse::<IpAddr>().ok()?;
+                let entry = cache.entries.get(&format!("{ip}:false"));
+                let score =
+                    entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
+                Some(
+                    json!({"family":family,"score":score,"provider":"Net.Coffee",
+                    "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000),
+                    "stale":entry.is_some_and(|entry|now >= entry.updated + entry.ttl)}),
+                )
+            })
+            .collect();
+        value["ip_scores"] = json!(scores);
+    } else if let Some(items) = value.as_object_mut() {
+        for item in items.values_mut() {
+            enrich_scores(item, cache, now);
+        }
+    } else if let Some(items) = value.as_array_mut() {
+        for item in items {
+            enrich_scores(item, cache, now);
+        }
+    }
+}
+
 fn string(raw: &Value, key: &str) -> Value {
     raw[key]
         .as_str()
@@ -407,6 +439,10 @@ fn normalize_lookup(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {
     } else {
         ("unknown", "未知", "unavailable")
     };
+    // Net.Coffee trust_score is a provider score, not an abuse percentage.
+    let trust_score = raw["trust_score"]
+        .as_f64()
+        .filter(|score| (0.0..=100.0).contains(score));
     let asn = raw["asn"].as_u64();
     let geo = raw["geo_sources"].as_array().and_then(|sources| {
         sources
@@ -438,10 +474,10 @@ fn normalize_lookup(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {
             "operator":string(raw,"isp"),"network_type":string(raw,"asn_kind"),"route":string(raw,"cidr"),"rir":null,"domain":string(raw,"rdns"),"datacenter":null},
         "classification":{"type":kind,"label":label,"geolocated_country_code":code,"registered_country_code":registered,
             "confidence":raw["ai_verdict"]["confidence"].as_f64().filter(|n| (0.0..=100.0).contains(n)),"source":source},
-        "reputation":{"available":false,"purity_score":null,"risk_score":null,"pollution_score":null,"risk_level":null,"pollution_level":null,
-            "signals":{"proxy":null,"tor":null,"vpn":null,"datacenter":null,"abuser":null,"crawler":null},"method":{"id":"none","status":"unavailable"}},
+        "reputation":{"available":trust_score.is_some(),"trust_score":trust_score,"purity_score":null,"risk_score":null,"pollution_score":null,"risk_level":null,"pollution_level":null,
+            "signals":{"proxy":null,"tor":null,"vpn":null,"datacenter":null,"abuser":null,"crawler":null},"method":{"id":"net_coffee_trust","status":if trust_score.is_some(){"available"}else{"unavailable"},"higher_is_better":true}},
         "capabilities":{"media_unlock":false,"ai_unlock":false},
-        "provider":{"id":"net-coffee","name":"Net.Coffee","homepage":PROVIDER,"base_source":"net-coffee","security_data_available":false}}),
+        "provider":{"id":"net-coffee","name":"Net.Coffee","homepage":PROVIDER,"base_source":"net-coffee","security_data_available":false,"trust_score_available":trust_score.is_some()}}),
     )
 }
 fn normalize_latency(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {

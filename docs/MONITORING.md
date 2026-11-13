@@ -160,3 +160,62 @@ the public URL and bootstrap token. A rollback to a schema-v2 Service requires
 stopping writers and restoring its pre-migration backup, not opening the v3 database
 with the old executable. Do not publish this branch until its added local/CI
 regressions and regenerated Web/license assets have been validated.
+
+
+## Shanghai return routes and Net.Coffee scores
+
+The built-in node card, list and detail keep their existing tags and periodic
+latency probes. Shanghai TCP return routes are separate operator-collected
+snapshots, not labels inferred from a latency measurement. IPv4 and IPv6 are
+stored separately, with target, source and collection time. A report is marked
+stale after seven days. Changing the registered IP invalidates its displayed
+carrier result; it never transfers a verdict to the new address.
+
+For the MVP, an administrator explicitly collects and imports a report. Senlun
+Service and Agent do not execute downloaded scripts or receive remote shell
+commands. Existing Vastora ICMP diagnostics are not represented as TCP reports.
+The repository's `scripts/collect-shanghai-routes.py` uses an existing trusted
+SSH alias and the operator's existing verified identity. It pins TcpQuality to
+commit `db52fc60523320fc4a34b5c369f28be38df21d13` and verifies its SHA-256 before
+execution. Upstream code is GPL-3.0-only; it is downloaded at operator request,
+not copied into Senlun or its release binaries.
+
+```sh
+python3 scripts/collect-shanghai-routes.py \
+  --host EXISTING_SSH_ALIAS --address REGISTERED_PUBLIC_IP \
+  --output /private/tmp/shanghai-route.json
+```
+
+The collector requires existing Bash, curl, traceroute, GNU timeout and standard
+shell utilities, plus already-authorized noninteractive sudo. Missing tools fail
+without installing packages. An operator who explicitly authorizes a temporary
+traceroute can pass `--temporary-traceroute`: on Debian/Ubuntu amd64/arm64 it
+reads the existing official apt metadata, downloads the matching package via
+HTTPS, verifies SHA-256, architecture and libc-only dependencies, and extracts
+the tool only under its task temporary directory. It never runs apt install or
+changes the system package database. All temporary tool files are removed on
+exit. Unknown distributions, new dependencies or unexpected package layouts
+fail closed. It runs only Shanghai TCP route identification for
+the selected address family, serially, with a 240-second deadline. It does not
+run bandwidth tests, use rootfs/chroot, change qdiscs/MTU/firewalls or upload a
+report. Third parties receive the normal public route probes, public-address
+queries, target-list retrieval and hop-IP ASN lookups (Team Cymru). This is an
+explicit operator action, never an automatic page-load operation. Temporary
+upstream files are removed. Inspect and import the resulting JSON using the
+node's **Shanghai TCP return routes** disclosure. The authenticated import API
+is `POST /api/admin/nodes/{uuid}/return-routes` with the normal CSRF protection;
+it checks the exact registered address and preserves all other metadata. The
+import is administrator-supplied evidence, not a cryptographic attestation of
+execution. No raw traceroute, SSH credential or subscription belongs in an issue.
+
+Net.Coffee uses the existing administrator-enabled IP information setting and
+fixed provider HTTP lane. A normal page refresh reads the bounded address cache
+only; it does not query a third party. Expand a node's IP badge and select
+**Update score** to query the registered address explicitly. Its original
+`trust_score` is shown as 0–100, higher is better; it is not an abuse probability,
+a computed purity percentage or an availability guarantee. IPv4/IPv6 each retain
+source and timestamp. Missing values show unknown, old cache entries are marked
+stale after one day, and failures are visible without inventing zero. Cache is
+in memory and is intentionally empty after Service restart; an administrator
+can refresh it again. Existing opt-in, quotas, address checks and administrator
+privacy restrictions remain in effect.

@@ -2,7 +2,9 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
+import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
@@ -265,6 +267,8 @@ const customTags = computed(() => parseTags(props.node.tags))
         <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1.5 items-center">
           <NodeTagBadge v-for="(tag, index) in customTags" :key="index" :text="tag.text" :color="tag.color" />
         </div>
+        <NodeReturnRoutes :node="node" />
+        <NodeIpScores :node="node" />
       </div>
     </template>
   </CardX>

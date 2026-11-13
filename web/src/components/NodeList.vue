@@ -2,7 +2,9 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
+import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
@@ -326,6 +328,8 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 v-else-if="col.key === 'networks'"
                 class="flex flex-col gap-0.5 text-[11px] text-muted-foreground"
               >
+                <NodeReturnRoutes :node="node" />
+                <NodeIpScores :node="node" />
                 <NodeProbePanel :node="node" compact />
               </div>
 

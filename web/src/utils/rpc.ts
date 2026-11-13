@@ -38,7 +38,28 @@ export interface SelectedTraffic {
   reset_at: string | null
 }
 
+export interface IpScore {
+  family: 4 | 6
+  score: number | null
+  provider: string
+  updated_at_unix_ms: number | null
+  stale: boolean
+}
+
+export interface ReturnRoute {
+  family: 4 | 6
+  region: string
+  protocol: string
+  source: string
+  checked_at_unix_ms: number
+  stale: boolean
+  address_changed: boolean
+  carriers: { carrier: string, target: string, status: string, label: string }[]
+}
+
 export interface Client {
+  return_routes?: ReturnRoute[]
+  ip_scores?: IpScore[]
   probes?: NodeProbe[]
   uuid: string
   name: string
