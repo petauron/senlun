@@ -69,7 +69,7 @@ curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 'https://ra
 printf '%s  %s\n' '__SHA256__' "$work/core.sh" | sha256sum -c - >&2
 # Preflight above prevents the upstream dependency helpers from installing tools.
 # A private HOME/TMPDIR and empty environment prevent inherited credentials/options.
-sudo -n timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=dumb LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
+sudo -n timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xterm LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
  tail -c 2048 "$work/run.log" >&2
  exit 4
 }
