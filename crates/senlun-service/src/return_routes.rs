@@ -47,10 +47,10 @@ async fn import(
     Json(report): Json<RouteReport>,
 ) -> Result<Json<Value>, ApiError> {
     let now = crate::current_time()?;
-    state
+    let reports = state
         .database(move |storage| storage.save_return_route(&id, report, now))
         .await?;
-    Ok(Json(json!({"ok":true})))
+    Ok(Json(json!({"ok":true,"data":reports})))
 }
 impl Storage {
     fn save_return_route(
@@ -58,7 +58,7 @@ impl Storage {
         id: &str,
         report: RouteReport,
         now: u64,
-    ) -> Result<(), StorageError> {
+    ) -> Result<Value, StorageError> {
         let address = report
             .address
             .parse::<IpAddr>()
@@ -136,8 +136,12 @@ impl Storage {
             params![id, options.to_string()],
         )?;
         crate::control::configuration_audit(&tx, "node.return_routes.import", id)?;
+        let saved: crate::control::NodeOptions = serde_json::from_value(options)
+            .map_err(|_| StorageError::InvalidInput("invalid saved node options"))?;
+        let mut response = json!({});
+        decorate(&saved, &mut response, now);
         tx.commit()?;
-        Ok(())
+        Ok(response["return_routes"].take())
     }
 }
 

@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
+import type { ReturnRoute } from '@/utils/rpc'
+import { useNodesStore } from '@/stores/nodes'
 import { ref } from 'vue'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ node: NodeData }>()
 const busy = ref(false)
 const message = ref('')
+const nodesStore = useNodesStore()
 const names: Record<string, string> = { telecom: '电信', unicom: '联通', mobile: '移动' }
 async function importReport(event: Event) {
+  const uuid = props.node.uuid
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   if (!file || busy.value)
@@ -21,8 +25,11 @@ async function importReport(event: Event) {
   busy.value = true
   try {
     const report: unknown = JSON.parse(await file.text())
-    await getSharedApi().post(`admin/nodes/${encodeURIComponent(props.node.uuid)}/return-routes`, report)
-    message.value = '上海 TCP 回程报告已保存；节点数据刷新后显示。'
+    const result = await getSharedApi().post<{ data: ReturnRoute[] }>(`admin/nodes/${encodeURIComponent(uuid)}/return-routes`, report)
+    const current = nodesStore.nodes.find(node => node.uuid === uuid)
+    if (current)
+      current.return_routes = result.data
+    message.value = '上海 TCP 回程报告已保存。'
   }
   catch (error) {
     message.value = error instanceof Error

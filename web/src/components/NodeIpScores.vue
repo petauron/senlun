@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
+import { useNodesStore } from '@/stores/nodes'
 import { computed, ref } from 'vue'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ node: NodeData }>()
 const busy = ref(false)
 const message = ref('')
+const nodesStore = useNodesStore()
 const scores = computed(() => props.node.ip_scores ?? [])
 async function refresh(family: 4 | 6) {
+  const uuid = props.node.uuid
   const ip = family === 4
     ? props.node.ipv4
     : props.node.ipv6
@@ -16,8 +19,20 @@ async function refresh(family: 4 | 6) {
   busy.value = true
   message.value = ''
   try {
-    const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } } }>('admin/ip-info/v1/refresh', { uuid: props.node.uuid, ip })
+    const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { updated_at: string, stale: boolean, warning: string | null } }>('admin/ip-info/v1/refresh', { uuid, ip })
     const score = result.data.reputation.trust_score
+    const current = nodesStore.nodes.find(node => node.uuid === uuid)
+    const currentAddress = family === 4
+      ? current?.ipv4
+      : current?.ipv6
+    if (current && currentAddress === ip) {
+      const entry = { family, score, provider: 'Net.Coffee', updated_at_unix_ms: Date.parse(result.meta.updated_at), stale: result.meta.stale }
+      current.ip_scores = [...(current.ip_scores ?? []).filter(old => old.family !== family), entry]
+    }
+    if (result.meta.stale || result.meta.warning) {
+      message.value = result.meta.warning || '刷新失败，保留上次结果（已过期）'
+      return
+    }
     message.value = score === null
       ? `IPv${family}：来源未提供评分`
       : `IPv${family} Net.Coffee 评分 ${score}，已更新`
