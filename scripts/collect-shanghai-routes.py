@@ -18,24 +18,58 @@ REMOTE = r'''set -eu
 umask 077
 family=$1
 expected=$2
-for tool in bash curl traceroute timeout sha256sum tar awk sed grep sort find head date; do
+allow_temporary=$3
+for tool in bash curl timeout sha256sum tar awk sed grep sort find head date; do
  command -v "$tool" >/dev/null || { echo "Missing existing tool: $tool; no package was installed" >&2; exit 2; }
 done
 sudo -n true
 work=$(mktemp -d /tmp/senlun-shanghai.XXXXXX)
 trap 'sudo -n rm -rf -- "$work"' EXIT HUP INT TERM
+tool_path=/usr/sbin:/usr/bin:/sbin:/bin
+if ! command -v traceroute >/dev/null; then
+ [ "$allow_temporary" = 1 ] || { echo 'Missing traceroute; explicitly allow temporary official tool extraction' >&2; exit 2; }
+ for tool in apt-cache dpkg-deb dpkg; do command -v "$tool" >/dev/null || exit 2; done
+ . /etc/os-release
+ arch=$(dpkg --print-architecture)
+ case "$ID:$arch" in
+  ubuntu:arm64) origin=https://ports.ubuntu.com/ubuntu-ports ;;
+  ubuntu:amd64) origin=https://archive.ubuntu.com/ubuntu ;;
+  debian:arm64|debian:amd64) origin=https://deb.debian.org/debian ;;
+  *) echo 'Temporary traceroute supports reviewed Debian/Ubuntu architectures only' >&2; exit 2 ;;
+ esac
+ apt-cache show --no-all-versions traceroute > "$work/package.meta"
+ filename=$(awk '/^Filename: / {print $2; exit}' "$work/package.meta")
+ digest=$(awk '/^SHA256: / {print $2; exit}' "$work/package.meta")
+ version=$(awk '/^Version: / {print $2; exit}' "$work/package.meta")
+ case "$filename" in pool/*/traceroute/traceroute_*_"$arch".deb) ;; *) exit 2 ;; esac
+ [ "${#digest}" = 64 ] && ! printf '%s' "$digest" | grep -q '[^0-9a-f]' || exit 2
+ curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 --max-filesize 1048576 "$origin/$filename" -o "$work/traceroute.deb"
+ printf '%s  %s\n' "$digest" "$work/traceroute.deb" | sha256sum -c - >&2
+ [ "$(dpkg-deb -f "$work/traceroute.deb" Package)" = traceroute ] || exit 2
+ [ "$(dpkg-deb -f "$work/traceroute.deb" Architecture)" = "$arch" ] || exit 2
+ depends=$(dpkg-deb -f "$work/traceroute.deb" Depends)
+ printf '%s\n' "$depends" | grep -Eq '^libc6 \((>=|=) [0-9A-Za-z.+:~_-]+\)$' || { echo 'Unexpected traceroute dependencies; review required' >&2; exit 2; }
+ dpkg-deb -x "$work/traceroute.deb" "$work/package"
+ binary="$work/package/usr/bin/traceroute.db"
+ [ -x "$binary" ] || binary="$work/package/usr/bin/traceroute"
+ [ -x "$binary" ] || { echo 'Unrecognized traceroute package layout' >&2; exit 2; }
+ mkdir "$work/bin"
+ ln -s "$binary" "$work/bin/traceroute"
+ tool_path="$work/bin:$tool_path"
+ printf 'Temporary official traceroute %s verified; no package installed\n' "$version" >&2
+fi
 url=https://api.ipify.org
 [ "$family" = 4 ] || url=https://api6.ipify.org
 check_address() {
- actual=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy curl --noproxy '*' -fsS --max-time 15 -"$family" "$url")
+ actual=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy curl -q --noproxy '*' -fsS --max-time 15 -"$family" "$url")
  [ "$actual" = "$expected" ] || { echo 'Actual public egress differs from the selected registered address; report not generated' >&2; exit 3; }
 }
 check_address
-curl --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 'https://raw.githubusercontent.com/ibsgss/TcpQuality/__REVISION__/runTcpQuality-core.sh' -o "$work/core.sh"
+curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 'https://raw.githubusercontent.com/ibsgss/TcpQuality/__REVISION__/runTcpQuality-core.sh' -o "$work/core.sh"
 printf '%s  %s\n' '__SHA256__' "$work/core.sh" | sha256sum -c - >&2
 # Preflight above prevents the upstream dependency helpers from installing tools.
 # A private HOME/TMPDIR and empty environment prevent inherited credentials/options.
-sudo -n timeout -k 5s 240s env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME="$work" TMPDIR="$work" TERM=dumb LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
+sudo -n timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=dumb LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
  tail -c 2048 "$work/run.log" >&2
  exit 4
 }
@@ -54,6 +88,7 @@ def main():
     parser.add_argument('--host', required=True, help='Existing trusted SSH alias')
     parser.add_argument('--address', required=True, help='Exact registered public egress address')
     parser.add_argument('--output', required=True, type=pathlib.Path)
+    parser.add_argument('--temporary-traceroute', action='store_true', help='Explicitly allow temporary official traceroute extraction if absent; never install a package')
     args = parser.parse_args()
     if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', args.host):
         parser.error('Use a trusted SSH alias, not an SSH command or URL')
@@ -64,7 +99,7 @@ def main():
         parser.error('Output already exists; choose a new report path')
     command = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
                '-o', 'ControlMaster=no', '-o', 'ControlPath=none', '-o', 'ConnectTimeout=10',
-               args.host, 'bash -s -- ' + shlex.join([str(address.version), str(address)])]
+               args.host, 'bash -s -- ' + shlex.join([str(address.version), str(address), '1' if args.temporary_traceroute else '0'])]
     result = subprocess.run(command, input=REMOTE, text=True, capture_output=True, timeout=300, check=False)
     if result.returncode:
         raise SystemExit(result.stderr[-4096:] or 'Collection failed; no report generated')

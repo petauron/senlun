@@ -188,7 +188,14 @@ python3 scripts/collect-shanghai-routes.py \
 
 The collector requires existing Bash, curl, traceroute, GNU timeout and standard
 shell utilities, plus already-authorized noninteractive sudo. Missing tools fail
-without installing packages. It runs only Shanghai TCP route identification for
+without installing packages. An operator who explicitly authorizes a temporary
+traceroute can pass `--temporary-traceroute`: on Debian/Ubuntu amd64/arm64 it
+reads the existing official apt metadata, downloads the matching package via
+HTTPS, verifies SHA-256, architecture and libc-only dependencies, and extracts
+the tool only under its task temporary directory. It never runs apt install or
+changes the system package database. All temporary tool files are removed on
+exit. Unknown distributions, new dependencies or unexpected package layouts
+fail closed. It runs only Shanghai TCP route identification for
 the selected address family, serially, with a 240-second deadline. It does not
 run bandwidth tests, use rootfs/chroot, change qdiscs/MTU/firewalls or upload a
 report. Third parties receive the normal public route probes, public-address
