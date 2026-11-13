@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.47](https://github.com/petauron/senlun/compare/v0.1.0-alpha.46...v0.1.0-alpha.47) (2026-11-13)
+
+
+### Bug Fixes
+
+* compact traffic quota labels ([#176](https://github.com/petauron/senlun/issues/176)) ([e92c29f](https://github.com/petauron/senlun/commit/e92c29f316359db19f1032c880088bd64546d7c1)), closes [#175](https://github.com/petauron/senlun/issues/175)
+
 ## [0.1.0-alpha.46](https://github.com/petauron/senlun/compare/v0.1.0-alpha.45...v0.1.0-alpha.46) (2026-11-11)
 
 
