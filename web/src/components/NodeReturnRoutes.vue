@@ -25,7 +25,9 @@ async function importReport(event: Event) {
     message.value = '上海 TCP 回程报告已保存；节点数据刷新后显示。'
   }
   catch (error) {
-    message.value = error instanceof Error ? error.message : '报告导入失败'
+    message.value = error instanceof Error
+      ? error.message
+      : '报告导入失败'
   }
   finally {
     busy.value = false

@@ -8,7 +8,9 @@ const busy = ref(false)
 const message = ref('')
 const scores = computed(() => props.node.ip_scores ?? [])
 async function refresh(family: 4 | 6) {
-  const ip = family === 4 ? props.node.ipv4 : props.node.ipv6
+  const ip = family === 4
+    ? props.node.ipv4
+    : props.node.ipv6
   if (!ip || busy.value)
     return
   busy.value = true
@@ -16,10 +18,14 @@ async function refresh(family: 4 | 6) {
   try {
     const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } } }>('admin/ip-info/v1/refresh', { uuid: props.node.uuid, ip })
     const score = result.data.reputation.trust_score
-    message.value = score === null ? `IPv${family}：来源未提供评分` : `IPv${family} Net.Coffee 评分 ${score}，已更新`
+    message.value = score === null
+      ? `IPv${family}：来源未提供评分`
+      : `IPv${family} Net.Coffee 评分 ${score}，已更新`
   }
   catch (error) {
-    message.value = error instanceof Error ? error.message : '评分更新失败'
+    message.value = error instanceof Error
+      ? error.message
+      : '评分更新失败'
   }
   finally {
     busy.value = false

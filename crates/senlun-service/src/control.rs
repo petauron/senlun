@@ -498,7 +498,9 @@ impl Storage {
         let previous = options_or_none(&tx, id)?;
         // Route reports are read-only metadata here; only the validated import
         // endpoint may replace them. Preserve them on unrelated editor saves.
-        options.return_routes = previous.as_ref().map_or_else(Vec::new, |old| old.return_routes.clone());
+        options.return_routes = previous
+            .as_ref()
+            .map_or_else(Vec::new, |old| old.return_routes.clone());
         let old_source = previous
             .as_ref()
             .map_or(TrafficSource::Local, |old| old.traffic_source);

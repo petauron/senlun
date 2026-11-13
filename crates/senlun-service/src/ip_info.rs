@@ -377,16 +377,24 @@ fn enrich_scores(value: &mut Value, cache: &Cache, now: u64) {
             .filter_map(|(key, family)| {
                 let ip = value[key].as_str()?.parse::<IpAddr>().ok()?;
                 let entry = cache.entries.get(&format!("{ip}:false"));
-                let score = entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
-                Some(json!({"family":family,"score":score,"provider":"Net.Coffee",
+                let score =
+                    entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
+                Some(
+                    json!({"family":family,"score":score,"provider":"Net.Coffee",
                     "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000),
-                    "stale":entry.is_some_and(|entry|now >= entry.updated + entry.ttl)}))
-            }).collect();
+                    "stale":entry.is_some_and(|entry|now >= entry.updated + entry.ttl)}),
+                )
+            })
+            .collect();
         value["ip_scores"] = json!(scores);
     } else if let Some(items) = value.as_object_mut() {
-        for item in items.values_mut() { enrich_scores(item, cache, now); }
+        for item in items.values_mut() {
+            enrich_scores(item, cache, now);
+        }
     } else if let Some(items) = value.as_array_mut() {
-        for item in items { enrich_scores(item, cache, now); }
+        for item in items {
+            enrich_scores(item, cache, now);
+        }
     }
 }
 
@@ -432,7 +440,9 @@ fn normalize_lookup(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {
         ("unknown", "未知", "unavailable")
     };
     // Net.Coffee trust_score is a provider score, not an abuse percentage.
-    let trust_score = raw["trust_score"].as_f64().filter(|score| (0.0..=100.0).contains(score));
+    let trust_score = raw["trust_score"]
+        .as_f64()
+        .filter(|score| (0.0..=100.0).contains(score));
     let asn = raw["asn"].as_u64();
     let geo = raw["geo_sources"].as_array().and_then(|sources| {
         sources
