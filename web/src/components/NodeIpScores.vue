@@ -16,7 +16,9 @@ const message = ref('')
 const nodesStore = useNodesStore()
 const { family } = useNodeIpVersion(() => props.node)
 const entry = computed(() => props.node.ip_scores?.find(value => value.family === family.value))
-const address = computed(() => family.value === 4 ? props.node.ipv4 : props.node.ipv6)
+const address = computed(() => family.value === 4
+  ? props.node.ipv4
+  : props.node.ipv6)
 const score = computed(() => {
   const value = entry.value?.score
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
@@ -69,14 +71,18 @@ const grade = computed(() => {
     ? neutral
     : levels.find(level => value >= level.min) ?? neutral
 })
-const displayScore = computed(() => entry.value?.stale ? '—' : score.value ?? '—')
+const displayScore = computed(() => entry.value?.stale
+  ? '—'
+  : score.value ?? '—')
 const statusIcon = computed(() => {
   if (entry.value?.stale)
     return 'tabler:clock-hour-4'
   const value = score.value
   if (value === null)
     return 'lucide:info'
-  return value < 40 ? 'lucide:triangle-alert' : 'lucide:circle-check'
+  return value < 40
+    ? 'lucide:triangle-alert'
+    : 'lucide:circle-check'
 })
 watch(family, () => {
   message.value = ''
@@ -93,7 +99,9 @@ async function refresh() {
   try {
     const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { updated_at: string, stale: boolean, warning: string | null } }>('admin/ip-info/v1/refresh', { uuid, ip })
     const current = nodesStore.nodes.find(node => node.uuid === uuid)
-    const currentAddress = selectedFamily === 4 ? current?.ipv4 : current?.ipv6
+    const currentAddress = selectedFamily === 4
+      ? current?.ipv4
+      : current?.ipv6
     if (!current || currentAddress !== ip)
       return
     current.ip_scores = [

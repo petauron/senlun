@@ -7,7 +7,9 @@ export function useNodeIpVersion(node: () => NodeData) {
   const app = useAppStore()
   const versions = computed(() => (['ipv4', 'ipv6'] as const).filter((version) => {
     const value = node()
-    const family = version === 'ipv4' ? 4 : 6
+    const family = version === 'ipv4'
+      ? 4
+      : 6
     return Boolean(value[version])
       || value.ip_scores?.some(entry => entry.family === family)
       || value.return_routes?.some(report => report.family === family)
@@ -22,6 +24,8 @@ export function useNodeIpVersion(node: () => NodeData) {
     },
     set: value => app.setHomeProbeIPVersion(node().uuid, value),
   })
-  const family = computed<4 | 6>(() => version.value === 'ipv4' ? 4 : 6)
+  const family = computed<4 | 6>(() => version.value === 'ipv4'
+    ? 4
+    : 6)
   return { versions, version, family }
 }

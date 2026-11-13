@@ -16,12 +16,29 @@ const message = ref('')
 const nodesStore = useNodesStore()
 const { family } = useNodeIpVersion(() => props.node)
 const report = computed(() => props.node.return_routes?.find(value => value.family === family.value))
-const address = computed(() => family.value === 4 ? props.node.ipv4 : props.node.ipv6)
+const address = computed(() => family.value === 4
+  ? props.node.ipv4
+  : props.node.ipv6)
 const visible = computed(() => props.node.return_routes?.length || props.node.ipv4 || props.node.ipv6)
 const carriers = [
-  { id: 'telecom', name: '电信', short: '电', tone: 'bg-violet-500/15 text-violet-700 dark:text-violet-300' },
-  { id: 'unicom', name: '联通', short: '联', tone: 'bg-rose-500/15 text-rose-700 dark:text-rose-300' },
-  { id: 'mobile', name: '移动', short: '移', tone: 'bg-teal-500/15 text-teal-700 dark:text-teal-300' },
+  {
+    id: 'telecom',
+    name: '电信',
+    short: '电',
+    tone: 'bg-violet-500/15 text-violet-700 dark:text-violet-300',
+  },
+  {
+    id: 'unicom',
+    name: '联通',
+    short: '联',
+    tone: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
+  },
+  {
+    id: 'mobile',
+    name: '移动',
+    short: '移',
+    tone: 'bg-teal-500/15 text-teal-700 dark:text-teal-300',
+  },
 ]
 const rows = computed(() => carriers.map((carrier) => {
   const route = report.value?.carriers.find(value => value.carrier === carrier.id)
@@ -32,8 +49,16 @@ const rows = computed(() => carriers.map((carrier) => {
       ? '需复测'
       : report.value.stale
         ? '待更新'
-        : route?.status === 'ok' ? route.label.replace(/^10099->/, '').replaceAll('->', '→') : '未知'
-  return { ...carrier, label, route, known, premium: known && /CN2|9929|CMIN2|GIA|CU2/i.test(route?.label ?? '') }
+        : route?.status === 'ok'
+          ? route.label.replace(/^10099->/, '').replaceAll('->', '→')
+          : '未知'
+  return {
+    ...carrier,
+    label,
+    route,
+    known,
+    premium: known && /CN2|9929|CMIN2|GIA|CU2/i.test(route?.label ?? ''),
+  }
 }))
 const summary = computed(() => `${props.node.name} IPv${family.value} 三网回程：${rows.value.map(row => `${row.name} ${row.label}`).join('，')}，查看详情`)
 watch(family, () => {
