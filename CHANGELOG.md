@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.51](https://github.com/petauron/senlun/compare/v0.1.0-alpha.50...v0.1.0-alpha.51) (2026-11-13)
+
+
+### Features
+
+* run bounded Shanghai route checks from the node panel ([#186](https://github.com/petauron/senlun/issues/186)) ([3e55d99](https://github.com/petauron/senlun/commit/3e55d991627988a6818e732c9ee0f8173b412748))
+
 ## [0.1.0-alpha.50](https://github.com/petauron/senlun/compare/v0.1.0-alpha.49...v0.1.0-alpha.50) (2026-11-13)
 
 
