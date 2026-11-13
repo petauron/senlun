@@ -71,7 +71,7 @@ async fn claim(
     let now = crate::current_time()?;
     Ok(Json(
         state
-            .database(move |storage| storage.claim_route_check(&token, input, now))
+            .database(move |storage| storage.claim_route_check(&token, &input, now))
             .await?,
     ))
 }
@@ -300,7 +300,7 @@ impl Storage {
     fn claim_route_check(
         &self,
         token: &str,
-        input: ReturnRouteClaim,
+        input: &ReturnRouteClaim,
         now: u64,
     ) -> Result<Option<ReturnRouteTask>, StorageError> {
         if input.schema_version != RETURN_ROUTE_SCHEMA_VERSION
@@ -368,7 +368,7 @@ impl Storage {
             .and_then(|v| v.parse::<IpAddr>().ok())
             != address.parse::<IpAddr>().ok()
         {
-            error = "address_changed".to_owned();
+            "address_changed".clone_into(&mut error);
         }
         if error.is_empty() {
             let report = input

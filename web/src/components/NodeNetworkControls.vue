@@ -72,6 +72,10 @@ function schedule() {
   clearTimeout(timer)
   if (disposed || !app.isLoggedIn || !active.value)
     return
+  if (Date.now() - active.value.created_at_unix_ms > 20 * 60_000) {
+    message.value = '状态刷新已暂停，请重新打开详情查看。'
+    return
+  }
   // Poll only an explicit live job. No page-load probe or background fleet scan.
   timer = setTimeout(async () => {
     const uuid = props.node.uuid
@@ -91,7 +95,7 @@ function schedule() {
     }
   }, 3000)
 }
-watch(() => [props.node.uuid, active.value?.state, app.isLoggedIn], schedule, { immediate: true })
+watch([() => props.node.uuid, () => active.value?.state, () => app.isLoggedIn], schedule, { immediate: true })
 watch(family, () => {
   message.value = ''
 })
