@@ -95,7 +95,11 @@ function schedule() {
     }
   }, 3000)
 }
-watch([() => props.node.uuid, () => active.value?.state, () => app.isLoggedIn], schedule, { immediate: true })
+watch([
+  () => props.node.uuid,
+  () => active.value?.state,
+  () => app.isLoggedIn,
+], schedule, { immediate: true })
 watch(family, () => {
   message.value = ''
 })
