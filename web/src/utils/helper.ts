@@ -61,7 +61,9 @@ export function formatTrafficQuota(bytes: number): string {
 
   const index = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1))
   const value = Number((bytes / 1024 ** index).toFixed(2))
-  const unit = index === 0 ? 'B' : (BYTE_UNITS[index] ?? 'PB').replace('B', '')
+  const unit = index === 0
+    ? 'B'
+    : (BYTE_UNITS[index] ?? 'PB').replace('B', '')
   return `${value}${unit}`
 }
 
