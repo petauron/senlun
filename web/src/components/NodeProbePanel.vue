@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import { computed, defineAsyncComponent, ref } from 'vue'
-import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
@@ -18,9 +17,6 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 
 <template>
   <div @click.stop>
-    <div class="mb-1 flex h-7 justify-end">
-      <NodeIpVersionSwitch :node="node" />
-    </div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       :aria-label="`${node.name} 延迟 / ${rateLabel}详情`" @click="open = true" @keydown.enter.self.prevent="open = true" @keydown.space.self.prevent="open = true"

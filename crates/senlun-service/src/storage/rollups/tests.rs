@@ -422,7 +422,7 @@ fn forward_migration_preserves_counts_peaks_and_ledger_and_keeps_paired_backup()
     assert_eq!(
         db.query_row("PRAGMA main.user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        7
+        crate::storage::SCHEMA_VERSION
     );
     assert_eq!(
         db.query_row("PRAGMA metrics.user_version", [], |r| r.get::<_, i64>(0))

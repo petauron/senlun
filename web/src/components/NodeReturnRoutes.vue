@@ -1,24 +1,14 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
-import type { ReturnRoute } from '@/utils/rpc'
-import { Icon } from '@iconify/vue'
-import { computed, ref, watch } from 'vue'
-import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
+import { computed, ref } from 'vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
-import { useNodesStore } from '@/stores/nodes'
-import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
-const busy = ref(false)
-const message = ref('')
-const nodesStore = useNodesStore()
 const { family } = useNodeIpVersion(() => props.node)
 const report = computed(() => props.node.return_routes?.find(value => value.family === family.value))
-const address = computed(() => family.value === 4
-  ? props.node.ipv4
-  : props.node.ipv6)
 const visible = computed(() => props.node.return_routes?.length || props.node.ipv4 || props.node.ipv6)
 const carriers = [
   {
@@ -61,47 +51,6 @@ const rows = computed(() => carriers.map((carrier) => {
   }
 }))
 const summary = computed(() => `${props.node.name} IPv${family.value} 三网回程：${rows.value.map(row => `${row.name} ${row.label}`).join('，')}，查看详情`)
-watch(family, () => {
-  message.value = ''
-})
-
-async function importReport(event: Event) {
-  const uuid = props.node.uuid
-  const selectedFamily = family.value
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file || busy.value)
-    return
-  message.value = ''
-  if (file.size > 16 * 1024) {
-    message.value = '检测文件过大，请重新选择。'
-    input.value = ''
-    return
-  }
-  busy.value = true
-  try {
-    const value: unknown = JSON.parse(await file.text())
-    if (typeof value !== 'object' || value === null || !('family' in value) || value.family !== selectedFamily) {
-      if (family.value === selectedFamily)
-        message.value = `请选择 IPv${selectedFamily} 的检测文件。`
-      return
-    }
-    const result = await getSharedApi().post<{ data: ReturnRoute[] }>(`admin/nodes/${encodeURIComponent(uuid)}/return-routes`, value)
-    const current = nodesStore.nodes.find(node => node.uuid === uuid)
-    if (current)
-      current.return_routes = result.data
-    if (family.value === selectedFamily)
-      message.value = '检测结果已更新。'
-  }
-  catch {
-    if (family.value === selectedFamily)
-      message.value = '结果未能保存，请核对文件对应的节点和网络版本。'
-  }
-  finally {
-    busy.value = false
-    input.value = ''
-  }
-}
 </script>
 
 <template>
@@ -132,9 +81,7 @@ async function importReport(event: Event) {
         <DialogTitle>{{ node.name }} · 三网回程</DialogTitle>
         <DialogDescription>查看当前所选网络的上海三网检测结果。</DialogDescription>
       </DialogHeader>
-      <div class="flex justify-end">
-        <NodeIpVersionSwitch :node="node" />
-      </div>
+      <NodeNetworkControls :node="node" />
       <div class="space-y-2">
         <div v-for="row in rows" :key="row.id" class="flex items-center gap-3 rounded-xl border border-border/60 bg-muted/25 p-3">
           <span class="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold" :class="row.known ? row.tone : 'bg-muted text-muted-foreground'">{{ row.short }}</span>
@@ -156,12 +103,6 @@ async function importReport(event: Event) {
           <p>仅代表本次上海回程，七天后需更新；不代表其他地区或实际下载速度。</p>
         </div>
       </details>
-      <label v-if="address" class="relative flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border border-border bg-background px-3 text-sm font-medium transition-colors hover:bg-muted focus-within:ring-2 focus-within:ring-ring" :class="{ 'pointer-events-none opacity-50': busy }">
-        <Icon icon="lucide:refresh-cw" class="size-4" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
-        {{ busy ? '正在更新…' : `上传 IPv${family} 检测结果` }}
-        <input type="file" accept="application/json,.json" :disabled="busy" class="sr-only" @change="importReport">
-      </label>
-      <p v-if="message" role="status" class="text-xs text-muted-foreground">{{ message }}</p>
     </DialogContent>
   </Dialog>
 </template>
