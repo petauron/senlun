@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import type { ReturnRoute } from '@/utils/rpc'
-import { useNodesStore } from '@/stores/nodes'
 import { ref } from 'vue'
+import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ node: NodeData }>()

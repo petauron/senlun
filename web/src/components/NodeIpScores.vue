@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
-import { useNodesStore } from '@/stores/nodes'
 import { computed, ref } from 'vue'
+import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ node: NodeData }>()
@@ -26,8 +26,17 @@ async function refresh(family: 4 | 6) {
       ? current?.ipv4
       : current?.ipv6
     if (current && currentAddress === ip) {
-      const entry = { family, score, provider: 'Net.Coffee', updated_at_unix_ms: Date.parse(result.meta.updated_at), stale: result.meta.stale }
-      current.ip_scores = [...(current.ip_scores ?? []).filter(old => old.family !== family), entry]
+      const entry = {
+        family,
+        score,
+        provider: 'Net.Coffee',
+        updated_at_unix_ms: Date.parse(result.meta.updated_at),
+        stale: result.meta.stale,
+      }
+      current.ip_scores = [
+        ...(current.ip_scores ?? []).filter(old => old.family !== family),
+        entry,
+      ]
     }
     if (result.meta.stale || result.meta.warning) {
       message.value = result.meta.warning || '刷新失败，保留上次结果（已过期）'
