@@ -722,7 +722,7 @@ async fn rpc_handler(
         Ok(mut value)
             if matches!(
                 request.method.as_str(),
-                "common:getNodes" | "public:getNodesInformation"
+                "common:getNodes" | "public:getNodesInformation" | "common:getDashboard"
             ) =>
         {
             match ip_info::enrich_nodes(&state, &headers, &mut value).await {
