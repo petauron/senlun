@@ -202,7 +202,8 @@ report. Third parties receive the normal public route probes, public-address
 queries, target-list retrieval and hop-IP ASN lookups (Team Cymru). This is an
 explicit operator action, never an automatic page-load operation. Temporary
 upstream files are removed. Inspect and import the resulting JSON using the
-node's **Shanghai TCP return routes** disclosure. The authenticated import API
+node's three-carrier route pills and select **Upload detection results** in the
+dialog. The authenticated import API
 is `POST /api/admin/nodes/{uuid}/return-routes` with the normal CSRF protection;
 it checks the exact registered address and preserves all other metadata. The
 import is administrator-supplied evidence, not a cryptographic attestation of
@@ -210,7 +211,7 @@ execution. No raw traceroute, SSH credential or subscription belongs in an issue
 
 Net.Coffee uses the existing administrator-enabled IP information setting and
 fixed provider HTTP lane. A normal page refresh reads the bounded address cache
-only; it does not query a third party. Expand a node's IP badge and select
+only; it does not query a third party. Select a node's IP badge and choose
 **Update score** to query the registered address explicitly. Its original
 `trust_score` is shown as 0–100, higher is better; it is not an abuse probability,
 a computed purity percentage or an availability guarantee. IPv4/IPv6 each retain
@@ -219,3 +220,15 @@ stale after one day, and failures are visible without inventing zero. Cache is
 in memory and is intentionally empty after Service restart; an administrator
 can refresh it again. Existing opt-in, quotas, address checks and administrator
 privacy restrictions remain in effect.
+
+The existing per-node IPv4/IPv6 switch controls latency, route pills and the IP
+quality badge together. A missing report for the selected family stays unknown;
+the UI never substitutes another family's result. Cards keep only the three
+carrier pills and the score/grade badge; source, time, targets, import and refresh
+controls are inside dialogs.
+
+IP grades are a presentation of the provider's original numeric score: 95–100
+uses gold (金色传说), 80–94 violet (优秀), 60–79 teal (良好), 40–59 orange
+(一般), and 0–39 rose (需关注). Unknown or stale scores are neutral, without
+assigning a low score or a quality grade. These bands do not grade route speed or
+claim that an address has no abuse history.

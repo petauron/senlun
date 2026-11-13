@@ -97,7 +97,8 @@ const customTags = computed(() => parseTags(props.node.tags))
     </template>
 
     <template #header-extra>
-      <div class="flex gap-2 items-center">
+      <div class="flex gap-1.5 items-center">
+        <NodeIpScores :node="node" />
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
           v-if="hasRegion(props.node.region)" :src="getFlagSrc(props.node.region)"
@@ -196,6 +197,7 @@ const customTags = computed(() => parseTags(props.node.tags))
             </p>
           </div>
         </div>
+        <NodeReturnRoutes :node="node" />
         <div v-if="externalTraffic" class="border-t border-border/60 pt-2 text-xs" aria-label="服务商记录流量">
           <div class="flex items-center justify-between gap-2">
             <span class="min-w-0 truncate text-muted-foreground" :title="externalTraffic.name">服务商流量 · {{ externalTraffic.name }}</span>
@@ -267,8 +269,6 @@ const customTags = computed(() => parseTags(props.node.tags))
         <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1.5 items-center">
           <NodeTagBadge v-for="(tag, index) in customTags" :key="index" :text="tag.text" :color="tag.color" />
         </div>
-        <NodeReturnRoutes :node="node" />
-        <NodeIpScores :node="node" />
       </div>
     </template>
   </CardX>

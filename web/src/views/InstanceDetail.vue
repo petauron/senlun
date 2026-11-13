@@ -4,6 +4,7 @@ import { useNow } from '@vueuse/core'
 import { computed, defineAsyncComponent, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
 import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -267,11 +268,7 @@ const trafficProgressStyle = computed(() => ({
     </div>
 
     <template v-else>
-      <div class="px-4 grid gap-2">
-        <NodeReturnRoutes :node="data" />
-        <NodeIpScores :node="data" />
-      </div>
-      <div class="px-4 flex gap-4 items-center">
+      <div class="px-4 flex flex-wrap gap-3 items-center">
         <Button
           variant="ghost" size="icon-sm" aria-label="返回节点列表"
           class="bg-background/50 hover:bg-background" @click="router.push('/')"
@@ -288,6 +285,13 @@ const trafficProgressStyle = computed(() => ({
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
         </Badge>
+        <NodeIpScores :node="data" />
+        <div class="ml-auto">
+          <NodeIpVersionSwitch :node="data" />
+        </div>
+      </div>
+      <div class="max-w-md px-4">
+        <NodeReturnRoutes :node="data" />
       </div>
 
       <div class="px-4 grid grid-cols-2 gap-4 lg:grid-cols-4">

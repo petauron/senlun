@@ -1,32 +1,16 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import { computed, defineAsyncComponent, ref } from 'vue'
+import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
 import NodeProbeSummary from '@/components/NodeProbeSummary.vue'
-import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
-import { useAppStore } from '@/stores/app'
-import { selectHomeProbes } from '@/utils/nodeHelpers'
+import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
 import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
-const app = useAppStore()
-const probeIPVersions = computed(() => (['ipv4', 'ipv6'] as const).filter(version => selectHomeProbes(
-  props.node.probes ?? [],
-  props.node.uuid,
-  app.publicSettings?.theme_settings,
-  version,
-).some(probe => probe !== null)))
-const probeIPVersion = computed<'ipv4' | 'ipv6'>({
-  get: () => {
-    const preferred = app.getHomeProbeIPVersion(props.node.uuid)
-    return probeIPVersions.value.includes(preferred)
-      ? preferred
-      : probeIPVersions.value[0] ?? 'ipv4'
-  },
-  set: value => app.setHomeProbeIPVersion(props.node.uuid, value),
-})
+const { version: probeIPVersion } = useNodeIpVersion(() => props.node)
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
 const { pickSurfaceClass } = useBackgroundSurface()
 const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map(probe => probe.kind) ?? []))
@@ -34,20 +18,8 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 
 <template>
   <div @click.stop>
-    <!-- Keep probe rows aligned when only one IP family is available. -->
-    <div class="mb-1 h-6">
-      <div v-if="probeIPVersions.length > 1" role="group" :aria-label="`${node.name} 延迟 IP 版本`" class="flex h-full justify-end gap-0.5">
-        <Button
-          v-for="version in probeIPVersions" :key="version"
-          variant="ghost" size="xs" class="rounded-sm px-2"
-          :aria-pressed="probeIPVersion === version"
-          :aria-label="`${node.name} 显示 ${version === 'ipv4' ? 'IPv4' : 'IPv6'} 延迟`"
-          :class="probeIPVersion === version ? 'bg-emerald-500/10 text-emerald-600' : ''"
-          @click="probeIPVersion = version"
-        >
-          {{ version === 'ipv4' ? 'IPv4' : 'IPv6' }}
-        </Button>
-      </div>
+    <div class="mb-1 flex h-7 justify-end">
+      <NodeIpVersionSwitch :node="node" />
     </div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
