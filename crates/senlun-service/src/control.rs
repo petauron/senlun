@@ -496,8 +496,8 @@ impl Storage {
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
         let previous = options_or_none(&tx, id)?;
-        // Route reports are read-only metadata here; only the validated import
-        // endpoint may replace them. Preserve them on unrelated editor saves.
+        // Route reports are read-only metadata here; only an authenticated,
+        // matching one-shot result may replace them. Preserve them on unrelated editor saves.
         options.return_routes = previous
             .as_ref()
             .map_or_else(Vec::new, |old| old.return_routes.clone());
@@ -952,7 +952,7 @@ impl Storage {
     }
 }
 
-fn authenticated_node(db: &Connection, token: &str) -> Result<String, StorageError> {
+pub(crate) fn authenticated_node(db: &Connection, token: &str) -> Result<String, StorageError> {
     db.query_row(
         "SELECT id FROM nodes WHERE token_hash=?1 AND disabled_at_ms IS NULL",
         [hash_token(token)],
@@ -1400,6 +1400,7 @@ pub(crate) fn decorate_client(
     )?);
     if let Some(o) = options {
         crate::return_routes::decorate(&o, value, crate::storage::unix_time_ms()?);
+        crate::return_routes::decorate_checks(db, node, value, crate::storage::unix_time_ms()?)?;
         value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);
         if !o.region.is_empty() {

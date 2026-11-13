@@ -57,7 +57,17 @@ export interface ReturnRoute {
   carriers: { carrier: string, target: string, status: string, label: string }[]
 }
 
+export interface ReturnRouteCheck {
+  family: 4 | 6
+  state: 'pending' | 'running' | 'succeeded' | 'failed'
+  error: string
+  created_at_unix_ms: number
+  finished_at_unix_ms: number
+}
+
 export interface Client {
+  return_route_checks?: ReturnRouteCheck[]
+  return_route_capability?: 'ready' | 'unavailable' | 'upgrade_required'
   return_routes?: ReturnRoute[]
   ip_scores?: IpScore[]
   probes?: NodeProbe[]

@@ -4,7 +4,7 @@ import { useNow } from '@vueuse/core'
 import { computed, defineAsyncComponent, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import NodeIpScores from '@/components/NodeIpScores.vue'
-import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -286,11 +286,9 @@ const trafficProgressStyle = computed(() => ({
           {{ data.online ? '在线' : '离线' }}
         </Badge>
         <NodeIpScores :node="data" />
-        <div class="ml-auto">
-          <NodeIpVersionSwitch :node="data" />
-        </div>
       </div>
       <div class="max-w-md px-4">
+        <NodeNetworkControls :node="data" />
         <NodeReturnRoutes :node="data" />
       </div>
 

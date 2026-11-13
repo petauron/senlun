@@ -21,7 +21,7 @@ mod metrics;
 pub(crate) use metrics::tests::version_six_store;
 pub(crate) mod rollups;
 
-pub(crate) const SCHEMA_VERSION: i64 = 7;
+pub(crate) const SCHEMA_VERSION: i64 = 8;
 const MIN_SNAPSHOT_SPACING_MS: i64 = 950;
 pub(crate) const RETENTION_PRUNE_BATCH_SIZE: usize = 10_000;
 
@@ -158,17 +158,18 @@ impl Storage {
                 let backup_path = metrics::backup(&mut connection, path)?;
                 tracing::info!(path = %backup_path.display(), "database pair backed up before brand migration");
             }
-            let transaction = connection.transaction()?;
-            if version < 5 {
-                transaction.execute(
-                    "UPDATE monitoring_settings SET data=json_set(data,'$.site_name','Senulun')
+            if version < 7 {
+                let transaction = connection.transaction()?;
+                if version < 5 {
+                    transaction.execute(
+                        "UPDATE monitoring_settings SET data=json_set(data,'$.site_name','Senulun')
                      WHERE id=1 AND json_extract(data,'$.site_name')='Pulse'",
-                    [],
-                )?;
-            }
-            if version < 6 {
-                transaction.execute_batch(
-                    "CREATE TABLE external_traffic_sources (
+                        [],
+                    )?;
+                }
+                if version < 6 {
+                    transaction.execute_batch(
+                        "CREATE TABLE external_traffic_sources (
                         node_id TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
                         config TEXT NOT NULL,
                         credential BLOB NOT NULL,
@@ -178,11 +179,16 @@ impl Storage {
                         generation TEXT NOT NULL,
                         status TEXT NOT NULL DEFAULT 'pending'
                     );",
-                )?;
+                    )?;
+                }
+                transaction.pragma_update(None, "user_version", 6)?;
+                transaction.commit()?;
+                rollups::migrate(&mut connection)?;
             }
-            transaction.pragma_update(None, "user_version", 6)?;
+            let transaction = connection.transaction()?;
+            crate::return_routes::migrate(&transaction)?;
+            transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
-            rollups::migrate(&mut connection)?;
         }
         rollups::initialize_hot(&connection)?;
         Ok(Self {

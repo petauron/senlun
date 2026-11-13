@@ -3,6 +3,7 @@ import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
 import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
@@ -197,7 +198,6 @@ const customTags = computed(() => parseTags(props.node.tags))
             </p>
           </div>
         </div>
-        <NodeReturnRoutes :node="node" />
         <div v-if="externalTraffic" class="border-t border-border/60 pt-2 text-xs" aria-label="服务商记录流量">
           <div class="flex items-center justify-between gap-2">
             <span class="min-w-0 truncate text-muted-foreground" :title="externalTraffic.name">服务商流量 · {{ externalTraffic.name }}</span>
@@ -263,6 +263,8 @@ const customTags = computed(() => parseTags(props.node.tags))
                 </span>
               </DataTooltip>
             </div>
+            <NodeNetworkControls :node="node" />
+            <NodeReturnRoutes :node="node" />
             <NodeProbePanel :node="props.node" />
           </div>
         </div>

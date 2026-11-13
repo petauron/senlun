@@ -171,43 +171,60 @@ stored separately, with target, source and collection time. A report is marked
 stale after seven days. Changing the registered IP invalidates its displayed
 carrier result; it never transfers a verdict to the new address.
 
-For the MVP, an administrator explicitly collects and imports a report. Senlun
-Service and Agent do not execute downloaded scripts or receive remote shell
-commands. Existing Vastora ICMP diagnostics are not represented as TCP reports.
-The repository's `scripts/collect-shanghai-routes.py` uses an existing trusted
-SSH alias and the operator's existing verified identity. It pins TcpQuality to
-commit `db52fc60523320fc4a34b5c369f28be38df21d13` and verifies its SHA-256 before
-execution. Upstream code is GPL-3.0-only; it is downloaded at operator request,
-not copied into Senlun or its release binaries.
+Select **Detect** in the node's **Network quality** header to request a fresh
+Shanghai three-carrier TCP report for the selected IPv4/IPv6 address. The
+administrator mutation keeps the normal session and CSRF protection. Only this
+explicit action queues work; switching families and loading pages read existing
+results. The header shows queued/running/failure state and update time. Completed
+results replace only the matching family. The old report stays visible on a
+failure, clearly marked as a previous result. There is no file-upload workflow.
 
-```sh
-python3 scripts/collect-shanghai-routes.py \
-  --host EXISTING_SSH_ALIAS --address REGISTERED_PUBLIC_IP \
-  --output /private/tmp/shanghai-route.json
-```
+The corresponding authenticated Senlun Agent actively claims this fixed task.
+No executable, script, arbitrary target or shell arguments come from the Service.
+It uses a closed schema with a unique task ID, family, registered address and
+expiry. The Service accepts results only from that node's current credential,
+for the current running task, within its lease and with the same still-registered
+address. There is one collector per Agent, at most two running Service-wide and
+eight live requests; stored state is bounded to two checks and one capability
+record per node. Requests have a ten-minute queue deadline, an eight-minute lease
+and a one-minute per-family cooldown. Agent result delivery retains just one
+bounded result until acknowledgment or lease expiry. Metric collection and the
+existing 60-second probes run independently.
 
-The collector requires existing Bash, curl, traceroute, GNU timeout and standard
-shell utilities, plus already-authorized noninteractive sudo. Missing tools fail
-without installing packages. An operator who explicitly authorizes a temporary
-traceroute can pass `--temporary-traceroute`: on Debian/Ubuntu amd64/arm64 it
-reads the existing official apt metadata, downloads the matching package via
-HTTPS, verifies SHA-256, architecture and libc-only dependencies, and extracts
-the tool only under its task temporary directory. It never runs apt install or
-changes the system package database. All temporary tool files are removed on
-exit. Unknown distributions, new dependencies or unexpected package layouts
-fail closed. It runs only Shanghai TCP route identification for
-the selected address family, serially, with a 240-second deadline. It does not
-run bandwidth tests, use rootfs/chroot, change qdiscs/MTU/firewalls or upload a
-report. Third parties receive the normal public route probes, public-address
-queries, target-list retrieval and hop-IP ASN lookups (Team Cymru). This is an
-explicit operator action, never an automatic page-load operation. Temporary
-upstream files are removed. Inspect and import the resulting JSON using the
-node's three-carrier route pills and select **Upload detection results** in the
-dialog. The authenticated import API
-is `POST /api/admin/nodes/{uuid}/return-routes` with the normal CSRF protection;
-it checks the exact registered address and preserves all other metadata. The
-import is administrator-supplied evidence, not a cryptographic attestation of
-execution. No raw traceroute, SSH credential or subscription belongs in an issue.
+Collection reuses the reviewed TcpQuality route-only core at commit
+`db52fc60523320fc4a34b5c369f28be38df21d13`, SHA-256
+`351491ece557ad4c26143b33a38d8b0b50a1872c7b073839e22ee8845771f928`.
+It is GPL-3.0-only upstream code, downloaded and verified at an administrator's
+request rather than copied into Senlun binaries. Only the dedicated fixed
+wrapper is bundled. The child gets a private temporary HOME/TMPDIR and an empty
+environment, with no Agent token, Service authentication or host credentials.
+It requires existing Bash, curl, GNU timeout and standard utilities, and
+CAP_NET_RAW (already granted by Vastora's existing managed probe runtime);
+standalone installs must arrange this explicitly. It does not run as root or
+invoke sudo. Missing capability/tools is reported as unavailable.
+
+When traceroute is missing, the previously authorized temporary-tool policy
+supports Debian/Ubuntu amd64/arm64: read existing official apt metadata, download
+the matching libc-only package through HTTPS, verify its hash and architecture,
+and extract under this task's private directory. There is no package install,
+apt update or persistent tool/cache. Unexpected platforms, dependencies and
+layouts fail closed. Temporary files are removed after the fixed wrapper exits.
+The route core has a 240-second limit; the full process group is bounded to 390
+seconds plus a five-second forced stop. Before and after collection, the chosen
+family's actual public egress must match the registered address. It never runs
+throughput tests, changes host/network settings or uploads a report. Third
+parties see normal public route probes, public-address queries (ipify), the
+TcpQuality target-list retrieval and public hop-IP ASN lookups (Team Cymru).
+This is monitoring evidence from an authenticated node, not a cryptographic
+attestation. No raw trace, SSH credential or subscription belongs in an issue.
+
+Service control schema v8 adds only bounded collector/check state with a paired
+consistent pre-migration backup and forward-only transaction; existing node
+identities/options, reports, traffic and probe configuration remain untouched.
+Older Agents continue their unchanged monitoring transport; they do not gain
+one-shot collection until updated. The UI identifies an unavailable collector
+rather than pretending a request executed. The removed administrator import API
+and SSH collection utility have no alias or runtime fallback.
 
 Net.Coffee uses the existing administrator-enabled IP information setting and
 fixed provider HTTP lane. A normal page refresh reads the bounded address cache
@@ -221,14 +238,12 @@ in memory and is intentionally empty after Service restart; an administrator
 can refresh it again. Existing opt-in, quotas, address checks and administrator
 privacy restrictions remain in effect.
 
-The existing per-node IPv4/IPv6 switch controls latency, route pills and the IP
-quality badge together. A missing report for the selected family stays unknown;
-the UI never substitutes another family's result. Cards keep only the three
-carrier pills and the score/grade badge; source, time, targets, import and refresh
-controls are inside dialogs.
-
-IP grades are a presentation of the provider's original numeric score: 95–100
-uses gold (金色传说), 80–94 violet (优秀), 60–79 teal (良好), 40–59 orange
-(一般), and 0–39 rose (需关注). Unknown or stale scores are neutral, without
-assigning a low score or a quality grade. These bands do not grade route speed or
-claim that an address has no abuse history.
+The IPv4/IPv6 switch lives in the shared **Network quality** header above the
+route pills and latency display. It controls the score, routes and latency
+together. A missing family stays unknown. Detection updates that family's IP
+score through the existing provider lane as well; a provider failure does not
+cancel a queued route check. Technical sources/targets remain inside details.
+The badge shows only the numeric score, with gold for 95–100, violet for 80–94,
+teal for 60–79, orange for 40–59 and rose for 0–39. There are no quality titles.
+Missing and stale scores use neutral gray, never a fabricated zero. The colors
+do not grade route speed or guarantee the absence of abuse history.

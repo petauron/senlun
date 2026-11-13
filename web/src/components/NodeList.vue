@@ -3,6 +3,7 @@ import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
 import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
@@ -322,14 +323,15 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <div class="flex flex-wrap gap-1 items-center">
                   <NodeTagBadge v-for="(tag, tagIndex) in parseTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
-                <NodeReturnRoutes :node="node" compact />
               </div>
 
               <!-- 探测详情 -->
               <div
                 v-else-if="col.key === 'networks'"
-                class="flex flex-col gap-0.5 text-[11px] text-muted-foreground"
+                class="flex min-w-64 flex-col gap-0.5 text-[11px] text-muted-foreground"
               >
+                <NodeNetworkControls :node="node" />
+                <NodeReturnRoutes :node="node" compact />
                 <NodeProbePanel :node="node" compact />
               </div>
 
