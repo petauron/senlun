@@ -10,7 +10,7 @@ import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
-import { formatDateTime, getStatus } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
 import { getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
@@ -172,7 +172,7 @@ const customTags = computed(() => parseTags(props.node.tags))
             >
               <div class="text-[11px] text-muted-foreground truncate">
                 {{ selectedTraffic?.used_bytes === null || selectedTraffic?.used_bytes === undefined ? '暂无用量' : formatBytes(selectedTraffic.used_bytes) }} /
-                {{ selectedTraffic?.status === 'unlimited' ? '∞' : selectedTraffic?.limit_bytes ? formatBytes(selectedTraffic.limit_bytes) : '额度未知' }}
+                {{ selectedTraffic?.status === 'unlimited' ? '∞' : selectedTraffic?.limit_bytes ? formatTrafficQuota(selectedTraffic.limit_bytes) : '额度未知' }}
               </div>
               <template #content>
                 <div class="flex items-center justify-between gap-3 whitespace-nowrap">
@@ -202,7 +202,7 @@ const customTags = computed(() => parseTags(props.node.tags))
           <template v-if="externalTraffic.snapshot">
             <div class="mt-1 flex items-center justify-between gap-2">
               <span class="text-muted-foreground">计费已用</span>
-              <span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }} / {{ externalTraffic.snapshot.limit_bytes === null ? '未提供额度' : formatBytes(externalTraffic.snapshot.limit_bytes) }}</span>
+              <span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }} / {{ externalTraffic.snapshot.limit_bytes === null ? '未提供额度' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span>
             </div>
             <ProgressThin
               v-if="externalTraffic.snapshot.limit_bytes"

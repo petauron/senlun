@@ -12,7 +12,7 @@ import { useExchangeRates } from '@/composables/useExchangeRates'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useNodesStore } from '@/stores/nodes'
 import { CURRENCY_SYMBOLS, getStoredFinanceCurrency, normalizeCurrency } from '@/utils/financeHelper'
-import { formatDateTime } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota } from '@/utils/helper'
 import { getTrafficUsed } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
@@ -232,7 +232,7 @@ const trafficUsageText = computed(() => {
   if (!hasTrafficLimit.value)
     return '无限流量'
 
-  return `${formatBytes(trafficUsed.value)} / ${formatBytes(data.value?.traffic_limit ?? 0)}`
+  return `${formatBytes(trafficUsed.value)} / ${formatTrafficQuota(data.value?.traffic_limit ?? 0)}`
 })
 
 const externalTraffic = computed(() => data.value?.external_traffic)
@@ -432,7 +432,7 @@ const trafficProgressStyle = computed(() => ({
           </p>
           <div v-if="externalTraffic.snapshot" class="grid grid-cols-2 gap-3 text-sm">
             <div class="rounded-sm bg-slate-500/5 p-2">计费已用<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }}</span></div>
-            <div class="rounded-sm bg-slate-500/5 p-2">额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatBytes(externalTraffic.snapshot.limit_bytes) }}</span></div>
+            <div class="rounded-sm bg-slate-500/5 p-2">额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span></div>
             <div class="rounded-sm bg-slate-500/5 p-2">上行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.up_bytes) }}</span></div>
             <div class="rounded-sm bg-slate-500/5 p-2">下行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.down_bytes) }}</span></div>
           </div>
