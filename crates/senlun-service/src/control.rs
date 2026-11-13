@@ -177,6 +177,8 @@ pub(crate) struct NodeOptions {
     pub weight: i32,
     pub hidden: bool,
     pub tags: String,
+    #[serde(default)]
+    pub return_routes: Vec<crate::return_routes::RouteReport>,
     pub public_remark: String,
     pub ipv4: String,
     pub ipv6: String,
@@ -494,6 +496,9 @@ impl Storage {
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
         let previous = options_or_none(&tx, id)?;
+        // Route reports are read-only metadata here; only the validated import
+        // endpoint may replace them. Preserve them on unrelated editor saves.
+        options.return_routes = previous.as_ref().map_or_else(Vec::new, |old| old.return_routes.clone());
         let old_source = previous
             .as_ref()
             .map_or(TrafficSource::Local, |old| old.traffic_source);
@@ -1392,6 +1397,7 @@ pub(crate) fn decorate_client(
         crate::storage::unix_time_ms()?,
     )?);
     if let Some(o) = options {
+        crate::return_routes::decorate(&o, value, crate::storage::unix_time_ms()?);
         value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);
         if !o.region.is_empty() {

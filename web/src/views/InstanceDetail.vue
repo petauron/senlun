@@ -3,6 +3,8 @@ import { Icon } from '@iconify/vue'
 import { useNow } from '@vueuse/core'
 import { computed, defineAsyncComponent, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -265,6 +267,10 @@ const trafficProgressStyle = computed(() => ({
     </div>
 
     <template v-else>
+      <div class="px-4 grid gap-2">
+        <NodeReturnRoutes :node="data" />
+        <NodeIpScores :node="data" />
+      </div>
       <div class="px-4 flex gap-4 items-center">
         <Button
           variant="ghost" size="icon-sm" aria-label="返回节点列表"

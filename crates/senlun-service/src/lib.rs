@@ -36,6 +36,7 @@ mod control_tests;
 mod external_traffic;
 mod ingest;
 mod ip_info;
+mod return_routes;
 mod komari;
 mod luminaplus;
 mod management;
@@ -445,6 +446,7 @@ pub fn router(state: AppState) -> Router {
         .merge(management::routes())
         .merge(external_traffic::routes())
         .merge(ip_info::routes())
+        .merge(return_routes::routes())
         .route("/api/rpc2", post(rpc_handler))
         .route(
             "/admin/ping",
