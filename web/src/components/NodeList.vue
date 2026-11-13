@@ -291,6 +291,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   >
                   <span class="truncate">{{ node.name }}</span>
                 </div>
+                <NodeIpScores :node="node" />
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
                   <DataTooltip
                     v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="shrink-0" placement="right"
@@ -321,6 +322,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <div class="flex flex-wrap gap-1 items-center">
                   <NodeTagBadge v-for="(tag, tagIndex) in parseTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
+                <NodeReturnRoutes :node="node" compact />
               </div>
 
               <!-- 探测详情 -->
@@ -328,8 +330,6 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 v-else-if="col.key === 'networks'"
                 class="flex flex-col gap-0.5 text-[11px] text-muted-foreground"
               >
-                <NodeReturnRoutes :node="node" />
-                <NodeIpScores :node="node" />
                 <NodeProbePanel :node="node" compact />
               </div>
 
