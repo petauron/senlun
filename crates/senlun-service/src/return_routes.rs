@@ -1,5 +1,6 @@
 //! Administrator-triggered, bounded Shanghai TCP monitoring.
 //! Agents pull a fixed task; no executable, script or custom target crosses the API.
+use crate::control::{integer, unsigned};
 use crate::{
     ApiError, AppState,
     storage::{Storage, StorageError},
@@ -10,7 +11,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, post},
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use rusqlite::{OptionalExtension, params};
 use senlun_protocol::{
     RETURN_ROUTE_SCHEMA_VERSION, ReturnRouteClaim, ReturnRouteOutcome, ReturnRouteTask,
@@ -89,7 +90,7 @@ async fn finish(
 
 impl Storage {
     fn save_return_route_tx(
-        tx: &Connection,
+        tx: &Transaction<'_>,
         id: &str,
         report: RouteReport,
         now: u64,
@@ -224,16 +225,17 @@ pub(crate) fn decorate_checks(
             r.get::<_, u8>(0)?,
             r.get::<_, String>(1)?,
             r.get::<_, String>(2)?,
-            r.get::<_, u64>(3)?,
-            r.get::<_, u64>(4)?,
-            r.get::<_, u64>(5)?,
+            r.get::<_, i64>(3)?,
+            r.get::<_, i64>(4)?,
+            r.get::<_, i64>(5)?,
         ))
     })?;
     let mut checks = Vec::new();
     for row in rows {
-        let (family, state, error, created, finished, expires) = row?;
-        let expired = matches!(state.as_str(), "pending" | "running") && expires <= now;
-        checks.push(json!({"family":family,"state":if expired {"failed"}else{&state},"error":if expired {"timeout"}else{&error},"created_at_unix_ms":created,"finished_at_unix_ms":finished}));
+        let (family, state, error, created, finished, lease_end) = row?;
+        let timed_out =
+            matches!(state.as_str(), "pending" | "running") && unsigned(lease_end) <= now;
+        checks.push(json!({"family":family,"state":if timed_out {"failed"}else{&state},"error":if timed_out {"timeout"}else{&error},"created_at_unix_ms":unsigned(created),"finished_at_unix_ms":unsigned(finished)}));
     }
     value["return_route_checks"] = json!(checks);
     Ok(())
@@ -263,7 +265,7 @@ impl Storage {
         }
         let mut db = self.connection()?;
         let tx = db.transaction()?;
-        let ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_collectors c JOIN nodes n ON n.id=c.node_id JOIN metrics.node_state s ON s.node_id=n.id WHERE n.id=?1 AND n.disabled_at_ms IS NULL AND c.available=1 AND c.agent_version=n.agent_version AND s.last_seen_at_ms>?2)",params![node,now.saturating_sub(offline.max(60)*1000)],|r|r.get(0))?;
+        let ready: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_collectors c JOIN nodes n ON n.id=c.node_id JOIN metrics.node_state s ON s.node_id=n.id WHERE n.id=?1 AND n.disabled_at_ms IS NULL AND c.available=1 AND c.agent_version=n.agent_version AND s.last_seen_at_ms>?2)",params![node,integer(now.saturating_sub(offline.max(60)*1000))],|r|r.get(0))?;
         if !ready {
             return Err(StorageError::Conflict("route_collector_unavailable"));
         }
@@ -280,15 +282,15 @@ impl Storage {
             .and_then(|v| v.parse::<IpAddr>().ok())
             .filter(|ip| ip.is_ipv4() == (family == 4))
             .ok_or(StorageError::InvalidInput("route_address_unavailable"))?;
-        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_checks WHERE node_id=?1 AND state IN('pending','running') AND expires_at_ms>?2)",params![node,now],|r|r.get(0))?;
+        let busy: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_checks WHERE node_id=?1 AND state IN('pending','running') AND expires_at_ms>?2)",params![node,integer(now)],|r|r.get(0))?;
         if busy {
             return Err(StorageError::Conflict("route_check_busy"));
         }
-        let limited: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_checks WHERE node_id=?1 AND family=?2 AND created_at_ms>?3) OR (SELECT count(*) FROM return_route_checks WHERE state IN('pending','running') AND expires_at_ms>?4)>=8",params![node,family,now.saturating_sub(60_000),now],|r|r.get(0))?;
+        let limited: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM return_route_checks WHERE node_id=?1 AND family=?2 AND created_at_ms>?3) OR (SELECT count(*) FROM return_route_checks WHERE state IN('pending','running') AND expires_at_ms>?4)>=8",params![node,family,integer(now.saturating_sub(60_000)),integer(now)],|r|r.get(0))?;
         if limited {
             return Err(StorageError::RateLimited);
         }
-        tx.execute("INSERT INTO return_route_checks(node_id,family,id,address,state,created_at_ms,expires_at_ms) VALUES(?1,?2,?3,?4,'pending',?5,?6) ON CONFLICT(node_id,family) DO UPDATE SET id=excluded.id,address=excluded.address,state='pending',error='',created_at_ms=excluded.created_at_ms,started_at_ms=0,finished_at_ms=0,expires_at_ms=excluded.expires_at_ms",params![node,family,Uuid::new_v4().to_string(),address.to_string(),now,now+600_000])?;
+        tx.execute("INSERT INTO return_route_checks(node_id,family,id,address,state,created_at_ms,expires_at_ms) VALUES(?1,?2,?3,?4,'pending',?5,?6) ON CONFLICT(node_id,family) DO UPDATE SET id=excluded.id,address=excluded.address,state='pending',error='',created_at_ms=excluded.created_at_ms,started_at_ms=0,finished_at_ms=0,expires_at_ms=excluded.expires_at_ms",params![node,family,Uuid::new_v4().to_string(),address.to_string(),integer(now),integer(now+600_000)])?;
         crate::control::configuration_audit(&tx, "node.return_routes.start", node)?;
         tx.commit()?;
         drop(db);
@@ -313,16 +315,16 @@ impl Storage {
         tx.execute("INSERT INTO return_route_collectors(node_id,agent_version,available) VALUES(?1,?2,?3) ON CONFLICT(node_id) DO UPDATE SET agent_version=excluded.agent_version,available=excluded.available WHERE agent_version<>excluded.agent_version OR available<>excluded.available",params![node,input.agent_version,input.available])?;
         let active: u32 = tx.query_row(
             "SELECT count(*) FROM return_route_checks WHERE state='running' AND expires_at_ms>?1",
-            [now],
+            [integer(now)],
             |r| r.get(0),
         )?;
         let task: Option<ReturnRouteTask> = if input.available && active < 2 {
-            tx.query_row("SELECT id,family,address FROM return_route_checks WHERE node_id=?1 AND state='pending' AND expires_at_ms>?2 ORDER BY created_at_ms LIMIT 1",params![node,now],|r|Ok(ReturnRouteTask{id:r.get(0)?,family:r.get(1)?,address:r.get(2)?,expires_at_unix_ms:now+480_000})).optional()?
+            tx.query_row("SELECT id,family,address FROM return_route_checks WHERE node_id=?1 AND state='pending' AND expires_at_ms>?2 ORDER BY created_at_ms LIMIT 1",params![node,integer(now)],|r|Ok(ReturnRouteTask{id:r.get(0)?,family:r.get(1)?,address:r.get(2)?,expires_at_unix_ms:now+480_000})).optional()?
         } else {
             None
         };
         if let Some(task) = &task {
-            tx.execute("UPDATE return_route_checks SET state='running',started_at_ms=?2,expires_at_ms=?3 WHERE id=?1",params![task.id,now,task.expires_at_unix_ms])?;
+            tx.execute("UPDATE return_route_checks SET state='running',started_at_ms=?2,expires_at_ms=?3 WHERE id=?1",params![task.id,integer(now),integer(task.expires_at_unix_ms)])?;
         }
         tx.commit()?;
         Ok(task)
@@ -337,7 +339,7 @@ impl Storage {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         let node = crate::control::authenticated_node(&tx, token)?;
-        let job: Option<(u8,String,u64)> = tx.query_row("SELECT family,address,started_at_ms FROM return_route_checks WHERE id=?1 AND node_id=?2 AND state='running' AND expires_at_ms>?3",params![input.id,node,now],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let job: Option<(u8,String,u64)> = tx.query_row("SELECT family,address,started_at_ms FROM return_route_checks WHERE id=?1 AND node_id=?2 AND state='running' AND expires_at_ms>?3",params![input.id,node,integer(now)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let (family, address, started) =
             job.ok_or(StorageError::Conflict("route_check_expired"))?;
         let mut error = input.error.unwrap_or_default();
@@ -374,7 +376,7 @@ impl Storage {
                 .ok_or(StorageError::InvalidInput("missing route result"))?;
             if report.family != family
                 || report.address != address
-                || report.checked_at_unix_ms.saturating_add(60_000) < started
+                || report.checked_at_unix_ms.saturating_add(60_000) < unsigned(started)
             {
                 return Err(StorageError::InvalidInput(
                     "route result does not match task",
@@ -392,7 +394,7 @@ impl Storage {
                     "failed"
                 },
                 error,
-                now
+                integer(now)
             ],
         )?;
         crate::control::configuration_audit(&tx, "node.return_routes.finish", &node)?;

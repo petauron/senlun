@@ -42,10 +42,11 @@ const status = computed(() => {
     return '排队中'
   if (current.value?.state === 'running')
     return '检测中'
-  if (current.value?.state === 'failed')
+  if (current.value?.state === 'failed') {
     return report.value
       ? '检测失败 · 显示上次结果'
       : '检测未完成'
+  }
   if (report.value?.address_changed)
     return '地址已变更 · 需重新检测'
   if (report.value?.stale)

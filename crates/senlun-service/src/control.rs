@@ -288,10 +288,10 @@ fn text(value: &str, max: usize) -> bool {
     value.len() <= max && !value.chars().any(char::is_control)
 }
 
-fn integer(value: u64) -> i64 {
+pub(crate) fn integer(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
-fn unsigned(value: i64) -> u64 {
+pub(crate) fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 

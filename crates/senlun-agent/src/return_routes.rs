@@ -99,7 +99,7 @@ async fn run(client: Client, url: Url, token: String) {
                             || response.status() == StatusCode::CONFLICT
                             || response.status() == StatusCode::BAD_REQUEST =>
                     {
-                        pending = None
+                        pending = None;
                     }
                     _ => {}
                 }
