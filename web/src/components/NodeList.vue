@@ -9,7 +9,7 @@ import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
-import { formatDateTime, getStatus } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
 import { formatOfflineTime, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
@@ -408,7 +408,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   </div>
                   <template #content>
                     <div class="max-w-xs text-xs">
-                      <p>{{ node.selected_traffic?.used_bytes === null || node.selected_traffic?.used_bytes === undefined ? '暂无用量' : formatBytes(node.selected_traffic.used_bytes) }} / {{ node.selected_traffic?.status === 'unlimited' ? '∞' : node.selected_traffic?.limit_bytes ? formatBytes(node.selected_traffic.limit_bytes) : '额度未知' }}</p>
+                      <p>{{ node.selected_traffic?.used_bytes === null || node.selected_traffic?.used_bytes === undefined ? '暂无用量' : formatBytes(node.selected_traffic.used_bytes) }} / {{ node.selected_traffic?.status === 'unlimited' ? '∞' : node.selected_traffic?.limit_bytes ? formatTrafficQuota(node.selected_traffic.limit_bytes) : '额度未知' }}</p>
                       <p>{{ trafficSelectionDetails(node.selected_traffic) }}</p>
                     </div>
                   </template>
