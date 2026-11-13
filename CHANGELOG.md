@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.49](https://github.com/petauron/senlun/compare/v0.1.0-alpha.48...v0.1.0-alpha.49) (2026-11-13)
+
+
+### Bug Fixes
+
+* enrich the active dashboard with route and score controls ([e901dd9](https://github.com/petauron/senlun/commit/e901dd9df265ef041bf6fa55b1227ee8a13b25d5))
+
 ## [0.1.0-alpha.48](https://github.com/petauron/senlun/compare/v0.1.0-alpha.47...v0.1.0-alpha.48) (2026-11-13)
 
 
