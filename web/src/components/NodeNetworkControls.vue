@@ -79,6 +79,8 @@ function schedule() {
       const result = await getSharedApi().get<NetworkState>(`admin/nodes/${encodeURIComponent(uuid)}/return-routes`)
       if (!disposed && props.node.uuid === uuid)
         apply(uuid, result)
+      if (message.value === '检测状态暂时无法刷新，已有结果保留。')
+        message.value = ''
     }
     catch {
       if (!disposed)
@@ -130,7 +132,7 @@ async function detect() {
     }
     catch {
       if (!disposed && family.value === selectedFamily)
-        message.value = '回程已排队，IP 评分暂未更新。'
+        message.value = 'IP 评分暂未更新，回程状态见上方。'
     }
   }
   catch {
@@ -145,7 +147,7 @@ async function detect() {
 </script>
 
 <template>
-  <div class="space-y-1.5 py-1" @click.stop @keydown.stop>
+  <div class="space-y-1.5 py-1" @click.stop @keydown.enter.stop @keydown.space.stop>
     <div class="flex min-h-8 items-center justify-between gap-2">
       <div class="min-w-0 flex-1">
         <div class="text-[11px] font-medium text-foreground">网络质量</div>

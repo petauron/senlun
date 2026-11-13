@@ -339,7 +339,7 @@ impl Storage {
         let mut db = self.connection()?;
         let tx = db.transaction()?;
         let node = crate::control::authenticated_node(&tx, token)?;
-        let job: Option<(u8,String,u64)> = tx.query_row("SELECT family,address,started_at_ms FROM return_route_checks WHERE id=?1 AND node_id=?2 AND state='running' AND expires_at_ms>?3",params![input.id,node,integer(now)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+        let job: Option<(u8,String,i64)> = tx.query_row("SELECT family,address,started_at_ms FROM return_route_checks WHERE id=?1 AND node_id=?2 AND state='running' AND expires_at_ms>?3",params![input.id,node,integer(now)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
         let (family, address, started) =
             job.ok_or(StorageError::Conflict("route_check_expired"))?;
         let mut error = input.error.unwrap_or_default();

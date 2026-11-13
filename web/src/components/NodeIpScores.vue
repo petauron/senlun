@@ -143,9 +143,10 @@ async function refresh() {
     <DialogContent class="max-w-sm gap-5 rounded-2xl border-border/60 p-5" @click.stop>
       <DialogHeader>
         <DialogTitle>{{ node.name }} · IP 质量</DialogTitle>
-        <DialogDescription>查看当前所选网络的评分与等级。</DialogDescription>
+        <DialogDescription>查看当前所选网络的评分与更新时间。</DialogDescription>
       </DialogHeader>
-      <div class="flex justify-end">
+      <div class="flex items-center justify-between gap-3">
+        <span class="text-xs text-muted-foreground">当前网络</span>
         <NodeIpVersionSwitch :node="node" />
       </div>
       <div class="flex items-center justify-between rounded-2xl border p-5 shadow-sm" :class="grade.tone">
