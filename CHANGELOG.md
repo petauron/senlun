@@ -4,6 +4,18 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.48](https://github.com/petauron/senlun/compare/v0.1.0-alpha.47...v0.1.0-alpha.48) (2026-11-13)
+
+
+### Features
+
+* display Shanghai TCP return routes and Net.Coffee scores ([#179](https://github.com/petauron/senlun/issues/179)) ([e6e6722](https://github.com/petauron/senlun/commit/e6e6722533c2c30bdf6839334d8c15cd7c1c6b21))
+
+
+### Bug Fixes
+
+* run Shanghai collector with a supported terminal environment ([4311552](https://github.com/petauron/senlun/commit/4311552947aaf307d605e2be29a09dfc3719094d))
+
 ## [0.1.0-alpha.47](https://github.com/petauron/senlun/compare/v0.1.0-alpha.46...v0.1.0-alpha.47) (2026-11-13)
 
 
