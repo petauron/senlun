@@ -97,21 +97,33 @@ const summary = computed(() => {
           <span class="carrier-name">{{ row.name }}</span>
           <div class="min-w-0 text-right">
             <strong class="route-name">{{ row.label }}</strong>
-            <p v-if="row.grade" class="text-xs text-muted-foreground">{{ row.grade.label }}</p>
+            <p v-if="row.grade" class="text-xs text-muted-foreground">
+              {{ row.grade.label }}
+            </p>
           </div>
         </div>
       </div>
-      <p v-if="report?.address_changed" class="text-xs text-muted-foreground">地址已变更，请重新检测当前网络。</p>
-      <p v-else-if="report?.stale" class="text-xs text-muted-foreground">上次结果已过期，请更新检测结果。</p>
+      <p v-if="report?.address_changed" class="text-xs text-muted-foreground">
+        地址已变更，请重新检测当前网络。
+      </p>
+      <p v-else-if="report?.stale" class="text-xs text-muted-foreground">
+        上次结果已过期，请更新检测结果。
+      </p>
       <details class="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">
-        <summary class="cursor-pointer font-medium text-foreground">检测详情</summary>
+        <summary class="cursor-pointer font-medium text-foreground">
+          检测详情
+        </summary>
         <div class="mt-3 space-y-2 leading-relaxed">
           <template v-if="report">
             <p>IPv{{ family }} · 上海 · TCP · {{ report.source }}</p>
             <p>{{ new Date(report.checked_at_unix_ms).toLocaleString() }}</p>
-            <p v-for="row in rows" :key="row.id" class="break-all">{{ row.name }}：{{ row.route?.target ?? '未检测' }} · {{ row.route?.label ?? '未知' }}</p>
+            <p v-for="row in rows" :key="row.id" class="break-all">
+              {{ row.name }}：{{ row.route?.target ?? '未检测' }} · {{ row.route?.label ?? '未知' }}
+            </p>
           </template>
-          <p v-else>当前网络版本尚无检测结果。</p>
+          <p v-else>
+            当前网络版本尚无检测结果。
+          </p>
         </div>
       </details>
     </DialogContent>
@@ -119,12 +131,35 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
-.route-detail-row {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;}
-.carrier-name {font-size:13px;font-weight:600;}
-[data-carrier="telecom"] > .carrier-name {color:#5796E6;}
-[data-carrier="unicom"] > .carrier-name {color:#EF7477;}
-[data-carrier="mobile"] > .carrier-name {color:#91BD50;}
-.route-name {font-size:15px;color:var(--muted-foreground);overflow-wrap:anywhere;}
-[data-grade="一般优化"] .route-name {color:var(--success);}
-[data-grade="顶级优化"] .route-name {color:oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12));}
+.route-detail-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+}
+.carrier-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+[data-carrier='telecom'] > .carrier-name {
+  color: #5796e6;
+}
+[data-carrier='unicom'] > .carrier-name {
+  color: #ef7477;
+}
+[data-carrier='mobile'] > .carrier-name {
+  color: #91bd50;
+}
+.route-name {
+  font-size: 15px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+[data-grade='一般优化'] .route-name {
+  color: var(--success);
+}
+[data-grade='顶级优化'] .route-name {
+  color: oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12));
+}
 </style>

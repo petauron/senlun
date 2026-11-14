@@ -6,11 +6,13 @@ import NodeIpVersionSwitch from '@/components/NodeIpVersionSwitch.vue'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
+import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
 import { getIpScoreGrade, nodeBadgeClass } from '@/utils/nodeBadges'
 
 const props = defineProps<{ node: NodeData }>()
+const app = useAppStore()
 const open = ref(false)
 const busy = ref(false)
 const message = ref('')
@@ -37,7 +39,7 @@ async function refresh() {
   const selectedFamily = family.value
   const uuid = props.node.uuid
   const ip = address.value
-  if (!ip || busy.value)
+  if (!app.isLoggedIn || !ip || busy.value)
     return
   busy.value = true
   message.value = ''
@@ -110,9 +112,13 @@ async function refresh() {
         <dt>评分更新</dt><dd>{{ entry?.updated_at_unix_ms ? new Date(entry.updated_at_unix_ms).toLocaleString() : '尚未检测' }}</dd>
         <dt>回程更新</dt><dd>{{ routeReport?.checked_at_unix_ms ? new Date(routeReport.checked_at_unix_ms).toLocaleString() : '尚未检测' }}</dd>
       </dl>
-      <p v-if="!address" class="text-xs text-muted-foreground">当前网络版本暂无可查询的地址。</p>
-      <p v-if="message" role="status" class="text-xs text-muted-foreground">{{ message }}</p>
-      <Button variant="secondary" class="w-full rounded-lg" :disabled="busy || !address" @click="refresh">
+      <p v-if="!address" class="text-xs text-muted-foreground">
+        当前网络版本暂无可查询的地址。
+      </p>
+      <p v-if="message" role="status" class="text-xs text-muted-foreground">
+        {{ message }}
+      </p>
+      <Button v-if="app.isLoggedIn" variant="secondary" class="w-full rounded-lg" :disabled="busy || !address" @click="refresh">
         <Icon icon="lucide:refresh-cw" class="mr-1.5 size-4" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
         {{ busy ? '正在更新…' : '更新评分' }}
       </Button>
@@ -121,11 +127,29 @@ async function refresh() {
 </template>
 
 <style scoped>
-.quality-reading { color:var(--muted-foreground); }
-.quality-reading:is([data-rating="纯净"],[data-rating="极度纯净"]) {color:var(--success);}
-.quality-reading:is([data-rating="良好"],[data-rating="中性"]) {color:var(--warning);}
-.quality-reading[data-rating="可疑"] {color:var(--destructive);}
-.quality-meta {display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;font-size:12px;}
-.quality-meta dt {color:var(--muted-foreground);}
-.quality-meta dd {text-align:right;font-variant-numeric:tabular-nums;}
+.quality-reading {
+  color: var(--muted-foreground);
+}
+.quality-reading:is([data-rating='纯净'], [data-rating='极度纯净']) {
+  color: var(--success);
+}
+.quality-reading:is([data-rating='良好'], [data-rating='中性']) {
+  color: var(--warning);
+}
+.quality-reading[data-rating='可疑'] {
+  color: var(--destructive);
+}
+.quality-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  font-size: 12px;
+}
+.quality-meta dt {
+  color: var(--muted-foreground);
+}
+.quality-meta dd {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
 </style>

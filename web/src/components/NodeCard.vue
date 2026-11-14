@@ -215,7 +215,9 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               :status="externalTrafficStale ? 'warning' : 'success'" :height="4"
             />
           </template>
-          <p v-else class="mt-1 text-muted-foreground">暂无服务商流量快照</p>
+          <p v-else class="mt-1 text-muted-foreground">
+            暂无服务商流量快照
+          </p>
         </div>
         <div class="relative text-[11px] text-muted-foreground">
           <div
@@ -293,15 +295,26 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
   gap: 4px;
   box-shadow: none;
 }
-.node-card :deep(.ip-quality-trigger) { color: var(--muted-foreground); }
-.node-card :deep(.ip-quality-trigger:is([data-rating="纯净"], [data-rating="极度纯净"])) { color: var(--success); }
-.node-card :deep(.ip-quality-trigger:is([data-rating="良好"], [data-rating="中性"])) { color: var(--warning); }
-.node-card :deep(.ip-quality-trigger[data-rating="可疑"]) { color: var(--destructive); }
-.node-card :deep(.score-prefix) { color: var(--muted-foreground); font-weight: 500; }
+.node-card :deep(.ip-quality-trigger) {
+  color: var(--muted-foreground);
+}
+.node-card :deep(.ip-quality-trigger:is([data-rating='纯净'], [data-rating='极度纯净'])) {
+  color: var(--success);
+}
+.node-card :deep(.ip-quality-trigger:is([data-rating='良好'], [data-rating='中性'])) {
+  color: var(--warning);
+}
+.node-card :deep(.ip-quality-trigger[data-rating='可疑']) {
+  color: var(--destructive);
+}
+.node-card :deep(.score-prefix) {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
 /* 回程摘要按三个等宽的数据栏显示。 */
 .node-card :deep(button:has(> .route-summary-cell)) {
   gap: 0;
-  grid-template-columns:repeat(3,minmax(max-content,1fr));
+  grid-template-columns: repeat(3, minmax(max-content, 1fr));
   padding: 4px 0;
   border-radius: 0;
   border-block: 1px solid var(--border);
@@ -321,7 +334,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
   font-weight: 500;
 }
 .node-card :deep(.route-summary-cell + .route-summary-cell::before) {
-  content: "";
+  content: '';
   position: absolute;
   inset-inline-start: 0;
   top: 6px;
@@ -330,14 +343,24 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
   background: var(--border);
 }
 .node-card :deep(.route-summary-cell) {
-  --carrier-hue: #5796E6;
+  --carrier-hue: #5796e6;
   --route-ink: var(--muted-foreground);
 }
-.node-card :deep([data-carrier="unicom"]) { --carrier-hue: #EF7477; }
-.node-card :deep([data-carrier="mobile"]) { --carrier-hue: #91BD50; }
-.node-card :deep([data-grade="顶级优化"]) { --route-ink: oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12)); }
-.node-card :deep([data-grade="一般优化"]) { --route-ink: var(--success); }
-.node-card :deep([data-grade="普通线路"]) { --route-ink: var(--muted-foreground); }
+.node-card :deep([data-carrier='unicom']) {
+  --carrier-hue: #ef7477;
+}
+.node-card :deep([data-carrier='mobile']) {
+  --carrier-hue: #91bd50;
+}
+.node-card :deep([data-grade='顶级优化']) {
+  --route-ink: oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12));
+}
+.node-card :deep([data-grade='一般优化']) {
+  --route-ink: var(--success);
+}
+.node-card :deep([data-grade='普通线路']) {
+  --route-ink: var(--muted-foreground);
+}
 .node-card :deep(.route-summary-cell > span:first-child) {
   color: var(--carrier-hue);
   font-size: 12px;
@@ -348,14 +371,33 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
   font-size: 13px;
   font-weight: 550;
 }
-.route-line { position:relative; display:flex; align-items:center; }
-.route-line > :deep(button) { flex:1; min-width:0; }
-.metric-row { height:20px; line-height:16px; }
-.metric-row :deep([aria-label^="标称带宽"]) {
-  min-height:0; height:15px; line-height:15px; padding:0 5px;
-  border:0; border-radius:4px; box-shadow:none;
-  background:var(--muted);
-  font-size:10px; font-weight:550; font-variant-numeric:tabular-nums;
+.route-line {
+  position: relative;
+  display: flex;
+  align-items: center;
 }
-.online-row { position:relative; }
+.route-line > :deep(button) {
+  flex: 1;
+  min-width: 0;
+}
+.metric-row {
+  height: 20px;
+  line-height: 16px;
+}
+.metric-row :deep([aria-label^='标称带宽']) {
+  min-height: 0;
+  height: 15px;
+  line-height: 15px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  background: var(--muted);
+  font-size: 10px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.online-row {
+  position: relative;
+}
 </style>

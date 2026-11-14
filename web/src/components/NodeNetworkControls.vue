@@ -175,8 +175,12 @@ async function detect() {
   <div v-else class="space-y-1.5 py-1" @click.stop @keydown.enter.stop @keydown.space.stop>
     <div class="flex min-h-8 items-center justify-between gap-2">
       <div class="min-w-0 flex-1">
-        <div class="text-[11px] font-medium text-foreground">网络质量</div>
-        <div class="truncate text-[10px] text-muted-foreground" role="status">{{ status }}</div>
+        <div class="text-[11px] font-medium text-foreground">
+          网络质量
+        </div>
+        <div class="truncate text-[10px] text-muted-foreground" role="status">
+          {{ status }}
+        </div>
       </div>
       <div class="flex shrink-0 items-center gap-1">
         <NodeIpVersionSwitch :node="node" />
@@ -190,6 +194,8 @@ async function detect() {
         </Button>
       </div>
     </div>
-    <p v-if="message && app.isLoggedIn" role="status" class="text-[10px] leading-relaxed text-muted-foreground">{{ message }}</p>
+    <p v-if="message && app.isLoggedIn" role="status" class="text-[10px] leading-relaxed text-muted-foreground">
+      {{ message }}
+    </p>
   </div>
 </template>
