@@ -22,6 +22,7 @@ export interface NodeProbe {
   kind: 'icmp' | 'tcp' | 'http'
   samples: number
   avg_latency_ms: number | null
+  hour_loss_percent?: number | null
   loss_percent: number | null
   points: { bucket: number, time: number, latency: number | null, loss: number, samples: number, successful_samples: number }[]
 }

@@ -5,6 +5,7 @@ import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
 import { getReturnRouteGrade, nodeBadgeTones } from '@/utils/nodeBadges'
+import { isIPv6Probe } from '@/utils/nodeHelpers'
 
 const props = defineProps<{ node: NodeData, compact?: boolean, homeCard?: boolean }>()
 const open = ref(false)
@@ -43,13 +44,26 @@ const rows = computed(() => carriers.map((carrier) => {
         : route?.status === 'ok'
           ? route.label.replaceAll('->', '→')
           : '未知'
+  const grade = known
+    ? getReturnRouteGrade(label)
+    : null
+  const probes = props.homeCard && grade?.label === '普通线路'
+    ? props.node.probes?.filter(p => p.name.includes(carrier.name) && isIPv6Probe(p.name) === (family.value === 6))
+    : undefined
+  const loss = probes?.length === 1
+    ? probes[0]?.hour_loss_percent
+    : null
+  const lossTone = loss === 0
+    ? 'text-[#44cf86]'
+    : loss != null && loss > 0 && loss < 2
+      ? 'text-[#a5d6b7]'
+      : undefined
   return {
     ...carrier,
     label,
     route,
-    grade: known
-      ? getReturnRouteGrade(route?.label ?? '')
-      : null,
+    grade,
+    lossTone,
   }
 }))
 const summary = computed(() => {
@@ -76,9 +90,9 @@ const summary = computed(() => {
             row.grade?.premium && 'shadow-sm ring-1 ring-[#228d5a]/25',
           ]"
         >
-          <span v-if="homeCard" aria-hidden="true" class="w-3 shrink-0 rounded-full bg-current/10 text-center text-[9px] leading-[14px]">{{ row.short }}</span>
+          <span v-if="homeCard" aria-hidden="true" class="w-3 shrink-0 rounded-sm text-center text-[9px] leading-[14px]" :class="row.tone">{{ row.short }}</span>
           <span v-else aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
-          <span :class="homeCard ? 'whitespace-nowrap font-[Arial,sans-serif] tabular-nums' : 'min-w-0 truncate'">{{ homeCard ? row.label.replaceAll('→', '›') : row.label }}</span>
+          <span :class="homeCard ? ['whitespace-nowrap font-[Arial,sans-serif] tabular-nums', row.lossTone] : 'min-w-0 truncate'">{{ homeCard ? row.label.replaceAll('→', '›') : row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
         </span>
       </button>
