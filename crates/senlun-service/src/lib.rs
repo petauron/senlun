@@ -142,6 +142,7 @@ impl AppState {
         let themes = Arc::new(
             themes::ThemeStore::open(&config.database_path).map_err(std::io::Error::other)?,
         );
+        let ip_info = Arc::new(ip_info::IpInfo::new(storage.ip_info_cache()?)?);
         Ok(Self {
             storage: Arc::new(storage),
             database_permit: Arc::new(Semaphore::new(1)),
@@ -154,7 +155,7 @@ impl AppState {
             auth,
             session_gate,
             themes,
-            ip_info: Arc::new(ip_info::IpInfo::new()?),
+            ip_info,
             traffic_key,
             trusted_proxy_ip: config.trusted_proxy_ip,
         })
