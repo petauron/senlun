@@ -10,10 +10,10 @@ import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
 
-const props = defineProps<{ node: NodeData }>()
+const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const app = useAppStore()
 const nodes = useNodesStore()
-const { family } = useNodeIpVersion(() => props.node)
+const { family, version, versions } = useNodeIpVersion(() => props.node)
 const submitting = ref(false)
 const message = ref('')
 const active = computed(() => props.node.return_route_checks?.find(value => value.state === 'pending' || value.state === 'running'))
@@ -155,7 +155,24 @@ async function detect() {
 </script>
 
 <template>
-  <div class="space-y-1.5 py-1" @click.stop @keydown.enter.stop @keydown.space.stop>
+  <div v-if="compact" class="ml-1 inline-flex shrink-0 items-center gap-0.5" @click.stop @keydown.enter.stop @keydown.space.stop>
+    <button
+      v-if="versions.length > 1" type="button" class="h-5 rounded bg-muted px-1 text-[10px] font-semibold hover:text-foreground focus-visible:outline-ring"
+      :aria-label="`当前 IPv${family}，切换 IP 版本`"
+      @click="version = family === 4 ? 'ipv6' : 'ipv4'"
+    >
+      V{{ family }} <span aria-hidden="true">⇄</span>
+    </button>
+    <button
+      v-if="app.isLoggedIn" type="button" class="flex size-5 items-center justify-center rounded hover:bg-accent disabled:opacity-50"
+      :disabled="busy || !ready" :aria-busy="busy" :title="busy ? status : hint" :aria-label="`${node.name} 检测 IPv${family} 网络质量`"
+      @click="detect"
+    >
+      <Icon icon="lucide:refresh-cw" class="size-3.5" :class="{ 'motion-safe:animate-spin': busy }" />
+    </button>
+    <span v-if="message || busy" role="status" class="absolute bottom-full left-0 z-10 rounded bg-popover px-2 py-1 text-xs">{{ message || status }}</span>
+  </div>
+  <div v-else class="space-y-1.5 py-1" @click.stop @keydown.enter.stop @keydown.space.stop>
     <div class="flex min-h-8 items-center justify-between gap-2">
       <div class="min-w-0 flex-1">
         <div class="text-[11px] font-medium text-foreground">网络质量</div>
