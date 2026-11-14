@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
 import { getReturnRouteGrade, nodeBadgeTones } from '@/utils/nodeBadges'
 
-const props = defineProps<{ node: NodeData, compact?: boolean }>()
+const props = defineProps<{ node: NodeData, compact?: boolean, homeCard?: boolean }>()
 const open = ref(false)
 const { family } = useNodeIpVersion(() => props.node)
 const report = computed(() => props.node.return_routes?.find(value => value.family === family.value))
@@ -68,16 +68,17 @@ const summary = computed(() => {
       >
         <span
           v-for="row in rows" :key="row.id"
-          class="flex min-w-0 items-center justify-center gap-0.5 rounded-full border py-1 font-semibold transition-colors"
+          class="flex min-w-0 items-center justify-center gap-0.5 border font-semibold transition-colors"
           :title="`${row.name}：${row.label}${row.grade ? ` · ${row.grade.label}` : ''}`"
           :class="[
-            compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]',
-            row.grade?.tone ?? nodeBadgeTones.unknown.tone,
+            homeCard ? 'flex-col rounded-lg px-0.5 py-[5px] text-xs leading-[15px]' : ['rounded-full py-1', compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'],
+            (homeCard ? row.grade?.cardTone : row.grade?.tone) ?? nodeBadgeTones.unknown.tone,
             row.grade?.premium && 'shadow-sm ring-1 ring-[#228d5a]/25',
           ]"
         >
-          <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
-          <span class="min-w-0 truncate">{{ row.label }}</span>
+          <span v-if="homeCard" class="text-[10px] leading-3">{{ row.name }}</span>
+          <span v-else aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
+          <span class="min-w-0 truncate" :class="{ 'max-w-full': homeCard }">{{ row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
         </span>
       </button>

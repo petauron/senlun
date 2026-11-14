@@ -266,7 +266,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               </DataTooltip>
             </div>
             <NodeNetworkControls :node="node" />
-            <NodeReturnRoutes :node="node" />
+            <NodeReturnRoutes :node="node" home-card />
             <NodeProbePanel :node="props.node" />
           </div>
         </div>
