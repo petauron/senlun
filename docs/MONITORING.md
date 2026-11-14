@@ -229,21 +229,34 @@ and SSH collection utility have no alias or runtime fallback.
 Net.Coffee uses the existing administrator-enabled IP information setting and
 fixed provider HTTP lane. A normal page refresh reads the bounded address cache
 only; it does not query a third party. Select a node's IP badge and choose
-**Update score** to query the registered address explicitly. Its original
+**Update score** to use the saved result while it is less than 24 hours old,
+or query the registered address when missing or expired. Its original
 `trust_score` is shown as 0–100, higher is better; it is not an abuse probability,
 a computed purity percentage or an availability guarantee. IPv4/IPv6 each retain
-source and timestamp. Missing values show unknown, old cache entries are marked
-stale after one day, and failures are visible without inventing zero. Cache is
-in memory and is intentionally empty after Service restart; an administrator
-can refresh it again. Existing opt-in, quotas, address checks and administrator
-privacy restrictions remain in effect.
+source and timestamp. Successful normalized results are committed to the control
+SQLite database before being returned and restored on Service startup, including
+the original collection time. Control schema v9 adds this cache using the existing
+paired pre-migration backup and a forward-only transaction; metrics remain v2.
+An older Service requires its matched pre-migration database pair for rollback.
+An initial upgrade cannot recover entries held only in an older process's memory;
+its next successful query starts durable caching.
+
+The shared IP information cache retains at most 256 records, each no larger than
+16 KiB, with deterministic oldest-first eviction in memory and SQLite. Only
+normalized lookup/latency fields are saved; raw provider responses and credentials
+are excluded. A changed registered address cannot use another address's result.
+Missing values show unknown. Expired scores keep their last value with a neutral
+**待更新** marker; failed requests and missing provider scores do not replace a
+previous score or advance its timestamp. Manual refresh obeys the same TTL and
+provider quotas. Existing opt-in, address checks and administrator privacy
+restrictions remain in effect.
 
 The IPv4/IPv6 switch lives in the shared **Network quality** header above the
 route pills and latency display. It controls the score, routes and latency
 together. A missing family stays unknown. Detection updates that family's IP
 score through the existing provider lane as well; a provider failure does not
 cancel a queued route check. Technical sources/targets remain inside details.
-The badge shows only the numeric score, with gold for 95–100, violet for 80–94,
-teal for 60–79, orange for 40–59 and rose for 0–39. There are no quality titles.
-Missing and stale scores use neutral gray, never a fabricated zero. The colors
+The shared card/list/detail badge shows the score and its quality label:
+green **纯净** for 80–100, amber **一般** for 40–79 and red **高危** for 0–39.
+Missing and stale results use neutral gray, never a fabricated zero. The colors
 do not grade route speed or guarantee the absence of abuse history.

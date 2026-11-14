@@ -27,9 +27,7 @@ const score = computed(() => {
     : null
 })
 const grade = computed(() => getIpScoreGrade(score.value, Boolean(entry.value?.stale)))
-const displayScore = computed(() => entry.value?.stale
-  ? '—'
-  : score.value ?? '—')
+const displayScore = computed(() => score.value ?? '—')
 const statusIcon = computed(() => {
   if (entry.value?.stale)
     return 'tabler:clock-hour-4'
@@ -53,7 +51,7 @@ async function refresh() {
   busy.value = true
   message.value = ''
   try {
-    const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { updated_at: string, stale: boolean, warning: string | null } }>('admin/ip-info/v1/refresh', { uuid, ip })
+    const result = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { cache: string, updated_at: string, stale: boolean, warning: string | null } }>('admin/ip-info/v1/refresh', { uuid, ip })
     const current = nodesStore.nodes.find(node => node.uuid === uuid)
     const currentAddress = selectedFamily === 4
       ? current?.ipv4
@@ -76,7 +74,9 @@ async function refresh() {
       ? '暂未获取新结果，请稍后重试。'
       : result.data.reputation.trust_score === null
         ? '暂时没有可用评分。'
-        : '评分已更新。'
+        : result.meta.cache === 'hit'
+          ? '评分仍在有效期内，已复用保存的结果。'
+          : '评分已更新。'
   }
   catch {
     if (family.value === selectedFamily)

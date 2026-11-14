@@ -21,7 +21,7 @@ mod metrics;
 pub(crate) use metrics::tests::version_six_store;
 pub(crate) mod rollups;
 
-pub(crate) const SCHEMA_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 9;
 const MIN_SNAPSHOT_SPACING_MS: i64 = 950;
 pub(crate) const RETENTION_PRUNE_BATCH_SIZE: usize = 10_000;
 
@@ -156,7 +156,7 @@ impl Storage {
             // schemas already have their complete pre-split backup above.
             if existed_with_data && version >= 4 {
                 let backup_path = metrics::backup(&mut connection, path)?;
-                tracing::info!(path = %backup_path.display(), "database pair backed up before brand migration");
+                tracing::info!(path = %backup_path.display(), "database pair backed up before schema migration");
             }
             if version < 7 {
                 let transaction = connection.transaction()?;
@@ -186,8 +186,11 @@ impl Storage {
                 rollups::migrate(&mut connection)?;
             }
             let transaction = connection.transaction()?;
-            crate::return_routes::migrate(&transaction)?;
-            transaction.pragma_update(None, "user_version", 8)?;
+            if version < 8 {
+                crate::return_routes::migrate(&transaction)?;
+            }
+            crate::ip_info::migrate(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
         rollups::initialize_hot(&connection)?;
