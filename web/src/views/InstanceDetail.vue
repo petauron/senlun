@@ -286,7 +286,6 @@ const trafficProgressStyle = computed(() => ({
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
         </Badge>
-        <NodeBandwidthBadge :node="data" />
         <NodeIpScores :node="data" />
       </div>
       <div class="max-w-md px-4">
@@ -419,7 +418,8 @@ const trafficProgressStyle = computed(() => ({
             <div class="min-w-0 flex flex-col gap-1 rounded-sm bg-slate-500/5 p-2">
               <div class="flex gap-1 items-center text-muted-foreground">
                 <Icon icon="icon-park-outline:dashboard-one" :width="14" :height="14" />
-                <span class="text-xs sm:text-sm">网络速率</span>
+                <span class="text-xs sm:text-sm">实时速率</span>
+                <NodeBandwidthBadge :node="data" />
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row flex-wrap items-center gap-1">
                 <Icon icon="tabler:chevron-up" width="12" height="12" />
