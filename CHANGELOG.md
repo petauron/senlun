@@ -4,6 +4,14 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.54](https://github.com/petauron/senlun/compare/v0.1.0-alpha.53...v0.1.0-alpha.54) (2026-11-14)
+
+
+### Bug Fixes
+
+* persist IP quality cache across service restarts ([#193](https://github.com/petauron/senlun/issues/193)) ([b739b07](https://github.com/petauron/senlun/commit/b739b074f1bb1ea0fab4da759d0c7fd480652adf))
+* **web:** keep three carrier routes on one row ([#195](https://github.com/petauron/senlun/issues/195)) ([d84bde3](https://github.com/petauron/senlun/commit/d84bde36afbe002a000d0919bcf6c91225d3ce53))
+
 ## [0.1.0-alpha.53](https://github.com/petauron/senlun/compare/v0.1.0-alpha.52...v0.1.0-alpha.53) (2026-11-14)
 
 
