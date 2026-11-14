@@ -2,6 +2,7 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
@@ -13,10 +14,10 @@ import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
+import { getNodeDisplayTags } from '@/utils/nodeBadges'
 import { formatOfflineTime, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { parseTags } from '@/utils/tagHelper'
 
 interface ColumnConfig {
   key: string
@@ -292,7 +293,10 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   >
                   <span class="truncate">{{ node.name }}</span>
                 </div>
-                <NodeIpScores :node="node" />
+                <div class="flex items-center gap-1.5">
+                  <NodeBandwidthBadge :node="node" />
+                  <NodeIpScores :node="node" />
+                </div>
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
                   <DataTooltip
                     v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="shrink-0" placement="right"
@@ -321,7 +325,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <!-- 标签 -->
               <div v-else-if="col.key === 'tags'">
                 <div class="flex flex-wrap gap-1 items-center">
-                  <NodeTagBadge v-for="(tag, tagIndex) in parseTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
+                  <NodeTagBadge v-for="(tag, tagIndex) in getNodeDisplayTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
               </div>
 

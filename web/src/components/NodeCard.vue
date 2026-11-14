@@ -2,6 +2,7 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
@@ -14,10 +15,10 @@ import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
+import { getNodeDisplayTags } from '@/utils/nodeBadges'
 import { getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ node: NodeData }>()
 
@@ -68,7 +69,7 @@ const externalTrafficPercentage = computed(() => {
     ? Math.min((snapshot.used_bytes / snapshot.limit_bytes) * 100, 100)
     : 0
 })
-const customTags = computed(() => parseTags(props.node.tags))
+const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 </script>
 
 <template>
@@ -99,6 +100,7 @@ const customTags = computed(() => parseTags(props.node.tags))
 
     <template #header-extra>
       <div class="flex gap-1.5 items-center">
+        <NodeBandwidthBadge :node="node" />
         <NodeIpScores :node="node" />
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
