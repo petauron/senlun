@@ -26,6 +26,10 @@ export const nodeBadgeTones = {
   },
 } as const
 
+// Colors sampled from the network-quality reference, shared by route and IP badges.
+const qualityGreen = 'border-[#228d5a]/50 bg-[#0d2817] text-[#04b84c]'
+const qualityAmber = 'border-[#ca8f3e]/50 bg-[#302416] text-[#ca8f3e]'
+
 export function getIpScoreGrade(score: number | null, stale = false) {
   if (stale || score === null || !Number.isFinite(score) || score < 0 || score > 100) {
     return {
@@ -33,17 +37,29 @@ export function getIpScoreGrade(score: number | null, stale = false) {
       tone: nodeBadgeTones.unknown.tone,
     }
   }
-  if (score >= 80)
-    return { label: '纯净', tone: nodeBadgeTones.uncommon.tone }
-  if (score >= 40) {
+  if (score >= 80) {
     return {
-      label: '一般',
-      tone: 'border-amber-500/40 bg-amber-50 text-amber-800 shadow-amber-400/15 dark:bg-amber-950/65 dark:text-amber-300',
+      label: score >= 95
+        ? '极度纯净'
+        : '纯净',
+      tone: qualityGreen,
+    }
+  }
+  if (score >= 50) {
+    return {
+      label: '良好',
+      tone: qualityAmber,
+    }
+  }
+  if (score >= 25) {
+    return {
+      label: '中性',
+      tone: qualityAmber,
     }
   }
   return {
-    label: '高危',
-    tone: 'border-red-500/40 bg-red-50 text-red-800 shadow-red-400/15 dark:bg-red-950/65 dark:text-red-300',
+    label: '可疑',
+    tone: 'border-transparent bg-[#fce4ec] text-[#c62828] dark:bg-[#2d1416] dark:text-[#f85149]',
   }
 }
 
@@ -92,8 +108,8 @@ export function getReturnRouteGrade(label: string) {
     return null
   // These are detected route families, not an inference from latency or speed.
   if (/CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b/i.test(label))
-    return { label: '顶级优化', premium: true, tone: nodeBadgeTones.legendary.tone }
+    return { label: '顶级优化', premium: true, tone: qualityGreen }
   if (/\b(?:CN2|CN2GT|10099)\b/i.test(label))
-    return { label: '一般优化', premium: false, tone: nodeBadgeTones.rare.tone }
-  return { label: '普通线路', premium: false, tone: nodeBadgeTones.uncommon.tone }
+    return { label: '一般优化', premium: false, tone: qualityAmber }
+  return { label: '普通线路', premium: false, tone: qualityAmber }
 }

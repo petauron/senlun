@@ -73,7 +73,7 @@ const summary = computed(() => {
           :class="[
             compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]',
             row.grade?.tone ?? nodeBadgeTones.unknown.tone,
-            row.grade?.premium && 'shadow-sm ring-1 ring-orange-400/15',
+            row.grade?.premium && 'shadow-sm ring-1 ring-[#228d5a]/25',
           ]"
         >
           <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
