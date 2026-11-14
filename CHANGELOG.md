@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.57](https://github.com/petauron/senlun/compare/v0.1.0-alpha.56...v0.1.0-alpha.57) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** simplify rate labels and premium route badges ([#204](https://github.com/petauron/senlun/issues/204)) ([a81a82b](https://github.com/petauron/senlun/commit/a81a82b309392e1f24f553f5f22f59af490d7c7f))
+
 ## [0.1.0-alpha.56](https://github.com/petauron/senlun/compare/v0.1.0-alpha.55...v0.1.0-alpha.56) (2026-11-14)
 
 
