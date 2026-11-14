@@ -11,7 +11,7 @@ const bandwidth = computed(() => getBandwidthBadge(props.node.tags))
   <span
     v-if="bandwidth"
     :class="[nodeBadgeClass, bandwidth.tone]"
-    :title="'标称带宽 ' + bandwidth.text"
-    :aria-label="'标称带宽 ' + bandwidth.text"
+    :title="`标称带宽 ${bandwidth.text}`"
+    :aria-label="`标称带宽 ${bandwidth.text}`"
   >{{ bandwidth.text }}</span>
 </template>

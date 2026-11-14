@@ -55,7 +55,11 @@ function parseBandwidthTag(text: string) {
     return null
   const amount = Number(match[1])
   const unit = match[2]!.toUpperCase()
-  const megabits = amount * (unit === 'G' ? 1000 : unit === 'K' ? 0.001 : 1)
+  const megabits = amount * (unit === 'G'
+    ? 1000
+    : unit === 'K'
+      ? 0.001
+      : 1)
   if (!Number.isFinite(megabits) || megabits <= 0)
     return null
   const grade = megabits >= 10000
@@ -89,7 +93,7 @@ export function getReturnRouteGrade(label: string) {
   if (!label.trim() || /未知|未识别|unknown/i.test(label))
     return null
   // These are detected route families, not an inference from latency or speed.
-  if (/(?:CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b)/i.test(label))
+  if (/CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b/i.test(label))
     return { label: '顶级优化', premium: true, tone: nodeBadgeTones.epic.tone }
   if (/\b(?:CN2|CN2GT|10099)\b/i.test(label))
     return { label: '一般优化', premium: false, tone: nodeBadgeTones.rare.tone }

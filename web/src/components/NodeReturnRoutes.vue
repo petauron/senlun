@@ -48,7 +48,9 @@ const rows = computed(() => carriers.map((carrier) => {
     label,
     route,
     known,
-    grade: known ? getReturnRouteGrade(route?.label ?? '') : null,
+    grade: known
+      ? getReturnRouteGrade(route?.label ?? '')
+      : null,
   }
 }))
 const summary = computed(() => {
@@ -68,7 +70,7 @@ const summary = computed(() => {
         <span
           v-for="row in rows" :key="row.id"
           class="flex min-w-0 max-w-full flex-[1_1_auto] items-center justify-center gap-1 rounded-full border py-1 font-semibold transition-colors"
-          :title="row.name + '：' + row.label + (row.grade ? ' · ' + row.grade.label : '')"
+          :title="`${row.name}：${row.label}${row.grade ? ` · ${row.grade.label}` : ''}`"
           :class="[
             compact ? 'px-1 text-[10px]' : 'px-1.5 text-[11px]',
             row.grade?.tone ?? nodeBadgeTones.unknown.tone,
