@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.53](https://github.com/petauron/senlun/compare/v0.1.0-alpha.52...v0.1.0-alpha.53) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** clarify node quality and bandwidth badges ([#190](https://github.com/petauron/senlun/issues/190)) ([31c376b](https://github.com/petauron/senlun/commit/31c376bd3e26eae0275142795654457988348c2d))
+
 ## [0.1.0-alpha.52](https://github.com/petauron/senlun/compare/v0.1.0-alpha.51...v0.1.0-alpha.52) (2026-11-14)
 
 
