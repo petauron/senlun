@@ -128,4 +128,4 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the [Co
 
 Licensed under the [Apache License 2.0](LICENSE).
 
-Shanghai TCP return-route collection and Net.Coffee score display: see [Monitoring administration](docs/MONITORING.md#shanghai-return-routes-and-netcoffee-scores).
+Shanghai TCP return-route collection and persistent Net.Coffee scores (24-hour cache): see [Monitoring administration](docs/MONITORING.md#shanghai-return-routes-and-netcoffee-scores).

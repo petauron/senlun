@@ -1,7 +1,7 @@
 //! Opt-in, admin-only IP enrichment. No Agent command channel or plugin runtime.
 use crate::{
     ApiError, AppState,
-    storage::{Storage, format_timestamp},
+    storage::{Storage, StorageError, format_timestamp},
 };
 use axum::{
     Json, Router,
@@ -9,6 +9,7 @@ use axum::{
     http::HeaderMap,
     routing::{get, post},
 };
+use rusqlite::{Connection, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -20,6 +21,7 @@ use tokio::sync::Mutex;
 
 const MAX_CACHE: usize = 256;
 const MAX_BODY: usize = 256 * 1024;
+const MAX_ENTRY: usize = 16 * 1024;
 const DAY: u64 = 86_400;
 const PROVIDER: &str = "https://ip.net.coffee";
 
@@ -37,14 +39,14 @@ struct Cache {
     minute_calls: u32,
 }
 #[derive(Clone)]
-struct Entry {
+pub(crate) struct Entry {
     data: Value,
     updated: u64,
     ttl: u64,
 }
 
 impl IpInfo {
-    pub(crate) fn new() -> Result<Self, reqwest::Error> {
+    pub(crate) fn new(entries: HashMap<String, Entry>) -> Result<Self, reqwest::Error> {
         Ok(Self {
             client: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
@@ -52,23 +54,25 @@ impl IpInfo {
                 .connect_timeout(Duration::from_secs(3))
                 .no_proxy()
                 .build()?,
-            inner: Mutex::new(Cache::default()),
+            inner: Mutex::new(Cache {
+                entries,
+                ..Cache::default()
+            }),
         })
     }
 
     async fn fetch(
         &self,
+        state: &AppState,
         cache: &mut Cache,
         ip: IpAddr,
         latency: bool,
-        force: bool,
     ) -> Result<Value, ApiError> {
         let now = crate::current_time()? / 1000;
         let key = format!("{ip}:{latency}");
         let old = cache.entries.get(&key).cloned();
         if let Some(entry) = &old
-            && !force
-            && now < entry.updated + entry.ttl
+            && !entry.stale(now)
         {
             return Ok(envelope(entry, now, "hit", None));
         }
@@ -101,7 +105,15 @@ impl IpInfo {
             if latency {
                 normalize_latency(&raw, ip)
             } else {
-                normalize_lookup(&raw, ip)
+                let data = normalize_lookup(&raw, ip)?;
+                if data["reputation"]["trust_score"].is_null()
+                    && old.as_ref().is_some_and(|entry| {
+                        entry.data["reputation"]["trust_score"].is_number()
+                    })
+                {
+                    return Err(ApiError::unavailable("IP score unavailable"));
+                }
+                Ok(data)
             }
         });
         if let Ok(data) = result {
@@ -110,18 +122,27 @@ impl IpInfo {
                 updated: now,
                 ttl: if latency { 3600 } else { DAY },
             };
-            if cache.entries.len() >= MAX_CACHE
-                && !cache.entries.contains_key(&key)
+            // A successful response is durable before it is visible in memory.
+            let saved_key = key.clone();
+            let saved_entry = entry.clone();
+            state
+                .database(move |storage| storage.save_ip_info_cache(&saved_key, &saved_entry))
+                .await?;
+            let result = envelope(&entry, now, "miss", None);
+            cache.entries.insert(key, entry);
+            if cache.entries.len() > MAX_CACHE
                 && let Some(key) = cache
                     .entries
                     .iter()
-                    .min_by_key(|(_, entry)| entry.updated)
+                    .min_by(|(left_key, left), (right_key, right)| {
+                        left.updated
+                            .cmp(&right.updated)
+                            .then_with(|| left_key.cmp(right_key))
+                    })
                     .map(|(key, _)| key.clone())
             {
                 cache.entries.remove(&key);
             }
-            let result = envelope(&entry, now, "miss", None);
-            cache.entries.insert(key, entry);
             // A lookup and its following latency request are one logical operation.
             cache.next_request = None;
             Ok(result)
@@ -165,9 +186,100 @@ impl IpInfo {
     }
 }
 
+impl Entry {
+    fn stale(&self, now: u64) -> bool {
+        now < self.updated || now >= self.updated.saturating_add(self.ttl)
+    }
+}
+
+pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
+    // Leave room for TTL and stale grace inside the RFC 3339 calendar range.
+    db.execute_batch(
+        "CREATE TABLE ip_info_cache (
+            cache_key TEXT PRIMARY KEY CHECK(length(cache_key) BETWEEN 3 AND 51),
+            data TEXT NOT NULL CHECK(json_valid(data) AND length(CAST(data AS BLOB)) <= 16384),
+            updated_at INTEGER NOT NULL CHECK(updated_at > 0 AND updated_at <= 253402127999)
+        ) WITHOUT ROWID;",
+    )
+}
+
+impl Storage {
+    pub(crate) fn ip_info_cache(&self) -> Result<HashMap<String, Entry>, StorageError> {
+        let db = self.connection()?;
+        let mut statement = db.prepare(
+            "SELECT cache_key,data,updated_at FROM ip_info_cache
+             ORDER BY updated_at DESC,cache_key DESC LIMIT ?1",
+        )?;
+        let rows = statement.query_map([MAX_CACHE], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u64>(2)?,
+            ))
+        })?;
+        let mut entries = HashMap::new();
+        for row in rows {
+            let (key, raw, updated) = row?;
+            let (address, kind) = key
+                .rsplit_once(':')
+                .ok_or(StorageError::InvalidInput("invalid IP cache key"))?;
+            let ip: IpAddr = address
+                .parse()
+                .map_err(|_| StorageError::InvalidInput("invalid IP cache address"))?;
+            let latency = match kind {
+                "false" => false,
+                "true" => true,
+                _ => return Err(StorageError::InvalidInput("invalid IP cache kind")),
+            };
+            let data: Value = serde_json::from_str(&raw)
+                .map_err(|_| StorageError::InvalidInput("invalid IP cache data"))?;
+            let family = if ip.is_ipv4() { 4 } else { 6 };
+            if !public_ip(ip)
+                || key != format!("{ip}:{latency}")
+                || data["schema_version"] != 6
+                || data["address"]["value"] != ip.to_string()
+                || data["address"]["family"] != family
+                || data["provider"]["id"] != "net-coffee"
+            {
+                return Err(StorageError::InvalidInput("invalid IP cache identity"));
+            }
+            entries.insert(
+                key,
+                Entry {
+                    data,
+                    updated,
+                    ttl: if latency { 3600 } else { DAY },
+                },
+            );
+        }
+        Ok(entries)
+    }
+
+    fn save_ip_info_cache(&self, key: &str, entry: &Entry) -> Result<(), StorageError> {
+        let raw = entry.data.to_string();
+        if raw.len() > MAX_ENTRY {
+            return Err(StorageError::InvalidInput("IP cache entry too large"));
+        }
+        let mut db = self.connection()?;
+        let transaction = db.transaction()?;
+        transaction.execute(
+            "INSERT INTO ip_info_cache(cache_key,data,updated_at) VALUES(?1,?2,?3)
+             ON CONFLICT(cache_key) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
+            params![key, raw, entry.updated],
+        )?;
+        transaction.execute(
+            "DELETE FROM ip_info_cache WHERE cache_key NOT IN
+             (SELECT cache_key FROM ip_info_cache ORDER BY updated_at DESC,cache_key DESC LIMIT ?1)",
+            [MAX_CACHE],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
 fn envelope(entry: &Entry, now: u64, cache: &str, warning: Option<&str>) -> Value {
     json!({"ok":true,"data":entry.data,"meta":{
-        "cache":cache,"stale":now >= entry.updated + entry.ttl,"warning":warning,
+        "cache":cache,"stale":entry.stale(now),"warning":warning,
         "updated_at":format_timestamp(entry.updated * 1000),
         "expires_at":format_timestamp((entry.updated + entry.ttl) * 1000),
         "stale_until":format_timestamp((entry.updated + entry.ttl + DAY) * 1000)}})
@@ -277,32 +389,32 @@ async fn run(
     state: &AppState,
     input: &Input,
     latency: bool,
-    force: bool,
+    refresh: bool,
 ) -> Result<Value, ApiError> {
     // One bounded serialized provider lane coalesces normal duplicate requests via cache.
     let mut cache = state.ip_info.inner.lock().await;
     let ip = validate(state, input).await?;
-    let mut base = state.ip_info.fetch(&mut cache, ip, false, force).await?;
+    let mut base = state.ip_info.fetch(state, &mut cache, ip, false).await?;
     base["data"]["uuid"] = json!(input.uuid);
     if latency && base["data"]["excluded"] != true {
-        let result = state.ip_info.fetch(&mut cache, ip, true, force).await;
+        let result = state.ip_info.fetch(state, &mut cache, ip, true).await;
         match result {
             Ok(mut profile) => {
                 profile["data"]["uuid"] = json!(input.uuid);
                 profile["data"]["classification"] = base["data"]["classification"].clone();
                 profile["data"]["provider"]["classification_available"] =
                     json!(base["data"]["classification"]["type"] != "unknown");
-                if !force {
+                if !refresh {
                     return Ok(profile);
                 }
                 base["related"] = json!({"latency":profile});
             }
-            Err(error) if force => {
+            Err(error) if refresh => {
                 base["meta"]["latency_warning"] = json!(error.message);
             }
             Err(error) => return Err(error),
         }
-    } else if latency && !force {
+    } else if latency && !refresh {
         return Err(ApiError::bad_request("mainland China IPs are excluded"));
     }
     Ok(base)
@@ -382,7 +494,7 @@ fn enrich_scores(value: &mut Value, cache: &Cache, now: u64) {
                 Some(
                     json!({"family":family,"score":score,"provider":"Net.Coffee",
                     "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000),
-                    "stale":entry.is_some_and(|entry|now >= entry.updated + entry.ttl)}),
+                    "stale":entry.is_some_and(|entry|entry.stale(now))}),
                 )
             })
             .collect();
@@ -525,8 +637,13 @@ fn normalize_latency(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {
 mod tests {
     use super::*;
     #[tokio::test]
-    async fn cache_hits_do_not_consume_quota_and_force_cannot_bypass_limit() {
-        let service = IpInfo::new().unwrap();
+    async fn cache_hits_do_not_consume_quota_and_expired_results_survive_limits() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::open(&crate::ServiceConfig::with_database(
+            directory.path().join("senlun.db"),
+        ))
+        .unwrap();
+        let service = &state.ip_info;
         let now = crate::current_time().unwrap() / 1000;
         let mut cache = Cache {
             day: now / DAY,
@@ -543,15 +660,16 @@ mod tests {
             },
         );
         assert_eq!(
-            service.fetch(&mut cache, ip, false, false).await.unwrap()["meta"]["cache"],
+            service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
             "hit"
         );
+        cache.entries.get_mut(&format!("{ip}:false")).unwrap().updated = now - 61;
         assert_eq!(
-            service.fetch(&mut cache, ip, false, true).await.unwrap()["meta"]["cache"],
+            service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
             "stale"
         );
         assert_eq!(cache.calls, 200);
-        assert!(service.fetch(&mut cache, ip, true, true).await.is_err());
+        assert!(service.fetch(&state, &mut cache, ip, true).await.is_err());
     }
     #[test]
     fn blocks_non_public_and_mapped_addresses() {

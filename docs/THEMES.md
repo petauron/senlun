@@ -95,7 +95,8 @@ In `/admin?section=site`, explicitly enable **IP information (administrators onl
 This is disabled by default, including existing installations. In the existing
 node editor, register the node's public IPv4 and/or IPv6 address. Blank removes
 an address. These fields are administrator-maintained metadata, not inferred
-from proxies or collected by the Agent. No database schema migration is needed.
+from proxies or collected by the Agent. The IP result cache uses the Service's
+forward-only control schema v9 migration and existing paired backup procedure.
 The admin node metadata API accepts `ipv4` and `ipv6`; site settings accept
 `ip_info_enabled`. Registered IPs are returned to authenticated administrators
 only, and only when the feature is enabled. They are absent from public node
@@ -127,15 +128,21 @@ fallback to additional third parties. Third-party accuracy, availability and
 terms are outside Senlun's control. Unknown fields remain null; no risk scores,
 media-unlock results or AI-unlock results are invented.
 
-Bounds per Service process: one serialized provider lane; 256 cached records;
-256 KiB provider response limit; 6 provider calls/minute and 200/day (UTC);
-24-hour lookup and 1-hour latency TTL; up to one additional day of stale data
-with explicit warnings; five-minute cooldown after failure. Refresh does not
-bypass quotas. Redirects are disabled, destinations are fixed HTTPS origins,
+Bounds per Service process: one serialized provider lane; 256 cached records
+in memory and SQLite, with a 16 KiB normalized-record limit and oldest-first
+eviction; 256 KiB provider response limit; 6 provider calls/minute and 200/day
+(UTC); 24-hour lookup and 1-hour latency TTL; up to one additional day of stale
+API responses with explicit warnings; five-minute cooldown after failure.
+Refresh reuses unexpired results and does not bypass quotas. Redirects are
+disabled, destinations are fixed HTTPS origins,
 and proxy environment variables are not used. Lookup timeout is 6 seconds,
-latency timeout 20 seconds, total route timeout 30 seconds. Cache and quota
-counters are in memory and reset on restart; they are not an account-level
-billing limit across replicas or restarts. Disabling prevents new queries but
+latency timeout 20 seconds, total route timeout 30 seconds. Successful normalized
+results and original timestamps are restored from SQLite on restart. Failed
+requests keep the last saved data; stale dashboard scores retain their value
+and are marked as requiring an update. A lookup without a score cannot replace
+a previously available score. Quota counters remain in memory and reset on
+restart; they are not an account-level billing limit across replicas or restarts.
+Disabling prevents new queries but
 does not retroactively cancel an already-dispatched provider request.
 
 Protocol reference: [Komari-IP-Info](https://github.com/shanyang242/Komari-IP-Info).
