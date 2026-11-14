@@ -39,7 +39,9 @@ export function getIpScoreGrade(score: number | null, stale = false) {
   }
   if (score >= 80) {
     return {
-      label: score >= 95 ? '极度纯净' : '纯净',
+      label: score >= 95
+        ? '极度纯净'
+        : '纯净',
       tone: qualityGreen,
     }
   }
