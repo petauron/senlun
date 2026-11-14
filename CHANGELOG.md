@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.55](https://github.com/petauron/senlun/compare/v0.1.0-alpha.54...v0.1.0-alpha.55) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** restore carrier colors and move bandwidth next to rate ([#198](https://github.com/petauron/senlun/issues/198)) ([ca53a82](https://github.com/petauron/senlun/commit/ca53a8234e7762aecf6626b08f949bb0d4d53ba8))
+
 ## [0.1.0-alpha.54](https://github.com/petauron/senlun/compare/v0.1.0-alpha.53...v0.1.0-alpha.54) (2026-11-14)
 
 
