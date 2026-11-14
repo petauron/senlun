@@ -46,7 +46,7 @@
     "@antfu/eslint-config": "^10.0.0",
     "@axe-core/playwright": "^4.13.0",
     "@iconify/json": "^2.2.552",
-    "@playwright/test": "^1.63.0",
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/vite": "^4.1.16",
     "@tsconfig/node24": "^24.0.4",
     "@types/node": "^26.6.6",
