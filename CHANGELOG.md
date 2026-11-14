@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.58](https://github.com/petauron/senlun/compare/v0.1.0-alpha.57...v0.1.0-alpha.58) (2026-11-14)
+
+
+### Features
+
+* **web:** refine return routes on home node cards ([#207](https://github.com/petauron/senlun/issues/207)) ([dfe8827](https://github.com/petauron/senlun/commit/dfe8827eff2d3fa5dc38c6d197231b3062410c81))
+
 ## [0.1.0-alpha.57](https://github.com/petauron/senlun/compare/v0.1.0-alpha.56...v0.1.0-alpha.57) (2026-11-14)
 
 
