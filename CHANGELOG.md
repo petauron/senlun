@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.59](https://github.com/petauron/senlun/compare/v0.1.0-alpha.58...v0.1.0-alpha.59) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** compact home card return routes into a single line ([#210](https://github.com/petauron/senlun/issues/210)) ([fa6b7d6](https://github.com/petauron/senlun/commit/fa6b7d678f4064ab37dbe85cfe51406a8c9983ab))
+
 ## [0.1.0-alpha.58](https://github.com/petauron/senlun/compare/v0.1.0-alpha.57...v0.1.0-alpha.58) (2026-11-14)
 
 
