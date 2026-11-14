@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.60](https://github.com/petauron/senlun/compare/v0.1.0-alpha.59...v0.1.0-alpha.60) (2026-11-14)
+
+
+### Features
+
+* **web:** color ordinary home routes by hourly probe loss ([#213](https://github.com/petauron/senlun/issues/213)) ([2a88ea7](https://github.com/petauron/senlun/commit/2a88ea733b84c4efbe57273983b6bd4712aca5b8))
+
 ## [0.1.0-alpha.59](https://github.com/petauron/senlun/compare/v0.1.0-alpha.58...v0.1.0-alpha.59) (2026-11-14)
 
 
