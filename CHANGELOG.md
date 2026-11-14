@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.61](https://github.com/petauron/senlun/compare/v0.1.0-alpha.60...v0.1.0-alpha.61) (2026-11-14)
+
+
+### Features
+
+* unify node card network quality and inline controls ([#216](https://github.com/petauron/senlun/issues/216)) ([db02d50](https://github.com/petauron/senlun/commit/db02d50f14047c36cde79ec96c9e70a2166d36aa))
+
 ## [0.1.0-alpha.60](https://github.com/petauron/senlun/compare/v0.1.0-alpha.59...v0.1.0-alpha.60) (2026-11-14)
 
 
