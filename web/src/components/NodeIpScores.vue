@@ -36,7 +36,7 @@ const statusIcon = computed(() => {
   const value = score.value
   if (value === null)
     return 'lucide:info'
-  return value < 40
+  return value < 80
     ? 'lucide:triangle-alert'
     : 'lucide:circle-check'
 })
@@ -94,11 +94,11 @@ async function refresh() {
       <button
         type="button"
         class="relative transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 before:absolute before:inset-x-0 before:-inset-y-2"
-        :class="[nodeBadgeClass, grade.tone]" :aria-label="`${node.name} IPv${family} IP 评分 ${displayScore}，查看详情`"
+        :class="[nodeBadgeClass, grade.tone]" :aria-label="`${node.name} IPv${family} IP 评分 ${displayScore} ${grade.label}，查看详情`"
         @click.stop @keydown.stop
       >
-        <span v-if="grade.legendary" aria-hidden="true" class="size-1.5 rotate-45 rounded-[1px] border border-current bg-current/20" />
         <span class="font-bold tabular-nums">IP {{ displayScore }}</span>
+        <span class="font-medium">{{ grade.label }}</span>
       </button>
     </DialogTrigger>
     <DialogContent class="max-w-sm gap-5 rounded-2xl border-border/60 p-5" @click.stop>
@@ -114,9 +114,8 @@ async function refresh() {
         <div class="space-y-1.5">
           <div class="text-xs opacity-70">IPv{{ family }} · IP 评分</div>
           <div class="flex items-center gap-2 text-lg font-semibold">
-            <span v-if="grade.legendary" aria-hidden="true" class="size-3 rotate-45 rounded-xs border border-current bg-current/15" />
-            <Icon v-else :icon="statusIcon" class="size-5" aria-hidden="true" />
-            {{ entry?.stale ? '待更新' : score === null ? '待检测' : 'IP 评分' }}
+            <Icon :icon="statusIcon" class="size-5" aria-hidden="true" />
+            {{ grade.label }}
           </div>
         </div>
         <div class="text-4xl font-bold tracking-tight tabular-nums">{{ displayScore }}<span class="ml-1 text-xs font-medium opacity-60">/100</span></div>
