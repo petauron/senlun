@@ -1320,6 +1320,7 @@ pub(crate) fn dashboard_probes(
     config: &DashboardProbeConfig,
 ) -> Result<Vec<Value>, StorageError> {
     use crate::storage::rollups::{ProbeTotals, probe_summaries};
+    let hour_start = now.saturating_sub(3_600_000);
     let range_ms = u64::from(config.hours) * 3_600_000;
     let start = now.saturating_sub(range_ms);
     let width = range_ms.div_ceil(10).max(1);
@@ -1338,6 +1339,7 @@ pub(crate) fn dashboard_probes(
     let mut result = Vec::new();
     for task in selected {
         let mut total = ProbeTotals::default();
+        let mut hour = ProbeTotals::default();
         let mut buckets: [ProbeTotals; 10] = std::array::from_fn(|_| ProbeTotals::default());
         probe_summaries(
             db,
@@ -1347,6 +1349,9 @@ pub(crate) fn dashboard_probes(
             now,
             |p, _| {
                 total.add(&p);
+                if p.last_received > hour_start {
+                    hour.add(&p);
+                }
                 let index = p.last_received.saturating_sub(start).saturating_sub(1) / width;
                 if let Some(bucket) = usize::try_from(index).ok().and_then(|i| buckets.get_mut(i)) {
                     bucket.add(&p);
@@ -1359,6 +1364,7 @@ pub(crate) fn dashboard_probes(
             "loss":v.loss().unwrap_or(0.0),"samples":v.samples,"successful_samples":v.successful,"bucket":i
         })).collect();
         result.push(json!({"id":task.id,"name":task.name,"kind":task.kind,"interval_seconds":task.interval_seconds,
+            "hour_loss_percent":if hour.samples >= 2 { hour.loss() } else { None },
             "samples":total.samples,"avg_latency_ms":total.average(),"loss_percent":total.loss(),"points":points}));
     }
     Ok(result)
