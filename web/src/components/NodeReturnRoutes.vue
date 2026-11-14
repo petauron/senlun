@@ -79,7 +79,6 @@ const summary = computed(() => {
           <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
           <span class="min-w-0 truncate">{{ row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
-          <span v-if="row.grade?.premium" aria-hidden="true" class="size-1.5 shrink-0 rotate-45 rounded-[1px] border border-current bg-current/15" />
         </span>
       </button>
     </DialogTrigger>
