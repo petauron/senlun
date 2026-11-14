@@ -71,14 +71,14 @@ const summary = computed(() => {
           class="flex min-w-0 items-center justify-center gap-0.5 border font-semibold transition-colors"
           :title="`${row.name}：${row.label}${row.grade ? ` · ${row.grade.label}` : ''}`"
           :class="[
-            homeCard ? 'flex-col rounded-lg px-0.5 py-[5px] text-xs leading-[15px]' : ['rounded-full py-1', compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'],
+            homeCard ? 'h-[25px] rounded-full text-[11px]' : ['rounded-full py-1', compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'],
             (homeCard ? row.grade?.cardTone : row.grade?.tone) ?? nodeBadgeTones.unknown.tone,
             row.grade?.premium && 'shadow-sm ring-1 ring-[#228d5a]/25',
           ]"
         >
-          <span v-if="homeCard" class="text-[10px] leading-3">{{ row.name }}</span>
+          <span v-if="homeCard" aria-hidden="true" class="w-3 shrink-0 rounded-full bg-current/10 text-center text-[9px] leading-[14px]">{{ row.short }}</span>
           <span v-else aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
-          <span class="min-w-0 truncate" :class="{ 'max-w-full': homeCard }">{{ row.label }}</span>
+          <span :class="homeCard ? 'whitespace-nowrap font-[Arial,sans-serif] tabular-nums' : 'min-w-0 truncate'">{{ homeCard ? row.label.replaceAll('→', '›') : row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
         </span>
       </button>
