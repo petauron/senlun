@@ -19,7 +19,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 
-const MAX_CACHE: usize = 256;
+const MAX_CACHE: u16 = 256;
 const MAX_BODY: usize = 256 * 1024;
 const MAX_ENTRY: usize = 16 * 1024;
 const DAY: u64 = 86_400;
@@ -107,9 +107,9 @@ impl IpInfo {
             } else {
                 let data = normalize_lookup(&raw, ip)?;
                 if data["reputation"]["trust_score"].is_null()
-                    && old.as_ref().is_some_and(|entry| {
-                        entry.data["reputation"]["trust_score"].is_number()
-                    })
+                    && old
+                        .as_ref()
+                        .is_some_and(|entry| entry.data["reputation"]["trust_score"].is_number())
                 {
                     return Err(ApiError::unavailable("IP score unavailable"));
                 }
@@ -130,7 +130,7 @@ impl IpInfo {
                 .await?;
             let result = envelope(&entry, now, "miss", None);
             cache.entries.insert(key, entry);
-            if cache.entries.len() > MAX_CACHE
+            if cache.entries.len() > usize::from(MAX_CACHE)
                 && let Some(key) = cache
                     .entries
                     .iter()
@@ -214,12 +214,14 @@ impl Storage {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
-                row.get::<_, u64>(2)?,
+                row.get::<_, i64>(2)?,
             ))
         })?;
         let mut entries = HashMap::new();
         for row in rows {
             let (key, raw, updated) = row?;
+            let updated = u64::try_from(updated)
+                .map_err(|_| StorageError::InvalidInput("invalid IP cache timestamp"))?;
             let (address, kind) = key
                 .rsplit_once(':')
                 .ok_or(StorageError::InvalidInput("invalid IP cache key"))?;
@@ -260,12 +262,14 @@ impl Storage {
         if raw.len() > MAX_ENTRY {
             return Err(StorageError::InvalidInput("IP cache entry too large"));
         }
+        let updated = i64::try_from(entry.updated)
+            .map_err(|_| StorageError::InvalidInput("invalid IP cache timestamp"))?;
         let mut db = self.connection()?;
         let transaction = db.transaction()?;
         transaction.execute(
             "INSERT INTO ip_info_cache(cache_key,data,updated_at) VALUES(?1,?2,?3)
              ON CONFLICT(cache_key) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
-            params![key, raw, entry.updated],
+            params![key, raw, updated],
         )?;
         transaction.execute(
             "DELETE FROM ip_info_cache WHERE cache_key NOT IN
@@ -663,7 +667,11 @@ mod tests {
             service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
             "hit"
         );
-        cache.entries.get_mut(&format!("{ip}:false")).unwrap().updated = now - 61;
+        cache
+            .entries
+            .get_mut(&format!("{ip}:false"))
+            .unwrap()
+            .updated = now - 61;
         assert_eq!(
             service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
             "stale"
