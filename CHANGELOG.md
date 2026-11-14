@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.56](https://github.com/petauron/senlun/compare/v0.1.0-alpha.55...v0.1.0-alpha.56) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** align return route and IP quality badge colors ([#201](https://github.com/petauron/senlun/issues/201)) ([09b9eb7](https://github.com/petauron/senlun/commit/09b9eb7605c1b5d29bc6ae8321f1faeb80713efc))
+
 ## [0.1.0-alpha.55](https://github.com/petauron/senlun/compare/v0.1.0-alpha.54...v0.1.0-alpha.55) (2026-11-14)
 
 
