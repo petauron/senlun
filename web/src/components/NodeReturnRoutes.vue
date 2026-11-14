@@ -44,12 +44,20 @@ const rows = computed(() => carriers.map((carrier) => {
         : route?.status === 'ok'
           ? route.label.replaceAll('->', '→')
           : '未知'
-  const grade = known ? getReturnRouteGrade(label) : null
+  const grade = known
+    ? getReturnRouteGrade(label)
+    : null
   const probes = props.homeCard && grade?.label === '普通线路'
     ? props.node.probes?.filter(p => p.name.includes(carrier.name) && isIPv6Probe(p.name) === (family.value === 6))
     : undefined
-  const loss = probes?.length === 1 ? probes[0]?.hour_loss_percent : null
-  const lossTone = loss === 0 ? 'text-[#44cf86]' : loss != null && loss > 0 && loss < 2 ? 'text-[#a5d6b7]' : undefined
+  const loss = probes?.length === 1
+    ? probes[0]?.hour_loss_percent
+    : null
+  const lossTone = loss === 0
+    ? 'text-[#44cf86]'
+    : loss != null && loss > 0 && loss < 2
+      ? 'text-[#a5d6b7]'
+      : undefined
   return {
     ...carrier,
     label,
