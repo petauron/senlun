@@ -64,21 +64,21 @@ const summary = computed(() => {
     <DialogTrigger as-child>
       <button
         type="button" :aria-label="summary"
-        class="flex min-h-9 w-full flex-wrap items-stretch gap-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        class="grid w-full min-w-0 grid-cols-3 items-center gap-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         @click.stop @keydown.stop
       >
         <span
           v-for="row in rows" :key="row.id"
-          class="flex min-w-0 max-w-full flex-[1_1_auto] items-center justify-center gap-1 rounded-full border py-1 font-semibold transition-colors"
+          class="flex min-w-0 items-center justify-center gap-0.5 rounded-full border py-1 font-semibold transition-colors"
           :title="`${row.name}：${row.label}${row.grade ? ` · ${row.grade.label}` : ''}`"
           :class="[
-            compact ? 'px-1 text-[10px]' : 'px-1.5 text-[11px]',
+            compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]',
             row.grade?.tone ?? nodeBadgeTones.unknown.tone,
             row.grade?.premium && 'shadow-sm ring-1 ring-purple-400/15',
           ]"
         >
           <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full bg-current/10 text-[9px] font-bold">{{ row.short }}</span>
-          <span class="min-w-0 wrap-anywhere">{{ row.label }}</span>
+          <span class="min-w-0 truncate">{{ row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
           <span v-if="row.grade?.premium" aria-hidden="true" class="size-1.5 shrink-0 rotate-45 rounded-[1px] border border-current bg-current/15" />
         </span>
