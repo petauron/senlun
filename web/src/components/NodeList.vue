@@ -93,7 +93,7 @@ const columns: ColumnConfig[] = [
   },
   {
     key: 'rate',
-    label: '实时速率',
+    label: '速率',
     width: '128px',
     sortable: true,
   },

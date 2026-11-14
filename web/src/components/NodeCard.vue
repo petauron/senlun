@@ -228,7 +228,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
           <div class="flex flex-col gap-y-2" :class="[!props.node.online && 'blur-xs opacity-60 pointer-events-none']">
             <div class="flex items-center">
               <span class="inline-flex shrink-0 items-center gap-1">
-                实时速率
+                速率
                 <NodeBandwidthBadge :node="node" />
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />

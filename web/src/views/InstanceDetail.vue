@@ -418,7 +418,7 @@ const trafficProgressStyle = computed(() => ({
             <div class="min-w-0 flex flex-col gap-1 rounded-sm bg-slate-500/5 p-2">
               <div class="flex gap-1 items-center text-muted-foreground">
                 <Icon icon="icon-park-outline:dashboard-one" :width="14" :height="14" />
-                <span class="text-xs sm:text-sm">实时速率</span>
+                <span class="text-xs sm:text-sm">速率</span>
                 <NodeBandwidthBadge :node="data" />
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row flex-wrap items-center gap-1">
