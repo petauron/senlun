@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.52](https://github.com/petauron/senlun/compare/v0.1.0-alpha.51...v0.1.0-alpha.52) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** make IP version switch respond immediately ([#188](https://github.com/petauron/senlun/issues/188)) ([67d0364](https://github.com/petauron/senlun/commit/67d0364d3bc7f4352c5ee9272e0d08d52c3ad00d))
+
 ## [0.1.0-alpha.51](https://github.com/petauron/senlun/compare/v0.1.0-alpha.50...v0.1.0-alpha.51) (2026-11-13)
 
 
