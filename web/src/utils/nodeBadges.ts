@@ -76,18 +76,16 @@ function parseBandwidthTag(text: string) {
       : 1)
   if (!Number.isFinite(megabits) || megabits <= 0)
     return null
-  const grade = megabits >= 10000
-    ? nodeBadgeTones.legendary
-    : megabits >= 2500
-      ? nodeBadgeTones.epic
-      : megabits >= 1000
-        ? nodeBadgeTones.rare
-        : megabits >= 300
-          ? nodeBadgeTones.uncommon
-          : megabits >= 100
-            ? nodeBadgeTones.common
-            : nodeBadgeTones.poor
-  return { text: String(amount) + unit, megabits, tone: grade.tone }
+  let tone = 'text-muted-foreground'
+  if (megabits >= 2500)
+    tone = 'text-orange-700 dark:text-[#FF8000]'
+  else if (megabits >= 1000)
+    tone = 'text-purple-700 dark:text-[#BC6AFF]'
+  else if (megabits >= 300)
+    tone = 'text-blue-700 dark:text-[#409CFF]'
+  else if (megabits >= 100)
+    tone = 'text-success'
+  return { text: String(amount) + unit, megabits, tone }
 }
 
 export function getBandwidthBadge(tags: string | undefined) {
