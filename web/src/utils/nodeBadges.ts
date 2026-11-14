@@ -107,20 +107,22 @@ export function getReturnRouteGrade(label: string) {
   if (!label.trim() || /未知|未识别|unknown/i.test(label))
     return null
   // These are detected route families, not an inference from latency or speed.
-  if (/CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b/i.test(label))
+  if (/CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b/i.test(label)) {
     return {
       label: '顶级优化',
       premium: true,
       tone: qualityGreen,
       cardTone: qualityGreen,
     }
-  if (/\b(?:CN2|CN2GT|10099)\b/i.test(label))
+  }
+  if (/\b(?:CN2|CN2GT|10099)\b/i.test(label)) {
     return {
       label: '一般优化',
       premium: false,
       tone: qualityAmber,
       cardTone: 'border-[#326aa4] bg-[#102e50] text-[#58aaff]',
     }
+  }
   return {
     label: '普通线路',
     premium: false,
