@@ -93,8 +93,8 @@ const columns: ColumnConfig[] = [
   },
   {
     key: 'rate',
-    label: '速率',
-    width: '80px',
+    label: '实时速率',
+    width: '128px',
     sortable: true,
   },
   {
@@ -294,7 +294,6 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   <span class="truncate">{{ node.name }}</span>
                 </div>
                 <div class="flex items-center gap-1.5">
-                  <NodeBandwidthBadge :node="node" />
                   <NodeIpScores :node="node" />
                 </div>
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
@@ -426,7 +425,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               </div>
 
               <!-- 速率 -->
-              <div v-else-if="col.key === 'rate'">
+              <div v-else-if="col.key === 'rate'" class="flex items-center gap-1">
                 <div class="text-[10px] flex flex-col ">
                   <span class="text-emerald-600 flex flex-row gap-1 items-center">
                     <Icon icon="tabler:chevron-up" width="12" height="12" />
@@ -437,6 +436,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                     {{ formatBytesPerSecond(node.net_in ?? 0) }}
                   </span>
                 </div>
+                <NodeBandwidthBadge :node="node" />
               </div>
             </template>
           </div>

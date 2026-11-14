@@ -92,8 +92,8 @@ export function getReturnRouteGrade(label: string) {
     return null
   // These are detected route families, not an inference from latency or speed.
   if (/CN2[-\s]*GIA|CTG[-\s]*GIA|\bGIA\b|\b9929\b|\bCU2\b|\bCMIN2\b/i.test(label))
-    return { label: '顶级优化', premium: true, tone: nodeBadgeTones.epic.tone }
+    return { label: '顶级优化', premium: true, tone: nodeBadgeTones.legendary.tone }
   if (/\b(?:CN2|CN2GT|10099)\b/i.test(label))
     return { label: '一般优化', premium: false, tone: nodeBadgeTones.rare.tone }
-  return { label: '普通线路', premium: false, tone: nodeBadgeTones.common.tone }
+  return { label: '普通线路', premium: false, tone: nodeBadgeTones.uncommon.tone }
 }

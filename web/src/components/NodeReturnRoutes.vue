@@ -47,7 +47,6 @@ const rows = computed(() => carriers.map((carrier) => {
     ...carrier,
     label,
     route,
-    known,
     grade: known
       ? getReturnRouteGrade(route?.label ?? '')
       : null,
@@ -74,10 +73,10 @@ const summary = computed(() => {
           :class="[
             compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]',
             row.grade?.tone ?? nodeBadgeTones.unknown.tone,
-            row.grade?.premium && 'shadow-sm ring-1 ring-purple-400/15',
+            row.grade?.premium && 'shadow-sm ring-1 ring-orange-400/15',
           ]"
         >
-          <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full bg-current/10 text-[9px] font-bold">{{ row.short }}</span>
+          <span aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
           <span class="min-w-0 truncate">{{ row.label }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
           <span v-if="row.grade?.premium" aria-hidden="true" class="size-1.5 shrink-0 rotate-45 rounded-[1px] border border-current bg-current/15" />
@@ -92,7 +91,7 @@ const summary = computed(() => {
       <NodeNetworkControls :node="node" />
       <div class="space-y-2">
         <div v-for="row in rows" :key="row.id" class="flex items-center gap-3 rounded-xl border p-3" :class="row.grade?.tone ?? nodeBadgeTones.unknown.tone">
-          <span class="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold" :class="row.known ? row.tone : 'bg-muted text-muted-foreground'">{{ row.short }}</span>
+          <span class="flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold" :class="row.tone">{{ row.short }}</span>
           <span class="flex-1 text-sm text-muted-foreground">{{ row.name }}</span>
           <span class="min-w-0 wrap-anywhere text-right text-sm font-semibold">{{ row.label }}</span>
         </div>

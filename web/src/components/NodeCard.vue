@@ -100,7 +100,6 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 
     <template #header-extra>
       <div class="flex gap-1.5 items-center">
-        <NodeBandwidthBadge :node="node" />
         <NodeIpScores :node="node" />
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
@@ -228,8 +227,9 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
           </div>
           <div class="flex flex-col gap-y-2" :class="[!props.node.online && 'blur-xs opacity-60 pointer-events-none']">
             <div class="flex items-center">
-              <span class="truncate">
-                速率
+              <span class="inline-flex shrink-0 items-center gap-1">
+                实时速率
+                <NodeBandwidthBadge :node="node" />
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <div class="truncate flex flex-row gap-1">
