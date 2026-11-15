@@ -73,7 +73,7 @@ test('administrator can switch the Emerald header to the bundled map', async ({ 
   const original = await (await page.request.get('/api/admin/state')).json()
   try {
     await page.getByLabel('首页头部展示模式').click()
-    await page.getByRole('option', { name: '点状地图', exact: true }).click()
+    await page.getByRole('option', { name: '平面地图', exact: true }).click()
     await page.getByRole('button', { name: '保存设置' }).click()
     await expect(page.getByRole('status').filter({ hasText: '已保存' })).toBeVisible()
     const updated = await (await page.request.get('/api/admin/state')).json()

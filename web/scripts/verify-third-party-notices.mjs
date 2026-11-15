@@ -36,7 +36,6 @@ if (!echartsD3License.includes('Copyright 2010-2016 Mike Bostock'))
 
 for (const dependency of [
   '@iconify/vue',
-  'cobe',
   'dayjs',
   'echarts',
   'pinia',
