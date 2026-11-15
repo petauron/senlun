@@ -269,7 +269,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               </DataTooltip>
             </div>
             <div class="route-line">
-              <NodeReturnRoutes :node="node" home-card />
+              <NodeReturnRoutes :node="node" />
             </div>
             <NodeProbePanel :node="props.node" />
           </div>
@@ -310,66 +310,6 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 .node-card :deep(.score-prefix) {
   color: var(--muted-foreground);
   font-weight: 500;
-}
-/* 回程摘要按三个等宽的数据栏显示。 */
-.node-card :deep(button:has(> .route-summary-cell)) {
-  gap: 0;
-  grid-template-columns: repeat(3, minmax(max-content, 1fr));
-  padding: 4px 0;
-  border-radius: 0;
-  border-block: 1px solid var(--border);
-  background: transparent;
-}
-.node-card :deep(.route-summary-cell) {
-  position: relative;
-  height: 24px;
-  align-items: baseline;
-  padding-block: 4px;
-  line-height: 16px;
-  gap: 3px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  font-weight: 500;
-}
-.node-card :deep(.route-summary-cell + .route-summary-cell::before) {
-  content: '';
-  position: absolute;
-  inset-inline-start: 0;
-  top: 6px;
-  height: 12px;
-  width: 1px;
-  background: var(--border);
-}
-.node-card :deep(.route-summary-cell) {
-  --carrier-hue: #5796e6;
-  --route-ink: var(--muted-foreground);
-}
-.node-card :deep([data-carrier='unicom']) {
-  --carrier-hue: #ef7477;
-}
-.node-card :deep([data-carrier='mobile']) {
-  --carrier-hue: #91bd50;
-}
-.node-card :deep([data-grade='顶级优化']) {
-  --route-ink: oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12));
-}
-.node-card :deep([data-grade='一般优化']) {
-  --route-ink: var(--success);
-}
-.node-card :deep([data-grade='普通线路']) {
-  --route-ink: var(--muted-foreground);
-}
-.node-card :deep(.route-summary-cell > span:first-child) {
-  color: var(--carrier-hue);
-  font-size: 12px;
-  font-weight: 600;
-}
-.node-card :deep(.route-summary-cell > span:nth-child(2)) {
-  color: var(--route-ink);
-  font-size: 13px;
-  font-weight: 550;
 }
 .route-line {
   position: relative;

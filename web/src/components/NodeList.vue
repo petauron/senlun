@@ -347,7 +347,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <NodeProbePanel :node="node" compact />
               </div>
               <div v-else-if="col.key === 'routes'" class="min-w-0">
-                <NodeReturnRoutes :node="node" home-card />
+                <NodeReturnRoutes :node="node" compact />
               </div>
               <!-- 操作系统 -->
               <div v-else-if="col.key === 'os'" class="flex justify-center">
@@ -520,22 +520,5 @@ function getRowTransitionStyle(index: number): Record<string, string> {
     transform: none;
     filter: none;
   }
-}
-.sen-list :deep(.route-summary-cell) {
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-  height: 18px;
-  padding: 0;
-  gap: 2px;
-}
-.sen-list :deep(button:has(> .route-summary-cell)) {
-  border: 0;
-  box-shadow: none;
-  background: transparent;
-}
-.sen-list :deep(.route-summary-cell > span) {
-  font-size: 11px;
-  line-height: 14px;
 }
 </style>
