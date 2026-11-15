@@ -264,10 +264,7 @@ fn single_task_history_and_comparison_preserve_results_and_visibility() {
         )
         .unwrap();
     assert_eq!(
-        storage
-            .probe_comparison(&first.id, 1, now)
-            .unwrap()
-            .len(),
+        storage.probe_comparison(&first.id, 1, now).unwrap().len(),
         0
     );
 }
