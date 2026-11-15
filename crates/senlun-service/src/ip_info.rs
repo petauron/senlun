@@ -449,49 +449,54 @@ pub(crate) async fn enrich_nodes(
     headers: &HeaderMap,
     value: &mut Value,
 ) -> Result<(), ApiError> {
-    if state.auth.authorize(headers, true, true).await.is_err() {
-        return Ok(());
-    }
-    let admin = state.database(Storage::admin_state).await?;
-    if admin["settings"]["ip_info_enabled"] != true {
-        return Ok(());
-    }
-    let Some(nodes) = admin["nodes"].as_array() else {
-        return Ok(());
-    };
-    enrich(value, nodes);
+    let include_addresses = state.auth.authorize(headers, true, true).await.is_ok();
+    let nodes = state.database(|db| {
+        if !db.settings()?.ip_info_enabled {
+            return Ok(HashMap::new());
+        }
+        let connection = db.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT n.id, coalesce(json_extract(o.data,'$.ipv4'),''), coalesce(json_extract(o.data,'$.ipv6'),'')
+             FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id WHERE n.disabled_at_ms IS NULL",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, [row.get::<_, String>(1)?, row.get::<_, String>(2)?]))
+        })?;
+        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
+    }).await?;
     let cache = state.ip_info.inner.lock().await;
-    enrich_scores(value, &cache, crate::current_time()? / 1000);
+    enrich_scores(
+        value,
+        &nodes,
+        &cache,
+        crate::current_time()? / 1000,
+        include_addresses,
+    );
     Ok(())
 }
 
-fn enrich(value: &mut Value, nodes: &[Value]) {
+// Only attach cached scores to nodes already visible in this response. Public
+// clients receive the family and score metadata without the registered address.
+fn enrich_scores(
+    value: &mut Value,
+    nodes: &HashMap<String, [String; 2]>,
+    cache: &Cache,
+    now: u64,
+    include_addresses: bool,
+) {
     if let Some(id) = value["uuid"].as_str() {
-        if let Some(node) = nodes
+        let Some(addresses) = nodes.get(id) else {
+            return;
+        };
+        if include_addresses {
+            value["ipv4"] = json!(addresses[0]);
+            value["ipv6"] = json!(addresses[1]);
+        }
+        let scores: Vec<Value> = addresses
             .iter()
-            .find(|node| node["id"] == id && node["disabled"] == false)
-        {
-            value["ipv4"] = node["ipv4"].clone();
-            value["ipv6"] = node["ipv6"].clone();
-        }
-    } else if let Some(items) = value.as_object_mut() {
-        for item in items.values_mut() {
-            enrich(item, nodes);
-        }
-    } else if let Some(items) = value.as_array_mut() {
-        for item in items {
-            enrich(item, nodes);
-        }
-    }
-}
-// Dashboard reads never call the provider. Cache keys include the actual address,
-// so changing a registered IP cannot reuse another address's score.
-fn enrich_scores(value: &mut Value, cache: &Cache, now: u64) {
-    if value["uuid"].is_string() {
-        let scores: Vec<Value> = [("ipv4", 4), ("ipv6", 6)]
-            .into_iter()
-            .filter_map(|(key, family)| {
-                let ip = value[key].as_str()?.parse::<IpAddr>().ok()?;
+            .zip([4, 6])
+            .filter_map(|(address, family)| {
+                let ip = address.parse::<IpAddr>().ok()?;
                 let entry = cache.entries.get(&format!("{ip}:false"));
                 let score =
                     entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
@@ -505,11 +510,11 @@ fn enrich_scores(value: &mut Value, cache: &Cache, now: u64) {
         value["ip_scores"] = json!(scores);
     } else if let Some(items) = value.as_object_mut() {
         for item in items.values_mut() {
-            enrich_scores(item, cache, now);
+            enrich_scores(item, nodes, cache, now, include_addresses);
         }
     } else if let Some(items) = value.as_array_mut() {
         for item in items {
-            enrich_scores(item, cache, now);
+            enrich_scores(item, nodes, cache, now, include_addresses);
         }
     }
 }

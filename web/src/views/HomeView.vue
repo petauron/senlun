@@ -8,12 +8,14 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Empty } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
+import { getCountryCodeFromRegion } from '@/utils/geoHelper'
 import { isNodeInGroup, parseNodeGroups } from '@/utils/groupHelper'
-import { isRegionMatch } from '@/utils/regionHelper'
+import { getRegionDisplayName, isRegionMatch } from '@/utils/regionHelper'
 
 defineOptions({ name: 'HomeView' })
 
@@ -52,21 +54,32 @@ watch(searchText, (value) => {
   updateDebouncedSearch(value)
 })
 
-const groups = computed(() => [
-  { tab: '全部节点', name: 'all' },
-  ...nodesStore.groups.map(g => ({ tab: g, name: g })),
-])
+const groups = computed(() => {
+  const regions = new Map<string, string>()
+  for (const node of nodesStore.nodes) {
+    const code = getCountryCodeFromRegion(node.region)
+    if (code)
+      regions.set(code, getRegionDisplayName(node.region))
+  }
+  return [
+    { tab: '全部节点', name: 'all', region: '' },
+    ...Array.from(regions, ([region, tab]) => ({ tab, name: `region:${region}`, region })),
+    ...nodesStore.groups.map(group => ({ tab: group, name: group, region: '' })),
+  ]
+})
 
-watch(
-  () => nodesStore.groups,
-  (gs) => {
-    const cur = appStore.nodeSelectedGroup
-    if (cur !== 'all' && !gs.includes(cur)) {
-      appStore.nodeSelectedGroup = 'all'
-    }
-  },
-  { immediate: true },
-)
+watch(groups, (items) => {
+  if (nodesStore.nodes.length && !items.some(item => item.name === appStore.nodeSelectedGroup))
+    appStore.nodeSelectedGroup = 'all'
+}, { immediate: true })
+
+const selectedRegion = computed(() => groups.value.find(item => item.name === appStore.nodeSelectedGroup)?.region)
+
+function matchesSelection(node: typeof nodesStore.nodes[number]) {
+  return selectedRegion.value
+    ? getCountryCodeFromRegion(node.region) === selectedRegion.value
+    : isNodeInGroup(node.group, appStore.nodeSelectedGroup)
+}
 
 function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string): boolean {
   if (!search.trim())
@@ -88,11 +101,11 @@ function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string
 }
 
 const groupNodeList = computed(() => {
-  return nodesStore.nodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.nodes.filter(matchesSelection)
 })
 
 const sampledGroupNodeList = computed(() => {
-  return nodesStore.earthNodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.earthNodes.filter(matchesSelection)
 })
 
 const nodeList = computed(() => {
@@ -162,11 +175,13 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
       <div class="nodes">
         <Tabs v-model="appStore.nodeSelectedGroup" class="w-full flex-col gap-4">
           <div class="flex gap-2 items-start flex-nowrap">
-            <div class="overflow-x-auto rounded-sm md:pointer-events-auto">
+            <div class="mobile-reg">
+              <SelectControl v-model="appStore.nodeSelectedGroup" aria-label="地区筛选" :options="groups.map(g => ({ label: g.tab, value: g.name }))" />
+            </div><div class="desktop-reg overflow-x-auto rounded-sm md:pointer-events-auto">
               <TabsList :class="pickSurfaceClass('w-max h-8 bg-background/60 rounded-md', 'w-max h-8 bg-background/50 backdrop-blur-xl rounded-md')">
                 <TabsTrigger
                   v-for="g in groups" :key="g.name" :value="g.name"
-                  class="h-6.5 flex-none shrink-0 text-xs border-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-600 shadow-none rounded-sm"
+                  class="h-6.5 flex-none shrink-0 text-xs border-none data-[state=active]:text-foreground data-[state=active]:bg-background shadow-none rounded-sm"
                 >
                   {{ g.tab }}
                 </TabsTrigger>
@@ -281,6 +296,20 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
     opacity: 1;
     transform: none;
     filter: none;
+  }
+}
+.mobile-reg {
+  display: none;
+}
+.desktop-reg {
+  pointer-events: auto;
+}
+@media (max-width: 640px) {
+  .mobile-reg {
+    display: block;
+  }
+  .desktop-reg {
+    display: none;
   }
 }
 </style>

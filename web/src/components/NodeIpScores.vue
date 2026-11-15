@@ -112,7 +112,7 @@ async function refresh() {
         <dt>评分更新</dt><dd>{{ entry?.updated_at_unix_ms ? new Date(entry.updated_at_unix_ms).toLocaleString() : '尚未检测' }}</dd>
         <dt>回程更新</dt><dd>{{ routeReport?.checked_at_unix_ms ? new Date(routeReport.checked_at_unix_ms).toLocaleString() : '尚未检测' }}</dd>
       </dl>
-      <p v-if="!address" class="text-xs text-muted-foreground">
+      <p v-if="app.isLoggedIn && !address" class="text-xs text-muted-foreground">
         当前网络版本暂无可查询的地址。
       </p>
       <p v-if="message" role="status" class="text-xs text-muted-foreground">

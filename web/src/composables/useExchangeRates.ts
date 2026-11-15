@@ -30,36 +30,53 @@ export function useExchangeRates() {
   const clock = useNow({ interval: 60000 })
   const day = computed(() => dayjs(clock.value).format('YYYY-MM-DD'))
   let controller: AbortController | undefined
-  watch(() => [app.publicSettings?.theme_settings?.dailyExchangeRates, day.value] as const, async ([enabled, today]) => {
+  const loading = shallowRef(false)
+  const feedback = shallowRef('')
+  async function load(force = false) {
     controller?.abort()
-    rates.value = REFERENCE_EXCHANGE_RATES
-    date.value = ''
-    if (enabled !== true)
+    controller = undefined
+    loading.value = false
+    feedback.value = ''
+    if (app.publicSettings?.theme_settings?.dailyExchangeRates !== true) {
+      rates.value = REFERENCE_EXCHANGE_RATES
+      date.value = ''
       return
-    try {
-      const raw = localStorage.getItem(cacheKey)
-      if (raw && raw.length < 8192) {
-        const cache = JSON.parse(raw)
-        const parsed = parseRates(cache.rates)
-        if (cache.fetched === today && typeof cache.date === 'string' && parsed) {
-          rates.value = parsed
-          date.value = cache.date
-          return
+    }
+    const today = day.value
+    if (!force) {
+      try {
+        const raw = localStorage.getItem(cacheKey)
+        if (raw && raw.length < 8192) {
+          const cache = JSON.parse(raw)
+          const parsed = parseRates(cache.rates)
+          if (cache.fetched === today && typeof cache.date === 'string' && parsed) {
+            rates.value = parsed
+            date.value = cache.date
+            return
+          }
         }
       }
+      catch { /* Storage is optional; never prevent rendering. */ }
     }
-    catch { /* Storage is optional; never prevent rendering. */ }
     const request = new AbortController()
+    loading.value = true
     controller = request
     const timer = setTimeout(() => request.abort(), 5000)
     try {
-      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY', { signal: request.signal, credentials: 'omit', referrerPolicy: 'no-referrer' })
+      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY', {
+        signal: request.signal,
+        cache: force ? 'no-store' : 'default',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      })
       if (!response.ok)
-        return
+        throw new Error('Exchange rate request failed')
       const payload = await response.json()
       const parsed = parseRates(payload.rates)
       if (request.signal.aborted || !parsed || payload.base !== 'CNY' || !datePattern.test(payload.date))
-        return
+        throw new Error('Invalid exchange rate response')
+      if (force)
+        feedback.value = '已刷新'
       rates.value = parsed
       date.value = payload.date
       try {
@@ -67,9 +84,24 @@ export function useExchangeRates() {
       }
       catch { /* Private browsing may disable storage. */ }
     }
-    catch { /* Keep the explicitly labelled reference estimate on failure. */ }
-    finally { clearTimeout(timer) }
-  }, { immediate: true })
+    catch {
+      if (force && controller === request)
+        feedback.value = '刷新失败，保留当前汇率'
+    }
+    finally {
+      clearTimeout(timer)
+      if (controller === request)
+        loading.value = false
+    }
+  }
+  watch(() => [app.publicSettings?.theme_settings?.dailyExchangeRates, day.value], () => load(), { immediate: true })
   onBeforeUnmount(() => controller?.abort())
-  return { rates, date, live }
+  return {
+    rates,
+    date,
+    live,
+    loading,
+    feedback,
+    refresh: () => load(true),
+  }
 }
