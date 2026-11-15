@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.63](https://github.com/petauron/senlun/compare/v0.1.0-alpha.62...v0.1.0-alpha.63) (2026-11-15)
+
+
+### Bug Fixes
+
+* keep saved IP quality scores without display expiry ([#222](https://github.com/petauron/senlun/issues/222)) ([09634e1](https://github.com/petauron/senlun/commit/09634e1712e85a5a07c6b03a6f95627e5e2e4629)), closes [#221](https://github.com/petauron/senlun/issues/221)
+
 ## [0.1.0-alpha.62](https://github.com/petauron/senlun/compare/v0.1.0-alpha.61...v0.1.0-alpha.62) (2026-11-15)
 
 
