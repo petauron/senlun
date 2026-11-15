@@ -263,11 +263,12 @@ fn single_task_history_and_comparison_preserve_results_and_visibility() {
             [&node.node_id],
         )
         .unwrap();
-    assert!(
+    assert_eq!(
         storage
             .probe_comparison(&first.id, 1, now)
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
 }
 

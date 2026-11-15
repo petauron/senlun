@@ -796,11 +796,12 @@ fn probes_are_assigned_idempotent_bounded_and_revocable() {
     assert_eq!(comparison[0]["samples"], 2);
     assert_eq!(comparison[0]["avg_latency_ms"], 1.0);
     assert!(comparison[0].get("target").is_none());
-    assert!(
+    assert_eq!(
         storage
             .probe_comparison(&task.id, 1, now + 2 * 3_600_000)
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
     assert_eq!(
         storage
@@ -813,11 +814,12 @@ fn probes_are_assigned_idempotent_bounded_and_revocable() {
         Err(StorageError::NotFound)
     ));
     storage.revoke_node(&node.node_id, now + 1000).unwrap();
-    assert!(
+    assert_eq!(
         storage
             .probe_comparison(&task.id, 1, now + 1000)
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
     assert!(matches!(
         storage.agent_runtime_config(&node.agent_token),
@@ -972,17 +974,19 @@ fn dashboard_probe_preview_is_bounded_assigned_and_private() {
     assert!(preview[0].get("target").is_none());
     assert!(preview[0].get("node_ids").is_none());
     task.enabled = false;
-    assert!(
+    assert_eq!(
         crate::control::dashboard_probes(&db, &node.node_id, &[task.clone()], now, &config)
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
     task.enabled = true;
     task.node_ids = vec!["another-node".into()];
-    assert!(
+    assert_eq!(
         crate::control::dashboard_probes(&db, &node.node_id, &[task], now, &config)
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
 }
 
@@ -1344,10 +1348,11 @@ fn deleting_the_last_assigned_node_never_turns_a_task_into_global_monitoring() {
     storage
         .delete_monitoring_config("channels", &channel.id)
         .unwrap();
-    assert!(
+    assert_eq!(
         storage.admin_state().unwrap()["alert_rules"][0]["channel_ids"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .len(),
+        0
     );
 }
