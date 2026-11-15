@@ -3,6 +3,7 @@ import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
@@ -43,6 +44,10 @@ const { pickSurfaceClass } = useBackgroundSurface()
 const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
 const columns: ColumnConfig[] = [
+  { key: 'name', label: '节点', width: 'minmax(180px, 1.4fr)', sortable: true },
+  { key: 'quality', label: 'IP 质量', width: '162px', sortable: false },
+  { key: 'latency', label: '三网延迟', width: '240px', sortable: false },
+  { key: 'routes', label: '三网回程', width: '244px', sortable: false },
   {
     key: 'status',
     label: '状态',
@@ -56,33 +61,27 @@ const columns: ColumnConfig[] = [
     sortable: true,
   },
   {
-    key: 'name',
-    label: '节点',
-    width: 'minmax(160px, 1fr)',
-    sortable: true,
-  },
-  {
     key: 'tags',
     label: '标签',
-    width: 'minmax(180px, 1fr)',
+    width: 'minmax(84px, 1fr)',
     sortable: false,
   },
   {
     key: 'cpu',
     label: 'CPU',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
     key: 'mem',
     label: '内存',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
     key: 'disk',
     label: '硬盘',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
@@ -96,12 +95,6 @@ const columns: ColumnConfig[] = [
     label: '速率',
     width: '128px',
     sortable: true,
-  },
-  {
-    key: 'networks',
-    label: '三网',
-    width: '136px',
-    sortable: false,
   },
 ]
 
@@ -225,7 +218,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 </script>
 
 <template>
-  <div class="overflow-x-auto overflow-y-hidden min-w-0 p-1 -m-1">
+  <div class="sen-list overflow-x-auto overflow-y-hidden min-w-0 p-1 -m-1">
     <div class="min-w-fit w-full flex flex-col gap-1">
       <!-- 表头 -->
       <div
@@ -265,7 +258,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
           role="button"
           tabindex="0"
           :aria-label="`查看 ${node.name} 节点详情，当前${node.online ? '在线' : '离线'}`"
-          class="relative flex h-16 cursor-pointer flex-col justify-center rounded-lg px-2 shadow-[0_0_4px,0_0_0_1px] shadow-transparent transition-all bg-background/60 hover:bg-background hover:shadow-emerald-600/10"
+          class="relative flex h-11 cursor-pointer flex-col justify-center rounded-lg px-2  shadow-transparent transition-all bg-background/60 hover:bg-background hover:shadow-emerald-600/10"
           :class="[pickSurfaceClass('', 'backdrop-blur-sm'), !node.online && '!shadow-red-600/10']"
           :style="getRowTransitionStyle(index)"
           @click="handleClick(node)"
@@ -293,9 +286,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   >
                   <span class="truncate">{{ node.name }}</span>
                 </div>
-                <div class="flex items-center gap-1.5">
-                  <NodeIpScores :node="node" />
-                </div>
+
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
                   <DataTooltip
                     v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="shrink-0" placement="right"
@@ -323,21 +314,23 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 
               <!-- 标签 -->
               <div v-else-if="col.key === 'tags'">
+                <NodeBandwidthBadge :node="node" />
                 <div class="flex flex-wrap gap-1 items-center">
                   <NodeTagBadge v-for="(tag, tagIndex) in getNodeDisplayTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
               </div>
 
               <!-- 探测详情 -->
-              <div
-                v-else-if="col.key === 'networks'"
-                class="flex min-w-64 flex-col gap-0.5 text-[11px] text-muted-foreground"
-              >
-                <NodeNetworkControls :node="node" />
-                <NodeReturnRoutes :node="node" compact />
+              <div v-else-if="col.key === 'quality'" class="flex min-w-0 items-center whitespace-nowrap">
+                <NodeIpScores :node="node" />
+                <NodeNetworkControls :node="node" compact />
+              </div>
+              <div v-else-if="col.key === 'latency'" class="min-w-0">
                 <NodeProbePanel :node="node" compact />
               </div>
-
+              <div v-else-if="col.key === 'routes'" class="min-w-0">
+                <NodeReturnRoutes :node="node" home-card />
+              </div>
               <!-- 操作系统 -->
               <div v-else-if="col.key === 'os'" class="flex justify-center">
                 <img :src="getOSImage(node.os)" :alt="getOSName(node.os)" class="size-4">
@@ -506,4 +499,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
     filter: none;
   }
 }
+.sen-list :deep(.route-summary-cell){border:0;box-shadow:none;background:transparent;height:18px;padding:0;gap:2px}
+.sen-list :deep(button:has(>.route-summary-cell)){border:0;box-shadow:none;background:transparent}
+.sen-list :deep(.route-summary-cell > span){font-size:11px;line-height:14px}
 </style>

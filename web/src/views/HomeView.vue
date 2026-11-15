@@ -3,6 +3,7 @@ import { Icon } from '@iconify/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import SelectControl from '@/components/ui/SelectControl.vue'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -162,11 +163,11 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
       <div class="nodes">
         <Tabs v-model="appStore.nodeSelectedGroup" class="w-full flex-col gap-4">
           <div class="flex gap-2 items-start flex-nowrap">
-            <div class="overflow-x-auto rounded-sm md:pointer-events-auto">
+            <div class="mobile-reg"><SelectControl aria-label="地区筛选" v-model="appStore.nodeSelectedGroup" :options="groups.map(g=>({label:g.tab,value:g.name}))" /></div><div class="desktop-reg overflow-x-auto rounded-sm md:pointer-events-auto">
               <TabsList :class="pickSurfaceClass('w-max h-8 bg-background/60 rounded-md', 'w-max h-8 bg-background/50 backdrop-blur-xl rounded-md')">
                 <TabsTrigger
                   v-for="g in groups" :key="g.name" :value="g.name"
-                  class="h-6.5 flex-none shrink-0 text-xs border-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-600 shadow-none rounded-sm"
+                  class="h-6.5 flex-none shrink-0 text-xs border-none data-[state=active]:text-foreground data-[state=active]:bg-background shadow-none rounded-sm"
                 >
                   {{ g.tab }}
                 </TabsTrigger>
@@ -283,4 +284,5 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
     filter: none;
   }
 }
+.mobile-reg{display:none}.desktop-reg{pointer-events:auto}@media(max-width:640px){.mobile-reg{display:block}.desktop-reg{display:none}}
 </style>

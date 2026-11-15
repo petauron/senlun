@@ -1,42 +1,45 @@
 <script setup lang="ts">
+import { computed, ref, watch, nextTick, useId } from 'vue'
 import type { NodeData } from '@/stores/nodes'
-import type { CurrencyCode } from '@/utils/financeHelper'
-import { Icon } from '@iconify/vue'
-import { useNow } from '@vueuse/core'
-import { computed, defineAsyncComponent, nextTick, ref, useId, watch } from 'vue'
-import NodeEarthGlobe from '@/components/NodeEarthGlobe.vue'
-import { CardX } from '@/components/ui/card-x'
-import { DataTooltip } from '@/components/ui/data-tooltip'
-import SelectControl from '@/components/ui/SelectControl.vue'
-import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
-import { useExchangeRates } from '@/composables/useExchangeRates'
-import { useAppStore } from '@/stores/app'
-import { useNodesStore } from '@/stores/nodes'
-import { CURRENCY_SYMBOLS, FINANCE_CURRENCIES, getStoredFinanceCurrency, setStoredFinanceCurrency, summarizeNodeValue } from '@/utils/financeHelper'
-import { formatBytesPerSecondSplit, formatBytesSplit } from '@/utils/helper'
 import { summarizeNodeCapacity } from '@/utils/nodeSummary'
+import FlatMap from './NodeEarthMaps.vue'
 
-const props = defineProps<{
-  nodes?: NodeData[]
-  globeNodes?: NodeData[]
-  transitionKey?: string
-}>()
-
-const NodeEarthMaps = defineAsyncComponent(() => import('@/components/NodeEarthMaps.vue'))
-
-const appStore = useAppStore()
-const { pickSurfaceClass } = useBackgroundSurface()
-const nodesStore = useNodesStore()
-const summaryNodes = computed(() => props.nodes ?? nodesStore.nodes)
-const summaryTransitionKey = computed(() => props.transitionKey ?? 'all')
-const metricSwitchTransitionProps = computed(() => ({
-  ...(appStore.disablePageAnimation
-    ? { css: false }
-    : { name: 'metric-switch', mode: 'out-in' as const }),
-}))
-
+import { useMediaQuery } from '@vueuse/core'
+const desktop = useMediaQuery('(min-width: 641px)')
+const trafficOpen = ref(false)
+const resourcesOpen = ref(false)
+import { formatBytesSplit, formatBytesPerSecondSplit } from '@/utils/helper'
+import { useNow } from '@vueuse/core'
+import { useExchangeRates } from '@/composables/useExchangeRates'
+import type { CurrencyCode } from '@/utils/financeHelper'
+import {
+  normalizeCurrency,
+  CURRENCY_SYMBOLS,
+  FINANCE_CURRENCIES,
+  getStoredFinanceCurrency,
+  setStoredFinanceCurrency,
+  summarizeNodeValue,
+} from '@/utils/financeHelper'
+import SelectControl from '@/components/ui/SelectControl.vue'
+import { DataTooltip } from '@/components/ui/data-tooltip'
+const props = defineProps<{ nodes: NodeData[]; globeNodes: NodeData[]; transitionKey?: string }>()
+const online = computed(() => props.nodes.filter((n) => n.online))
+function sum(key: 'net_total_up' | 'net_total_down' | 'net_out' | 'net_in', rows = props.nodes) {
+  return rows.reduce((a, n) => a + (n[key] || 0), 0)
+}
+function fmt(bytes: number, speed = false) {
+  return (speed ? formatBytesPerSecondSplit : formatBytesSplit)(bytes, 1)
+}
+const stats = computed(() => {
+  const { memory, disk } = summarizeNodeCapacity(props.nodes)
+  return [
+    { label: '累计流量', bytes: sum('net_total_up') + sum('net_total_down'), total: null },
+    { label: '内存用量', bytes: memory.used, total: memory.total },
+    { label: '磁盘用量', bytes: disk.used, total: disk.total },
+  ]
+})
 const openFinanceCard = ref(false)
-const financeSelectOpen = ref(false)
+
 const financeId = useId()
 const closeFinanceButton = ref<HTMLButtonElement | null>(null)
 
@@ -55,61 +58,27 @@ function closeFinanceCard(): void {
   document.getElementById(`${financeId}-trigger`)?.focus()
 }
 
-function onFinanceFocusOut(event: FocusEvent): void {
-  if (financeSelectOpen.value)
-    return
-  if (event.currentTarget instanceof HTMLElement
-    && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
-    openFinanceCard.value = false
-  }
-}
-
-function getMetricSwitchStyle(index: number): Record<string, string> {
-  return {
-    '--metric-switch-delay': `${index * 35}ms`,
-  }
-}
-
-const totalSpeed = computed(() => {
-  const onlineNodes = summaryNodes.value.filter(node => node.online)
-  const up = onlineNodes.reduce((sum, node) => sum + (node.net_out || 0), 0)
-  const down = onlineNodes.reduce((sum, node) => sum + (node.net_in || 0), 0)
-  return { up, down }
-})
-
-const totalTraffic = computed(() => {
-  const up = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_up || 0), 0)
-  const down = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_down || 0), 0)
-  return { up, down }
-})
-
-const formattedTrafficUp = computed(() => formatBytesSplit(totalTraffic.value.up, appStore.byteDecimals))
-const formattedTrafficDown = computed(() => formatBytesSplit(totalTraffic.value.down, appStore.byteDecimals))
-const totalTrafficTooltip = computed(() => formatBytesSplit(totalTraffic.value.up + totalTraffic.value.down, appStore.byteDecimals))
-
-const formattedSpeedUp = computed(() => formatBytesPerSecondSplit(totalSpeed.value.up, appStore.byteDecimals))
-const formattedSpeedDown = computed(() => formatBytesPerSecondSplit(totalSpeed.value.down, appStore.byteDecimals))
-
-// 离线节点保留最后一次状态；当前用量只汇总在线节点，静态容量按全量统计。
-const capacitySummary = computed(() => summarizeNodeCapacity(summaryNodes.value))
-const totalMemory = computed(() => capacitySummary.value.memory)
-const totalDisk = computed(() => capacitySummary.value.disk)
-
-const formattedMemoryUsed = computed(() => formatBytesSplit(totalMemory.value.used, appStore.byteDecimals))
-const formattedMemoryTotal = computed(() => formatBytesSplit(totalMemory.value.total, appStore.byteDecimals))
-const formattedDiskUsed = computed(() => formatBytesSplit(totalDisk.value.used, appStore.byteDecimals))
-const formattedDiskTotal = computed(() => formatBytesSplit(totalDisk.value.total, appStore.byteDecimals))
-
 const financeCurrency = ref<CurrencyCode>(getStoredFinanceCurrency())
 watch(financeCurrency, setStoredFinanceCurrency)
-const { rates, date: rateDate, live: dailyRates } = useExchangeRates()
-watch(rates, (value) => {
-  if (!value[financeCurrency.value])
-    financeCurrency.value = 'CNY'
+const { rates, date: rateDate, live: dailyRates, loading, feedback, refresh } = useExchangeRates()
+const usedCurrencies = computed(() => {
+  const used = new Set(props.nodes.filter((node) => node.currency?.trim()).map((node) => normalizeCurrency(node.currency)))
+  return FINANCE_CURRENCIES.filter((code) => used.has(code) && rates.value[code])
 })
+watch(
+  usedCurrencies,
+  (codes) => {
+    if (!codes.includes(financeCurrency.value)) financeCurrency.value = codes[0] ?? 'CNY'
+  },
+  { immediate: true },
+)
 const now = useNow({ interval: 60000 })
-const finance = computed(() => summarizeNodeValue(summaryNodes.value, now.value.getTime(), rates.value))
-const formatValue = (value: number) => (value * (rates.value[financeCurrency.value] ?? 1)).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const finance = computed(() => summarizeNodeValue(props.nodes, now.value.getTime(), rates.value))
+const formatValue = (value: number) =>
+  (value * (rates.value[financeCurrency.value] ?? 1)).toLocaleString('zh-CN', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })
 const formattedRemainingValue = computed(() => ({
   value: `${CURRENCY_SYMBOLS[financeCurrency.value]}${formatValue(finance.value.remaining)}`,
   unit: financeCurrency.value,
@@ -131,351 +100,286 @@ const financeSummaryItems = computed(() => [
     symbol: CURRENCY_SYMBOLS[financeCurrency.value],
   },
 ])
-const exchangeRateRows = computed(() => FINANCE_CURRENCIES.filter(currency => rates.value[currency]).map(currency => ({
-  currency,
-  rate: ((rates.value[currency] ?? 0) / (rates.value[financeCurrency.value] ?? 1)).toFixed(6),
-  symbol: CURRENCY_SYMBOLS[currency],
-})))
-const financeDisclosure = computed(() => [
-  dailyRates.value
-    ? `Frankfurter 每日汇率（${rateDate.value}）；休市时显示最近交易日。`
-    : '当前使用主题内置参考汇率，非实时。可在站点设置启用每日汇率。',
-  '月均按 30 天折算；剩余按未到期时长折算。',
-  finance.value.excluded
-    ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。`
-    : '',
-].filter(Boolean).join(' '))
-const showEarth = computed(() => appStore.earthViewMode === 'earth' || appStore.earthViewMode === 'earth-stop')
-const showMaps = computed(() => appStore.earthViewMode === 'maps')
-const showVisualPanel = computed(() => showEarth.value || showMaps.value)
-const wrapperClass = computed(() => showVisualPanel.value
-  ? 'p-4 grid grid-cols-12 grid-rows-1 gap-2 h-auto md:h-58'
-  : 'p-4 grid grid-cols-1 gap-2 h-auto')
-const cardGridClass = computed(() => showVisualPanel.value
-  ? 'h-42 -mt-42 md:mt-0 col-span-12 row-start-3 z-9 md:h-auto md:col-span-6 md:row-start-1 grid grid-cols-12 grid-rows-2 gap-2'
-  : 'col-span-1 grid grid-cols-3 md:grid-cols-6 gap-2')
+const exchangeRateRows = computed(() =>
+  usedCurrencies.value
+    .filter((currency) => currency !== 'CNY')
+    .map((currency) => ({
+      currency,
+      rate: (1 / rates.value[currency]!).toLocaleString('zh-CN', { maximumSignificantDigits: 4, useGrouping: false }),
+      symbol: CURRENCY_SYMBOLS[currency],
+    })),
+)
+const financeDisclosure = computed(() =>
+  [
+    !exchangeRateRows.value.length
+      ? ''
+      : dailyRates.value
+        ? `Frankfurter 每日汇率（${rateDate.value}）；休市时显示最近交易日。`
+        : '当前估算使用内置参考汇率。',
+    '月均按 30 天折算；剩余按未到期时长折算。',
+    finance.value.excluded ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。` : '',
+  ]
+    .filter(Boolean)
+    .join(' '),
+)
 </script>
-
 <template>
-  <div :class="wrapperClass">
-    <NodeEarthGlobe v-if="showEarth" :nodes="globeNodes" class="col-span-12 col-start-1 md:col-span-6 md:col-start-7" />
-    <NodeEarthMaps v-else-if="showMaps" :nodes="globeNodes" class="col-span-12 col-start-1 md:col-span-6 md:col-start-7" />
-
-    <div :class="cardGridClass">
-      <CardX
-        hoverable
-        class="group h-full border-none rounded-md transition-all"
-        :class="[
-          pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs'),
-          showVisualPanel ? 'col-span-4 row-span-1 col-start-1 row-start-1' : 'col-span-1 row-start-1 col-start-1 min-h-18 md:min-h-24 md:row-start-1 md:col-start-1',
-        ]"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">内存用量</span>
-            <Icon
-              icon="tabler:cash" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <Transition v-bind="metricSwitchTransitionProps">
-            <div
-              :key="`memory-${summaryTransitionKey}`" class="flex items-baseline gap-1 min-w-0"
-              :style="getMetricSwitchStyle(0)"
-            >
-              <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-                {{ formattedMemoryUsed.value }}
-              </span>
-              <span class="text-[11px] md:text-xs font-medium text-muted-foreground truncate">
-                {{ formattedMemoryUsed.unit }} / {{ formattedMemoryTotal.value }} {{ formattedMemoryTotal.unit }}
-              </span>
-            </div>
-          </Transition>
-        </div>
-      </CardX>
-      <CardX
-        hoverable
-        class="group h-full border-none rounded-md transition-all"
-        :class="[
-          pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs'),
-          showVisualPanel ? 'col-span-4 row-span-1 col-start-1 row-start-2' : 'col-span-1 row-start-2 col-start-1 min-h-18 md:min-h-24 md:row-start-1 md:col-start-2',
-        ]"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">硬盘用量</span>
-            <Icon
-              icon="tabler:server-2" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <Transition v-bind="metricSwitchTransitionProps">
-            <div
-              :key="`disk-${summaryTransitionKey}`" class="flex items-baseline gap-1 min-w-0"
-              :style="getMetricSwitchStyle(1)"
-            >
-              <span class="text-md md:text-2xl font-bold leading-none tracking-tight">{{ formattedDiskUsed.value
-              }}</span>
-              <span class="text-[11px] md:text-xs font-medium text-muted-foreground truncate">
-                {{ formattedDiskUsed.unit }} / {{ formattedDiskTotal.value }} {{ formattedDiskTotal.unit }}
-              </span>
-            </div>
-          </Transition>
-        </div>
-      </CardX>
-      <div
-        class="relative w-full h-full"
-        :class="showVisualPanel ? 'col-span-4 row-span-1 col-start-5 row-start-1' : 'col-span-1 row-start-1 col-start-2 min-h-18 md:min-h-24 md:row-start-1 md:col-start-3'"
-        @focusout="onFinanceFocusOut"
-        @keydown.esc.stop.prevent="closeFinanceCard"
-      >
-        <CardX
-          :id="`${financeId}-trigger`"
-          role="button"
-          tabindex="0"
-          aria-label="查看剩余价值详情"
-          :aria-controls="`${financeId}-panel`"
-          :aria-expanded="openFinanceCard"
-          hoverable
-          class="group h-full border-none rounded-md transition-all cursor-pointer focus-visible:outline-2 focus-visible:outline-ring"
-          :class="pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs')"
-          content-class="h-full !p-3"
-          @click="toggleFinanceCard"
-          @keydown.enter.prevent="toggleFinanceCard"
-          @keydown.space.prevent="toggleFinanceCard"
+  <section class="overview">
+    <div class="headline">
+      <div>
+        <label>在线节点</label
+        ><strong
+          >{{ online.length }}<small> / {{ nodes.length }}</small></strong
         >
-          <div class="flex h-full flex-col justify-between gap-1">
-            <div class="flex items-start justify-between">
-              <span class="text-xs font-medium tracking-wider text-muted-foreground">剩余价值</span>
-              <Icon
-                icon="tabler:cash" :width="20" :height="20"
-                class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-              />
-            </div>
-            <Transition v-bind="metricSwitchTransitionProps">
-              <div
-                :key="`remaining-value-${summaryTransitionKey}`" class="flex items-baseline gap-1 min-w-0"
-                :style="getMetricSwitchStyle(2)"
-              >
-                <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-                  {{ formattedRemainingValue.value }}
-                </span>
-                <span class="block truncate text-[11px] md:text-xs font-medium text-muted-foreground">
-                  {{ formattedRemainingValue.unit }}
-                </span>
-              </div>
-            </Transition>
-          </div>
-        </CardX>
-        <CardX
-          :id="`${financeId}-panel`"
-          role="region"
-          aria-label="剩余价值详情"
-          :aria-hidden="!openFinanceCard"
-          :inert="!openFinanceCard"
-          hoverable
-          class="absolute top-0 left-1/2 z-20 h-42 w-[260%] max-w-88 -translate-x-[50%] -translate-y-[25%] rounded-md border-none shadow-[0_0_20px,0_0_0_1px] shadow-emerald-600/10 transition-all"
-          :class="[
-            pickSurfaceClass('bg-background', 'bg-background/50 backdrop-blur-lg'),
-            openFinanceCard ? 'opacity-100 scale-100  -translate-y-[5%]' : 'opacity-0 pointer-events-none scale-50',
-          ]"
-          content-class="h-full !p-4"
-        >
-          <button
-            ref="closeFinanceButton"
-            type="button"
-            class="absolute right-1 top-1 rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
-            aria-label="关闭价值详情"
-            @click.stop="closeFinanceCard"
-          >
-            <Icon icon="lucide:x" :width="14" :height="14" />
-          </button>
-          <div class="flex h-full min-w-0 flex-col">
-            <div class="shrink-0 grid grid-cols-3 gap-1.5">
-              <div v-for="(item, index) in financeSummaryItems" :key="item.label" class="min-w-0">
-                <div class="flex mb-1.5 items-center text-xs font-medium text-muted-foreground">
-                  {{ item.label }}
-                </div>
-                <Transition v-bind="metricSwitchTransitionProps">
-                  <div
-                    :key="`finance-${summaryTransitionKey}-${item.label}`" class="flex min-w-0 items-baseline truncate"
-                    :style="getMetricSwitchStyle(index)"
-                  >
-                    <span class="shrink-0 text-xs mr-0.5 font-semibold leading-none text-muted-foreground">
-                      {{ item.symbol }}
-                    </span>
-                    <span class=" text-sm md:text-lg font-bold leading-none tracking-tight">
-                      {{ item.value }}
-                    </span>
-                  </div>
-                </Transition>
-              </div>
-            </div>
-            <div class="flex-1 my-1.5" />
-            <div class="shrink-0 flex flex-col flex-1">
-              <div class="flex mb-1 items-center justify-between gap-2">
-                <DataTooltip
-                  as="button" type="button" placement="bottom" :content="financeDisclosure" :width="240"
-                  class="flex items-center gap-1 rounded-sm text-xs font-medium tracking-wider text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label="查看汇率来源与估算说明"
-                >
-                  {{ dailyRates ? '今日汇率' : '参考汇率估算' }}
-                  <Icon icon="lucide:info" :width="12" :height="12" aria-hidden="true" />
-                </DataTooltip>
-                <SelectControl v-model="financeCurrency" aria-label="切换汇率基准币种" :options="FINANCE_CURRENCIES.filter(code => rates[code]).map(value => ({ value, label: value }))" @update:open="financeSelectOpen = $event" />
-              </div>
-              <div class="h-15 grid grid-cols-2 gap-y-1 gap-x-4 overflow-auto">
-                <div v-for="row in exchangeRateRows" :key="row.currency" class="text-[11px] flex justify-between gap-2">
-                  <span class="text-muted-foreground">{{ row.currency }}</span>
-                  <span>{{ row.symbol }}{{ row.rate }}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </CardX>
       </div>
-      <CardX
-        hoverable
-        class="group h-full border-none rounded-md transition-all"
-        :class="[
-          pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs'),
-          showVisualPanel ? 'col-span-4 row-span-1 col-start-5 row-start-2' : 'col-span-1 row-start-2 col-start-2 min-h-18 md:min-h-24 md:row-start-1 md:col-start-4',
-        ]"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">累计流量</span>
-            <Icon
-              icon="tabler:download" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <DataTooltip
-            as="span" placement="top"
-            :content="`↑ ${formattedTrafficUp.value} ${formattedTrafficUp.unit}\n↓ ${formattedTrafficDown.value} ${formattedTrafficDown.unit}`"
-            class="min-w-0" content-class="whitespace-pre px-2 py-1 left-0 -translate-x-0 leading-normal"
-          >
-            <Transition v-bind="metricSwitchTransitionProps">
-              <div
-                :key="`traffic-${summaryTransitionKey}`" class="flex items-baseline gap-1"
-                :style="getMetricSwitchStyle(3)"
-              >
-                <span class="inline-block text-md md:text-2xl font-bold leading-none tracking-tight">
-                  {{ totalTrafficTooltip.value }}
-                </span>
-                <span class="inline-block text-[11px] md:text-xs font-medium text-muted-foreground">
-                  {{ totalTrafficTooltip.unit }}
-                </span>
-              </div>
-            </Transition>
-          </DataTooltip>
-        </div>
-      </CardX>
-
-      <CardX
-        hoverable
-        class="group h-full border-none rounded-md transition-all"
-        :class="[
-          pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs'),
-          showVisualPanel ? 'col-span-4 row-span-1 col-start-9 row-start-1' : 'col-span-1 row-start-1 col-start-3 min-h-18 md:min-h-24 md:row-start-1 md:col-start-5',
-        ]"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">实时上行</span>
-            <Icon
-              icon="tabler:chevrons-up" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <Transition v-bind="metricSwitchTransitionProps">
-            <div
-              :key="`speed-up-${summaryTransitionKey}`" class="flex items-baseline gap-1"
-              :style="getMetricSwitchStyle(4)"
-            >
-              <span class="text-md md:text-2xl font-bold leading-none tracking-tight">{{ formattedSpeedUp.value
-              }}</span>
-              <span class="text-[11px] md:text-xs font-medium text-muted-foreground">{{ formattedSpeedUp.unit }}</span>
-            </div>
-          </Transition>
-        </div>
-      </CardX>
-      <CardX
-        hoverable
-        class="group h-full border-none rounded-md transition-all"
-        :class="[
-          pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xs'),
-          showVisualPanel ? 'col-span-4 row-span-1 col-start-9 row-start-2' : 'col-span-1 row-start-2 col-start-3 min-h-18 md:min-h-24 md:row-start-1 md:col-start-6',
-        ]"
-        content-class="h-full !p-3"
-      >
-        <div class="flex h-full flex-col justify-between gap-1">
-          <div class="flex items-start justify-between">
-            <span class="text-xs font-medium tracking-wider text-muted-foreground">实时下行</span>
-            <Icon
-              icon="tabler:chevrons-down" :width="20" :height="20"
-              class="text-slate-500/20 group-hover:text-slate-500 transition-colors"
-            />
-          </div>
-          <Transition v-bind="metricSwitchTransitionProps">
-            <div
-              :key="`speed-down-${summaryTransitionKey}`" class="flex items-baseline gap-1"
-              :style="getMetricSwitchStyle(5)"
-            >
-              <span class="text-md md:text-2xl font-bold leading-none tracking-tight">
-                {{ formattedSpeedDown.value }}
-              </span>
-              <span class="text-[11px] md:text-xs font-medium text-muted-foreground">{{ formattedSpeedDown.unit
-              }}</span>
-            </div>
-          </Transition>
-        </div>
-      </CardX>
+      <div>
+        <label>总速率</label
+        ><strong
+          ><i>↑</i> {{ fmt(sum('net_out', online), true).value
+          }}<small v-if="fmt(sum('net_out', online), true).unit !== fmt(sum('net_in', online), true).unit">{{
+            fmt(sum('net_out', online), true).unit
+          }}</small>
+          <i>↓</i> {{ fmt(sum('net_in', online), true).value }}<small>{{ fmt(sum('net_in', online), true).unit }}</small></strong
+        >
+      </div>
     </div>
-  </div>
+    <button v-if="!desktop" class="disclosure" :aria-expanded="trafficOpen" @click="trafficOpen = !trafficOpen">
+      地区流量 <span>{{ trafficOpen ? '−' : '+' }}</span>
+    </button>
+    <FlatMap v-if="desktop || trafficOpen" :desktop="desktop" :nodes="globeNodes" />
+    <button v-if="!desktop" class="disclosure" :aria-expanded="resourcesOpen" @click="resourcesOpen = !resourcesOpen">
+      资源与费用 <span>{{ resourcesOpen ? '−' : '+' }}</span>
+    </button>
+    <div v-if="desktop || resourcesOpen" class="resources">
+      <div class="secondary">
+        <div v-for="{ label, bytes, total } in stats" :key="label">
+          <DataTooltip
+            v-if="label === '累计流量'"
+            as="button"
+            :content="
+              '↑ ' +
+              fmt(sum('net_total_up')).value +
+              ' ' +
+              fmt(sum('net_total_up')).unit +
+              '　↓ ' +
+              fmt(sum('net_total_down')).value +
+              ' ' +
+              fmt(sum('net_total_down')).unit
+            "
+            placement="bottom"
+            ><label>{{ label }} ›</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b></DataTooltip
+          ><template v-else
+            ><label>{{ label }}</label
+            ><b
+              >{{ fmt(bytes).value }} {{ fmt(bytes).unit }} / {{ fmt(total ?? 0).value }} {{ fmt(total ?? 0).unit }}</b
+            ></template
+          >
+        </div>
+        <button
+          :id="financeId + '-trigger'"
+          :aria-expanded="openFinanceCard"
+          :aria-controls="financeId + '-panel'"
+          @click="toggleFinanceCard"
+        >
+          <label>剩余价值 ›</label><b>{{ formattedRemainingValue.value }}</b>
+        </button>
+      </div>
+      <section
+        v-if="openFinanceCard"
+        :id="financeId + '-panel'"
+        class="finance"
+        aria-label="剩余价值详情"
+        @keydown.esc="closeFinanceCard"
+      >
+        <header>
+          <strong>价值详情</strong
+          ><button ref="closeFinanceButton" aria-label="关闭价值详情" @click="closeFinanceCard">关闭</button>
+        </header>
+        <div class="amounts">
+          <div v-for="item in financeSummaryItems" :key="item.label">
+            <label>{{ item.label }}</label
+            ><b>{{ item.symbol }}{{ item.value }}</b>
+          </div>
+        </div>
+        <div v-if="exchangeRateRows.length" class="curr">
+          <div class="rate-tools">
+            <span>{{ dailyRates ? '每日汇率 · ' + rateDate : '内置参考汇率' }}</span
+            ><button type="button" :disabled="loading" aria-label="刷新汇率" @click="refresh">
+              {{ loading ? '刷新中…' : '刷新' }}
+            </button>
+          </div>
+          <SelectControl
+            v-model="financeCurrency"
+            aria-label="切换金额显示币种"
+            :options="usedCurrencies.map((code) => ({ value: code, label: code }))"
+          />
+        </div>
+        <small aria-live="polite">{{ feedback }}</small>
+        <div v-if="exchangeRateRows.length" class="rates">
+          <span v-for="r in exchangeRateRows" :key="r.currency">1 {{ r.currency }} = {{ r.rate }} 人民币</span>
+        </div>
+        <p>{{ financeDisclosure }}</p>
+      </section>
+    </div>
+  </section>
 </template>
-
 <style scoped>
-.metric-switch-enter-active,
-.metric-switch-leave-active {
-  transition:
-    opacity 160ms ease,
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    filter 180ms ease;
+.overview {
+  margin: 4px 16px 16px;
+  padding: 18px 24px;
+  background: #19222d;
+  border: 1px solid #ffffff15;
+  border-radius: 14px;
+  color: #edf1f6;
+  font-variant-numeric: tabular-nums;
 }
-
-.metric-switch-enter-active {
-  transition-delay: var(--metric-switch-delay, 0ms);
+.headline {
+  display: flex;
+  align-items: center;
+  gap: 44px;
+  padding-bottom: 12px;
 }
-
-.metric-switch-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-  filter: blur(3px);
+.headline label,
+.secondary label {
+  display: block;
+  font-size: 12px;
+  color: #a8b4c2;
 }
-
-.metric-switch-leave-to {
-  opacity: 0;
-  transform: translateY(-4px);
-  filter: blur(2px);
+.headline strong {
+  display: block;
+  font-size: 28px;
+  line-height: 1.4;
+  letter-spacing: -0.035em;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .metric-switch-enter-active,
-  .metric-switch-leave-active {
-    transition: none;
-    transition-delay: 0ms;
+.headline i {
+  font-size: 0.65em;
+  color: #a8b4c2;
+  font-style: normal;
+}
+.headline small {
+  font-size: 13px;
+  color: #9fabba;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+.secondary {
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  border-top: 1px solid #ffffff16;
+  padding-top: 12px;
+}
+.secondary b {
+  font-size: 14px;
+}
+.disclosure {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 40px;
+  width: 100%;
+  border-top: 1px solid #ffffff18;
+  font-size: 13px;
+  font-weight: 550;
+}
+.disclosure span {
+  color: #9baebb;
+}
+.resources {
+  margin-top: 12px;
+}
+@media (max-width: 640px) {
+  .overview {
+    padding: 12px 14px 3px;
   }
-
-  .metric-switch-enter-from,
-  .metric-switch-leave-to {
-    opacity: 1;
-    transform: none;
-    filter: none;
+  .headline {
+    justify-content: space-between;
+    gap: 8px;
   }
+  .headline strong {
+    font-size: 21px;
+  }
+  .headline small {
+    font-size: 10px;
+  }
+  .resources {
+    margin: 0 0 12px;
+  }
+  .secondary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    border: none;
+    padding: 4px 0;
+  }
+}
+.secondary button {
+  text-align: left;
+  cursor: pointer;
+}
+.finance {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 10px;
+  background: #111923;
+  color: #d3dce4;
+  font-size: 12px;
+}
+.finance header,
+.curr,
+.amounts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+}
+.amounts,
+.curr {
+  margin-top: 10px;
+}
+.rates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 3px;
+}
+.finance p {
+  color: #9aa7b7;
+  margin-top: 8px;
+}
+.finance header button {
+  cursor: pointer;
+}
+.rate-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.rate-tools button {
+  border: 1px solid #465264;
+  border-radius: 5px;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+.rate-tools button:disabled {
+  opacity: 0.6;
+}
+.finance small {
+  color: #aab7c4;
+}
+.overview {
+  color: var(--card-foreground);
+  background: var(--card);
+  border-color: var(--border);
+}
+.overview :is(label, .headline i, .headline small, .finance small, .finance p, .disclosure span) {
+  color: var(--muted-foreground);
+}
+.overview :is(.secondary, .disclosure, .rate-tools button) {
+  border-color: var(--border);
+}
+.overview .finance {
+  background: var(--muted);
+  color: var(--foreground);
 }
 </style>
