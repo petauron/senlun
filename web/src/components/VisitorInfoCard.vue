@@ -51,6 +51,7 @@ const visitorRows = computed<VisitorInfoRow[]>(() => [
   },
 ])
 const visibleRows = computed(() => visitorRows.value.filter(item => expand.value || !item.expandOnly))
+const visitorLabel = computed(() => `访问者信息：${visibleRows.value.map(item => item.value).join('，')}`)
 
 function getItemTransitionStyle(index: number): Record<string, string> {
   return {
@@ -132,7 +133,7 @@ onMounted(loadOwnIP)
           : 'rounded-xl',
       ]"
       title="公网 IP 由本站返回，仅显示给当前访问者；设备信息在本机识别"
-      role="button" tabindex="0" :aria-expanded="expand" aria-label="访问者信息" @click="expand = !expand" @keydown.enter.prevent="expand = !expand" @keydown.space.prevent="expand = !expand"
+      role="button" tabindex="0" :aria-expanded="expand" :aria-label="visitorLabel" @click="expand = !expand" @keydown.enter.prevent="expand = !expand" @keydown.space.prevent="expand = !expand"
     >
       <TransitionGroup
         tag="div"

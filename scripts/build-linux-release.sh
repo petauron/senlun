@@ -8,7 +8,7 @@ set -eu
 : "${SENLUN_BUILD_GIT_HASH:?set the source revision}"
 : "${SENLUN_BUILD_TARGET:?set the native Rust target}"
 repository=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-builder_base=rust:1.98-bookworm@sha256:82150a52ec202c1b14d7817e14516c392bb7f5cfebd88f1ed531cb37ebd39922
+builder_base=rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c
 case "$SENLUN_BUILD_TARGET" in
  x86_64-unknown-linux-gnu) musl_target=x86_64-unknown-linux-musl ;;
  aarch64-unknown-linux-gnu) musl_target=aarch64-unknown-linux-musl ;;
@@ -27,7 +27,7 @@ docker run --rm \
   --user "$(id -u):$(id -g)" \
   --env SENLUN_BUILD_GIT_HASH --env SENLUN_BUILD_TARGET --env "SENLUN_MUSL_TARGET=$musl_target" \
   --env "CARGO_HOME=$cargo_home" \
-  --env CARGO_INCREMENTAL=0 --env RUSTUP_TOOLCHAIN=1.98.0 \
+  --env CARGO_INCREMENTAL=0 --env RUSTUP_TOOLCHAIN=1.99.0 \
   --mount "type=bind,src=$cargo_home,dst=$cargo_home" \
   --mount "type=bind,src=$repository,dst=$repository" --workdir "$repository" \
   "$builder" sh -c '

@@ -7,4 +7,4 @@ RUN case "$MUSL_TARGET" in x86_64-unknown-linux-musl|aarch64-unknown-linux-musl)
  && apt-get update \
  && apt-get install -y --no-install-recommends musl-tools binutils \
  && rm -rf /var/lib/apt/lists/* \
- && rustup target add --toolchain 1.98.0 "$MUSL_TARGET"
+ && rustup target add --toolchain 1.99.0 "$MUSL_TARGET"
