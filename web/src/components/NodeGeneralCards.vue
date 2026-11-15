@@ -203,7 +203,7 @@ const financeDisclosure = computed(() =>
         </div>
         <div v-if="exchangeRateRows.length" class="curr">
           <div class="rate-tools">
-            <span>{{ dailyRates ? `每日汇率 · ${rateDate}` : '内置参考汇率' }}</span><button type="button" :disabled="loading" aria-label="刷新汇率" @click="refresh">
+            <span>{{ dailyRates ? `每日汇率 · ${rateDate}` : '内置参考汇率' }}</span><button v-if="app.publicSettings?.theme_settings?.dailyExchangeRates === true" type="button" :disabled="loading" aria-label="刷新汇率" @click="refresh">
               {{ loading ? '刷新中…' : '刷新' }}
             </button>
           </div>
