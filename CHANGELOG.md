@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.64](https://github.com/petauron/senlun/compare/v0.1.0-alpha.63...v0.1.0-alpha.64) (2026-11-15)
+
+
+### Bug Fixes
+
+* **web:** keep only configured node group filters ([#227](https://github.com/petauron/senlun/issues/227)) ([959133d](https://github.com/petauron/senlun/commit/959133de3ac53f03f51e71948e44773d557c0f70)), closes [#226](https://github.com/petauron/senlun/issues/226)
+
 ## [0.1.0-alpha.63](https://github.com/petauron/senlun/compare/v0.1.0-alpha.62...v0.1.0-alpha.63) (2026-11-15)
 
 
