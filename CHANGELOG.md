@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.62](https://github.com/petauron/senlun/compare/v0.1.0-alpha.61...v0.1.0-alpha.62) (2026-11-15)
+
+
+### Features
+
+* **web:** integrate regional overview, flat map and compact carrier history ([#219](https://github.com/petauron/senlun/issues/219)) ([a5e26bb](https://github.com/petauron/senlun/commit/a5e26bbb5de3c2dd26b2d286cf7ad5e73f2d21f4)), closes [#218](https://github.com/petauron/senlun/issues/218)
+
 ## [0.1.0-alpha.61](https://github.com/petauron/senlun/compare/v0.1.0-alpha.60...v0.1.0-alpha.61) (2026-11-14)
 
 
