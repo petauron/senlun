@@ -43,30 +43,40 @@ export function useExchangeRates() {
       return
     }
     const today = day.value
-    if (!force) try {
-      const raw = localStorage.getItem(cacheKey)
-      if (raw && raw.length < 8192) {
-        const cache = JSON.parse(raw)
-        const parsed = parseRates(cache.rates)
-        if (cache.fetched === today && typeof cache.date === 'string' && parsed) {
-          rates.value = parsed
-          date.value = cache.date
-          return
+    if (!force) {
+      try {
+        const raw = localStorage.getItem(cacheKey)
+        if (raw && raw.length < 8192) {
+          const cache = JSON.parse(raw)
+          const parsed = parseRates(cache.rates)
+          if (cache.fetched === today && typeof cache.date === 'string' && parsed) {
+            rates.value = parsed
+            date.value = cache.date
+            return
+          }
         }
       }
+      catch { /* Storage is optional; never prevent rendering. */ }
     }
-    catch { /* Storage is optional; never prevent rendering. */ }
     const request = new AbortController()
     loading.value = true
     controller = request
     const timer = setTimeout(() => request.abort(), 5000)
     try {
-      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY', { signal: request.signal, cache: force ? 'no-store' : 'default', credentials: 'omit', referrerPolicy: 'no-referrer' })
-      if (!response.ok) throw Error()
+      const response = await fetch('https://api.frankfurter.dev/v1/latest?base=CNY', {
+        signal: request.signal,
+        cache: force ? 'no-store' : 'default',
+        credentials: 'omit',
+        referrerPolicy: 'no-referrer',
+      })
+      if (!response.ok)
+        throw new Error('Exchange rate request failed')
       const payload = await response.json()
       const parsed = parseRates(payload.rates)
-      if (request.signal.aborted || !parsed || payload.base !== 'CNY' || !datePattern.test(payload.date)) throw Error()
-      if (force) feedback.value = "已刷新"
+      if (request.signal.aborted || !parsed || payload.base !== 'CNY' || !datePattern.test(payload.date))
+        throw new Error('Invalid exchange rate response')
+      if (force)
+        feedback.value = '已刷新'
       rates.value = parsed
       date.value = payload.date
       try {
@@ -75,14 +85,23 @@ export function useExchangeRates() {
       catch { /* Private browsing may disable storage. */ }
     }
     catch {
-      if (force && controller === request) feedback.value = '刷新失败，保留当前汇率'
+      if (force && controller === request)
+        feedback.value = '刷新失败，保留当前汇率'
     }
     finally {
       clearTimeout(timer)
-      if (controller === request) loading.value = false
+      if (controller === request)
+        loading.value = false
     }
   }
   watch(() => [app.publicSettings?.theme_settings?.dailyExchangeRates, day.value], () => load(), { immediate: true })
   onBeforeUnmount(() => controller?.abort())
-  return { rates, date, live, loading, feedback, refresh: () => load(true) }
+  return {
+    rates,
+    date,
+    live,
+    loading,
+    feedback,
+    refresh: () => load(true),
+  }
 }

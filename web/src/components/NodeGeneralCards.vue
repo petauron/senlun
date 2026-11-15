@@ -1,29 +1,32 @@
 <script setup lang="ts">
-import { computed, ref, watch, nextTick, useId } from 'vue'
 import type { NodeData } from '@/stores/nodes'
-import { summarizeNodeCapacity } from '@/utils/nodeSummary'
-import FlatMap from './NodeEarthMaps.vue'
-
-import { useMediaQuery } from '@vueuse/core'
-const desktop = useMediaQuery('(min-width: 641px)')
-const trafficOpen = ref(false)
-const resourcesOpen = ref(false)
-import { formatBytesSplit, formatBytesPerSecondSplit } from '@/utils/helper'
-import { useNow } from '@vueuse/core'
-import { useExchangeRates } from '@/composables/useExchangeRates'
 import type { CurrencyCode } from '@/utils/financeHelper'
+import { useMediaQuery, useNow } from '@vueuse/core'
+import { computed, nextTick, ref, useId, watch } from 'vue'
+
+import { DataTooltip } from '@/components/ui/data-tooltip'
+import SelectControl from '@/components/ui/SelectControl.vue'
+import { useExchangeRates } from '@/composables/useExchangeRates'
+import { useAppStore } from '@/stores/app'
 import {
-  normalizeCurrency,
   CURRENCY_SYMBOLS,
   FINANCE_CURRENCIES,
   getStoredFinanceCurrency,
+  normalizeCurrency,
   setStoredFinanceCurrency,
   summarizeNodeValue,
 } from '@/utils/financeHelper'
-import SelectControl from '@/components/ui/SelectControl.vue'
-import { DataTooltip } from '@/components/ui/data-tooltip'
-const props = defineProps<{ nodes: NodeData[]; globeNodes: NodeData[]; transitionKey?: string }>()
-const online = computed(() => props.nodes.filter((n) => n.online))
+import { formatBytesPerSecondSplit, formatBytesSplit } from '@/utils/helper'
+import { summarizeNodeCapacity } from '@/utils/nodeSummary'
+import FlatMap from './NodeEarthMaps.vue'
+
+const props = defineProps<{ nodes: NodeData[], globeNodes: NodeData[], transitionKey?: string }>()
+const app = useAppStore()
+const showRegions = computed(() => app.earthViewMode !== 'cards')
+const desktop = useMediaQuery('(min-width: 641px)')
+const trafficOpen = ref(false)
+const resourcesOpen = ref(false)
+const online = computed(() => props.nodes.filter(n => n.online))
 function sum(key: 'net_total_up' | 'net_total_down' | 'net_out' | 'net_in', rows = props.nodes) {
   return rows.reduce((a, n) => a + (n[key] || 0), 0)
 }
@@ -62,23 +65,25 @@ const financeCurrency = ref<CurrencyCode>(getStoredFinanceCurrency())
 watch(financeCurrency, setStoredFinanceCurrency)
 const { rates, date: rateDate, live: dailyRates, loading, feedback, refresh } = useExchangeRates()
 const usedCurrencies = computed(() => {
-  const used = new Set(props.nodes.filter((node) => node.currency?.trim()).map((node) => normalizeCurrency(node.currency)))
-  return FINANCE_CURRENCIES.filter((code) => used.has(code) && rates.value[code])
+  const used = new Set(props.nodes.filter(node => node.currency?.trim()).map(node => normalizeCurrency(node.currency)))
+  return FINANCE_CURRENCIES.filter(code => used.has(code) && rates.value[code])
 })
 watch(
   usedCurrencies,
   (codes) => {
-    if (!codes.includes(financeCurrency.value)) financeCurrency.value = codes[0] ?? 'CNY'
+    if (codes.length && !codes.includes(financeCurrency.value))
+      financeCurrency.value = codes[0] ?? 'CNY'
   },
   { immediate: true },
 )
 const now = useNow({ interval: 60000 })
 const finance = computed(() => summarizeNodeValue(props.nodes, now.value.getTime(), rates.value))
-const formatValue = (value: number) =>
-  (value * (rates.value[financeCurrency.value] ?? 1)).toLocaleString('zh-CN', {
+function formatValue(value: number) {
+  return (value * (rates.value[financeCurrency.value] ?? 1)).toLocaleString('zh-CN', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2,
   })
+}
 const formattedRemainingValue = computed(() => ({
   value: `${CURRENCY_SYMBOLS[financeCurrency.value]}${formatValue(finance.value.remaining)}`,
   unit: financeCurrency.value,
@@ -102,8 +107,8 @@ const financeSummaryItems = computed(() => [
 ])
 const exchangeRateRows = computed(() =>
   usedCurrencies.value
-    .filter((currency) => currency !== 'CNY')
-    .map((currency) => ({
+    .filter(currency => currency !== 'CNY')
+    .map(currency => ({
       currency,
       rate: (1 / rates.value[currency]!).toLocaleString('zh-CN', { maximumSignificantDigits: 4, useGrouping: false }),
       symbol: CURRENCY_SYMBOLS[currency],
@@ -117,36 +122,33 @@ const financeDisclosure = computed(() =>
         ? `Frankfurter 每日汇率（${rateDate.value}）；休市时显示最近交易日。`
         : '当前估算使用内置参考汇率。',
     '月均按 30 天折算；剩余按未到期时长折算。',
-    finance.value.excluded ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。` : '',
+    finance.value.excluded
+      ? `${finance.value.excluded} 个节点因资料不完整，未计入部分估算。`
+      : '',
   ]
     .filter(Boolean)
     .join(' '),
 )
 </script>
+
 <template>
   <section class="overview">
     <div class="headline">
       <div>
-        <label>在线节点</label
-        ><strong
-          >{{ online.length }}<small> / {{ nodes.length }}</small></strong
-        >
+        <label>在线节点</label><strong>{{ online.length }}<small> / {{ nodes.length }}</small></strong>
       </div>
       <div>
-        <label>总速率</label
-        ><strong
-          ><i>↑</i> {{ fmt(sum('net_out', online), true).value
-          }}<small v-if="fmt(sum('net_out', online), true).unit !== fmt(sum('net_in', online), true).unit">{{
-            fmt(sum('net_out', online), true).unit
-          }}</small>
-          <i>↓</i> {{ fmt(sum('net_in', online), true).value }}<small>{{ fmt(sum('net_in', online), true).unit }}</small></strong
-        >
+        <label>总速率</label><strong><i>↑</i> {{ fmt(sum('net_out', online), true).value
+        }}<small v-if="fmt(sum('net_out', online), true).unit !== fmt(sum('net_in', online), true).unit">{{
+          fmt(sum('net_out', online), true).unit
+        }}</small>
+          <i>↓</i> {{ fmt(sum('net_in', online), true).value }}<small>{{ fmt(sum('net_in', online), true).unit }}</small></strong>
       </div>
     </div>
-    <button v-if="!desktop" class="disclosure" :aria-expanded="trafficOpen" @click="trafficOpen = !trafficOpen">
+    <button v-if="showRegions && !desktop" class="disclosure" :aria-expanded="trafficOpen" @click="trafficOpen = !trafficOpen">
       地区流量 <span>{{ trafficOpen ? '−' : '+' }}</span>
     </button>
-    <FlatMap v-if="desktop || trafficOpen" :desktop="desktop" :nodes="globeNodes" />
+    <FlatMap v-if="showRegions && (desktop || trafficOpen)" :desktop="desktop" :nodes="globeNodes" />
     <button v-if="!desktop" class="disclosure" :aria-expanded="resourcesOpen" @click="resourcesOpen = !resourcesOpen">
       资源与费用 <span>{{ resourcesOpen ? '−' : '+' }}</span>
     </button>
@@ -157,54 +159,51 @@ const financeDisclosure = computed(() =>
             v-if="label === '累计流量'"
             as="button"
             :content="
-              '↑ ' +
-              fmt(sum('net_total_up')).value +
-              ' ' +
-              fmt(sum('net_total_up')).unit +
-              '　↓ ' +
-              fmt(sum('net_total_down')).value +
-              ' ' +
-              fmt(sum('net_total_down')).unit
+              `↑ ${
+                fmt(sum('net_total_up')).value
+              } ${
+                fmt(sum('net_total_up')).unit
+              } ↓ ${
+                fmt(sum('net_total_down')).value
+              } ${
+                fmt(sum('net_total_down')).unit}`
             "
             placement="bottom"
-            ><label>{{ label }} ›</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b></DataTooltip
-          ><template v-else
-            ><label>{{ label }}</label
-            ><b
-              >{{ fmt(bytes).value }} {{ fmt(bytes).unit }} / {{ fmt(total ?? 0).value }} {{ fmt(total ?? 0).unit }}</b
-            ></template
           >
+            <label>{{ label }} ›</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b>
+          </DataTooltip><template v-else>
+            <label>{{ label }}</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }} / {{ fmt(total ?? 0).value }} {{ fmt(total ?? 0).unit }}</b>
+          </template>
         </div>
         <button
-          :id="financeId + '-trigger'"
+          :id="`${financeId}-trigger`" aria-label="查看剩余价值详情"
           :aria-expanded="openFinanceCard"
-          :aria-controls="financeId + '-panel'"
+          :aria-controls="`${financeId}-panel`"
           @click="toggleFinanceCard"
         >
-          <label>剩余价值 ›</label><b>{{ formattedRemainingValue.value }}</b>
+          <label>剩余价值 ›</label><b>{{ formattedRemainingValue.value }} {{ formattedRemainingValue.unit }}</b>
         </button>
       </div>
       <section
         v-if="openFinanceCard"
-        :id="financeId + '-panel'"
+        :id="`${financeId}-panel`"
         class="finance"
         aria-label="剩余价值详情"
         @keydown.esc="closeFinanceCard"
       >
         <header>
-          <strong>价值详情</strong
-          ><button ref="closeFinanceButton" aria-label="关闭价值详情" @click="closeFinanceCard">关闭</button>
+          <strong>价值详情</strong><button ref="closeFinanceButton" aria-label="关闭价值详情" @click="closeFinanceCard">
+            关闭
+          </button>
         </header>
         <div class="amounts">
           <div v-for="item in financeSummaryItems" :key="item.label">
-            <label>{{ item.label }}</label
-            ><b>{{ item.symbol }}{{ item.value }}</b>
+            <label>{{ item.label }}</label><b>{{ item.symbol }}{{ item.value }}</b>
           </div>
         </div>
         <div v-if="exchangeRateRows.length" class="curr">
           <div class="rate-tools">
-            <span>{{ dailyRates ? '每日汇率 · ' + rateDate : '内置参考汇率' }}</span
-            ><button type="button" :disabled="loading" aria-label="刷新汇率" @click="refresh">
+            <span>{{ dailyRates ? `每日汇率 · ${rateDate}` : '内置参考汇率' }}</span><button type="button" :disabled="loading" aria-label="刷新汇率" @click="refresh">
               {{ loading ? '刷新中…' : '刷新' }}
             </button>
           </div>
@@ -223,6 +222,7 @@ const financeDisclosure = computed(() =>
     </div>
   </section>
 </template>
+
 <style scoped>
 .overview {
   margin: 4px 16px 16px;

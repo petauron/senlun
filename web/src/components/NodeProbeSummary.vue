@@ -36,8 +36,8 @@ const rows = computed(() => {
   const selected = props.compact
     ? ['电信', '联通', '移动'].map(carrier => props.probes?.find(task => task.name.includes(carrier) && isIPv6Probe(task.name) === (props.ipVersion === 'ipv6')) ?? null)
     : props.nodeUuid
-    ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
-    : props.probes ?? []
+      ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
+      : props.probes ?? []
   return selected.map((task, index) => {
     if (!task) {
       return {

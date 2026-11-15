@@ -458,15 +458,30 @@ pub(crate) async fn enrich_nodes(
         return Ok(());
     };
     let cache = state.ip_info.inner.lock().await;
-    enrich_scores(value, nodes, &cache, crate::current_time()? / 1000, include_addresses);
+    enrich_scores(
+        value,
+        nodes,
+        &cache,
+        crate::current_time()? / 1000,
+        include_addresses,
+    );
     Ok(())
 }
 
 // Only attach cached scores to nodes already visible in this response. Public
 // clients receive the family and score metadata without the registered address.
-fn enrich_scores(value: &mut Value, nodes: &[Value], cache: &Cache, now: u64, include_addresses: bool) {
+fn enrich_scores(
+    value: &mut Value,
+    nodes: &[Value],
+    cache: &Cache,
+    now: u64,
+    include_addresses: bool,
+) {
     if let Some(id) = value["uuid"].as_str() {
-        let Some(node) = nodes.iter().find(|node| node["id"] == id && node["disabled"] == false) else {
+        let Some(node) = nodes
+            .iter()
+            .find(|node| node["id"] == id && node["disabled"] == false)
+        else {
             return;
         };
         if include_addresses {

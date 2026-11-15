@@ -79,7 +79,15 @@ test('administrator can switch the Emerald header to the bundled map', async ({ 
     const updated = await (await page.request.get('/api/admin/state')).json()
     expect(updated.settings.earth_view_mode).toBe('maps')
     await page.goto('/')
-    await expect(page.getByTestId('earth-map').locator('canvas')).toBeVisible()
+    if (await page.evaluate(() => innerWidth <= 640))
+      await page.getByRole('button', { name: /地区流量/ }).click()
+    if (await page.evaluate(() => innerWidth <= 640)) {
+      await expect(page.getByTestId('earth-map').getByLabel('地区上下行速率')).toBeVisible()
+      await expect(page.getByTestId('earth-map').locator('canvas')).toHaveCount(0)
+    }
+    else {
+      await expect(page.getByTestId('earth-map').locator('canvas')).toBeVisible()
+    }
   }
   finally {
     await mutation(page.request, '/api/admin/settings', original.settings)

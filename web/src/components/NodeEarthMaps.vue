@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts/types/dist/shared'
 import type { NodeData } from '@/stores/nodes'
-import { computed, watch, ref } from 'vue'
-import { useRegionTraffic } from '@/composables/useRegionTraffic'
-import { useAppStore } from '@/stores/app'
+import { computed, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 import { Empty } from '@/components/ui/empty'
 import { Spinner } from '@/components/ui/spinner'
+import { useRegionTraffic } from '@/composables/useRegionTraffic'
+import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { ensureWorldMapRegistered } from '@/utils/echartsWorldMap'
 import { getCoordByCode, getCountryCodeFromRegion } from '@/utils/geoHelper'
@@ -31,11 +31,16 @@ const displayNodes = computed(() => props.nodes ?? nodesStore.earthNodes)
 const { rateFor, formatRate } = useRegionTraffic(displayNodes)
 const selected = ref('')
 function selectRegion(code: string) {
-  if (rateFor(code).nodes.length) selected.value = selected.value === code ? '' : code
+  if (rateFor(code).nodes.length) {
+    selected.value = selected.value === code
+      ? ''
+      : code
+  }
 }
-const detail = computed(() => points.value.find((p) => p.code === selected.value))
 const detailNodes = computed(() =>
-  [...rateFor(selected.value).nodes].sort(
+  [
+    ...rateFor(selected.value).nodes,
+  ].sort(
     (a, b) => Number(b.online) - Number(a.online) || b.net_out + b.net_in - (a.net_out + a.net_in),
   ),
 )
@@ -43,11 +48,14 @@ const mapName = ref<string>()
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 
-const regionDisplayNames = typeof Intl.DisplayNames === 'function' ? new Intl.DisplayNames(['zh-Hans'], { type: 'region' }) : null
+const regionDisplayNames = typeof Intl.DisplayNames === 'function'
+  ? new Intl.DisplayNames(['zh-Hans'], { type: 'region' })
+  : null
 
 function resolveCountryDisplayName(region: string, code: string): string {
   const regionName = getRegionDisplayName(region)
-  if (regionName !== region) return regionName
+  if (regionName !== region)
+    return regionName
 
   return regionDisplayNames?.of(code) ?? code
 }
@@ -56,9 +64,11 @@ const points = computed<EarthMapPoint[]>(() => {
   const map = new Map<string, EarthMapPoint>()
   for (const node of displayNodes.value) {
     const code = getCountryCodeFromRegion(node.region)
-    if (!code) continue
+    if (!code)
+      continue
     const coord = getCoordByCode(code)
-    if (!coord) continue
+    if (!coord)
+      continue
     const current = map.get(code)
     if (!current) {
       map.set(code, {
@@ -77,30 +87,56 @@ const points = computed<EarthMapPoint[]>(() => {
   return Array.from(map.values()).sort((a, b) => b.online - a.online || b.total - a.total)
 })
 
+const detail = computed(() => points.value.find(p => p.code === selected.value))
 const totalServers = computed(() => displayNodes.value.length)
-const onlineServers = computed(() => displayNodes.value.filter((node) => node.online).length)
+const onlineServers = computed(() => displayNodes.value.filter(node => node.online).length)
 const offlineServers = computed(() => totalServers.value - onlineServers.value)
 
 const app = useAppStore()
 const shade = (light: string, dark: string) => (app.isDark ? dark : light)
 const bands = computed(() => [
-  { min: 0, label: '0', color: shade('#b4c2c6', '#586772') },
-  { min: 1, label: '<32 KB/s', color: shade('#a6d6ca', '#355e63') },
-  { min: 32 * 1024, label: '32–256 KB/s', color: shade('#69b9a5', '#338980') },
-  { min: 256 * 1024, label: '256 KB/s–1 MB/s', color: shade('#318e7b', '#51b89d') },
-  { min: 1024 * 1024, label: '≥1 MB/s', color: shade('#136554', '#99e4be') },
+  {
+    min: 0,
+    label: '0',
+    color: shade('#b4c2c6', '#586772'),
+  },
+  {
+    min: 1,
+    label: '<32 KB/s',
+    color: shade('#a6d6ca', '#355e63'),
+  },
+  {
+    min: 32 * 1024,
+    label: '32–256 KB/s',
+    color: shade('#69b9a5', '#338980'),
+  },
+  {
+    min: 256 * 1024,
+    label: '256 KB/s–1 MB/s',
+    color: shade('#318e7b', '#51b89d'),
+  },
+  {
+    min: 1024 * 1024,
+    label: '≥1 MB/s',
+    color: shade('#136554', '#99e4be'),
+  },
 ])
 const mapSeriesData = computed(() =>
   points.value.map((point) => {
     const { up, down } = rateFor(point.code)
     const value = up + down
-    const color = bands.value.filter((b) => value >= b.min).at(-1)?.color ?? bands.value[0]!.color
+    const color = bands.value.filter(b => value >= b.min).at(-1)?.color ?? bands.value[0]!.color
     return {
       name: point.code,
       value,
       coord: [point.coord[1], point.coord[0]] as [number, number],
       itemStyle: { areaColor: color, color },
-      emphasis: { itemStyle: { areaColor: color, borderColor: shade('#245d50', '#d9f1e8') } },
+      emphasis: {
+        itemStyle: {
+          areaColor: color,
+          borderColor: shade('#245d50', '#d9f1e8'),
+        },
+      },
     }
   }),
 )
@@ -148,7 +184,11 @@ const chartOption = computed<EChartsOption>(() => ({
             coord: r.coord,
             value: r.value,
             symbolSize: callout ? 7 : 5,
-            itemStyle: { color: r.itemStyle.color, borderColor: shade('#ffffff', '#e0f4ec'), borderWidth: 1 },
+            itemStyle: {
+              color: r.itemStyle.color,
+              borderColor: shade('#ffffff', '#e0f4ec'),
+              borderWidth: 1,
+            },
             label: callout
               ? {
                   show: true,
@@ -174,15 +214,20 @@ const chartOption = computed<EChartsOption>(() => ({
 watch(
   () => props.desktop,
   async (visible) => {
-    if (!visible || mapName.value) return
+    if (!visible || mapName.value)
+      return
     loading.value = true
     loadError.value = null
 
     try {
       mapName.value = await ensureWorldMapRegistered()
-    } catch (error) {
-      loadError.value = error instanceof Error ? error.message : '地图资源加载失败'
-    } finally {
+    }
+    catch (error) {
+      loadError.value = error instanceof Error
+        ? error.message
+        : '地图资源加载失败'
+    }
+    finally {
       loading.value = false
     }
   },
@@ -202,34 +247,37 @@ watch(
       <div v-if="desktop" class="geo">
         <div class="flat-chart">
           <Spinner :show="loading" class="h-full w-full" content-class="!bg-transparent">
-            <VChart v-if="mapName" :option="chartOption" @click="selectRegion($event.name)" autoresize class="h-full w-full" />
+            <VChart v-if="mapName" :option="chartOption" autoresize class="h-full w-full" @click="selectRegion($event.name)" />
             <Empty v-else-if="loadError" description="地图资源加载失败" class="h-full" />
           </Spinner>
         </div>
         <div class="legend">
-          <b>收发合计</b
-          ><span v-for="band in bands" :key="band.min"><i :style="{ background: band.color }"></i>{{ band.label }}</span>
+          <b>收发合计</b><span v-for="band in bands" :key="band.min"><i :style="{ background: band.color }" />{{ band.label }}</span>
         </div>
       </div>
       <div class="region-counts" aria-label="地区上下行速率">
-        <h3 v-if="desktop">地区流量</h3>
-        <div class="columns headings"><span>地区</span><span>在线</span><span>↑ 上行</span><span>↓ 下行</span></div>
+        <h3 v-if="desktop">
+          地区流量
+        </h3>
+        <div class="columns headings">
+          <span>地区</span><span>在线</span><span>↑ 上行</span><span>↓ 下行</span>
+        </div>
         <button
-          class="columns"
           v-for="p in points"
           :key="p.code"
+          class="columns"
           :data-code="p.code"
           :aria-expanded="selected === p.code"
           @click="selectRegion(p.code)"
         >
-          <span class="place">{{ p.name }}</span
-          ><span>{{ p.online }}/{{ p.total }}</span> <span class="up">{{ formatRate(rateFor(p.code).up) }}</span
-          ><span class="down">{{ formatRate(rateFor(p.code).down) }}</span>
+          <span class="place">{{ p.name }}</span><span>{{ p.online }}/{{ p.total }}</span> <span class="up">{{ formatRate(rateFor(p.code).up) }}</span><span class="down">{{ formatRate(rateFor(p.code).down) }}</span>
         </button>
       </div>
       <section v-if="detail" class="traffic-detail" aria-label="地区节点速率">
         <header>
-          <strong>{{ detail.name }} · 节点速率</strong><button aria-label="关闭地区详情" @click="selected = ''">收起</button>
+          <strong>{{ detail.name }} · 节点速率</strong><button aria-label="关闭地区详情" @click="selected = ''">
+            收起
+          </button>
         </header>
         <table>
           <thead>
@@ -251,6 +299,7 @@ watch(
     </div>
   </div>
 </template>
+
 <style scoped>
 .flat-surface {
   display: grid;

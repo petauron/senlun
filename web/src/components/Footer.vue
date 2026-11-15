@@ -11,7 +11,6 @@ const appStore = useAppStore()
 const route = useRoute()
 const api = getSharedApi()
 
-
 const serverVersion = ref<VersionInfo | null>(null)
 
 onMounted(async () => {
@@ -51,7 +50,6 @@ const showVisitorInfo = computed(() => appStore.visitorInfoCardEnabled
           </a>
         </DataTooltip>
       </div>
-
     </div>
 
     <div v-if="showFiling" class="flex flex-wrap gap-2 items-center justify-center sm:flex-shrink-0 pb-7">

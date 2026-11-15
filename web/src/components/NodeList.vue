@@ -3,7 +3,6 @@ import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
 import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
-import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
@@ -44,10 +43,30 @@ const { pickSurfaceClass } = useBackgroundSurface()
 const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
 const columns: ColumnConfig[] = [
-  { key: 'name', label: '节点', width: 'minmax(180px, 1.4fr)', sortable: true },
-  { key: 'quality', label: 'IP 质量', width: '162px', sortable: false },
-  { key: 'latency', label: '三网延迟', width: '240px', sortable: false },
-  { key: 'routes', label: '三网回程', width: '244px', sortable: false },
+  {
+    key: 'name',
+    label: '节点',
+    width: 'minmax(180px, 1.4fr)',
+    sortable: true,
+  },
+  {
+    key: 'quality',
+    label: 'IP 质量',
+    width: '162px',
+    sortable: false,
+  },
+  {
+    key: 'latency',
+    label: '三网延迟',
+    width: '240px',
+    sortable: false,
+  },
+  {
+    key: 'routes',
+    label: '三网回程',
+    width: '244px',
+    sortable: false,
+  },
   {
     key: 'status',
     label: '状态',
@@ -314,7 +333,6 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 
               <!-- 标签 -->
               <div v-else-if="col.key === 'tags'">
-                <NodeBandwidthBadge :node="node" />
                 <div class="flex flex-wrap gap-1 items-center">
                   <NodeTagBadge v-for="(tag, tagIndex) in getNodeDisplayTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
@@ -400,13 +418,17 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <div v-else-if="col.key === 'traffic'" class="min-w-0">
                 <DataTooltip placement="top" class="block" content-class="mb-1.5">
                   <div class="space-y-1 w-full">
-                    <div class="text-[10px] text-muted-foreground truncate">{{ trafficSourceLabel(node.selected_traffic) }}</div>
+                    <div class="text-[10px] text-muted-foreground truncate">
+                      {{ trafficSourceLabel(node.selected_traffic) }}
+                    </div>
                     <div class="text-[10px] truncate">
                       {{ node.selected_traffic?.percentage === null || node.selected_traffic?.percentage === undefined ? '--' : `${node.selected_traffic.percentage.toFixed(1)}%` }}
                     </div>
                     <ProgressThin v-if="node.selected_traffic?.percentage !== null && node.selected_traffic?.percentage !== undefined" :percentage="Math.min(node.selected_traffic.percentage, 100)" status="success" :height="4" />
                     <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
-                    <p v-if="trafficSelectionMessage(node.selected_traffic)" role="status" class="text-[10px] text-muted-foreground truncate" :title="trafficSelectionDetails(node.selected_traffic)">{{ trafficSelectionMessage(node.selected_traffic) }}</p>
+                    <p v-if="trafficSelectionMessage(node.selected_traffic)" role="status" class="text-[10px] text-muted-foreground truncate" :title="trafficSelectionDetails(node.selected_traffic)">
+                      {{ trafficSelectionMessage(node.selected_traffic) }}
+                    </p>
                   </div>
                   <template #content>
                     <div class="max-w-xs text-xs">
@@ -499,7 +521,21 @@ function getRowTransitionStyle(index: number): Record<string, string> {
     filter: none;
   }
 }
-.sen-list :deep(.route-summary-cell){border:0;box-shadow:none;background:transparent;height:18px;padding:0;gap:2px}
-.sen-list :deep(button:has(>.route-summary-cell)){border:0;box-shadow:none;background:transparent}
-.sen-list :deep(.route-summary-cell > span){font-size:11px;line-height:14px}
+.sen-list :deep(.route-summary-cell) {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  height: 18px;
+  padding: 0;
+  gap: 2px;
+}
+.sen-list :deep(button:has(> .route-summary-cell)) {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.sen-list :deep(.route-summary-cell > span) {
+  font-size: 11px;
+  line-height: 14px;
+}
 </style>
