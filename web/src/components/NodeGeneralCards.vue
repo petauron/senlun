@@ -31,7 +31,7 @@ function sum(key: 'net_total_up' | 'net_total_down' | 'net_out' | 'net_in', rows
   return rows.reduce((a, n) => a + (n[key] || 0), 0)
 }
 function fmt(bytes: number, speed = false) {
-  return (speed ? formatBytesPerSecondSplit : formatBytesSplit)(bytes, 1)
+  return (speed ? formatBytesPerSecondSplit : formatBytesSplit)(bytes, { KB: 1, MB: 1, GB: 1, TB: 1 })
 }
 const stats = computed(() => {
   const { memory, disk } = summarizeNodeCapacity(props.nodes)
