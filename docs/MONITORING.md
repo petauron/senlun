@@ -160,3 +160,103 @@ the public URL and bootstrap token. A rollback to a schema-v2 Service requires
 stopping writers and restoring its pre-migration backup, not opening the v3 database
 with the old executable. Do not publish this branch until its added local/CI
 regressions and regenerated Web/license assets have been validated.
+
+
+## Shanghai return routes and Net.Coffee scores
+
+The built-in node card, list and detail keep their existing tags and periodic
+latency probes. Shanghai TCP return routes are separate operator-collected
+snapshots, not labels inferred from a latency measurement. IPv4 and IPv6 are
+stored separately, with target, source and collection time. A report is marked
+stale after seven days. Changing the registered IP invalidates its displayed
+carrier result; it never transfers a verdict to the new address.
+
+Select **Detect** in the node's **Network quality** header to request a fresh
+Shanghai three-carrier TCP report for the selected IPv4/IPv6 address. The
+administrator mutation keeps the normal session and CSRF protection. Only this
+explicit action queues work; switching families and loading pages read existing
+results. The header shows queued/running/failure state and update time. Completed
+results replace only the matching family. The old report stays visible on a
+failure, clearly marked as a previous result. There is no file-upload workflow.
+
+The corresponding authenticated Senlun Agent actively claims this fixed task.
+No executable, script, arbitrary target or shell arguments come from the Service.
+It uses a closed schema with a unique task ID, family, registered address and
+expiry. The Service accepts results only from that node's current credential,
+for the current running task, within its lease and with the same still-registered
+address. There is one collector per Agent, at most two running Service-wide and
+eight live requests; stored state is bounded to two checks and one capability
+record per node. Requests have a ten-minute queue deadline, an eight-minute lease
+and a one-minute per-family cooldown. Agent result delivery retains just one
+bounded result until acknowledgment or lease expiry. Metric collection and the
+existing 60-second probes run independently.
+
+Collection reuses the reviewed TcpQuality route-only core at commit
+`db52fc60523320fc4a34b5c369f28be38df21d13`, SHA-256
+`351491ece557ad4c26143b33a38d8b0b50a1872c7b073839e22ee8845771f928`.
+It is GPL-3.0-only upstream code, downloaded and verified at an administrator's
+request rather than copied into Senlun binaries. Only the dedicated fixed
+wrapper is bundled. The child gets a private temporary HOME/TMPDIR and an empty
+environment, with no Agent token, Service authentication or host credentials.
+It requires existing Bash, curl, GNU timeout and standard utilities, and
+CAP_NET_RAW (already granted by Vastora's existing managed probe runtime);
+standalone installs must arrange this explicitly. It does not run as root or
+invoke sudo. Missing capability/tools is reported as unavailable.
+
+When traceroute is missing, the previously authorized temporary-tool policy
+supports Debian/Ubuntu amd64/arm64: read existing official apt metadata, download
+the matching libc-only package through HTTPS, verify its hash and architecture,
+and extract under this task's private directory. There is no package install,
+apt update or persistent tool/cache. Unexpected platforms, dependencies and
+layouts fail closed. Temporary files are removed after the fixed wrapper exits.
+The route core has a 240-second limit; the full process group is bounded to 390
+seconds plus a five-second forced stop. Before and after collection, the chosen
+family's actual public egress must match the registered address. It never runs
+throughput tests, changes host/network settings or uploads a report. Third
+parties see normal public route probes, public-address queries (ipify), the
+TcpQuality target-list retrieval and public hop-IP ASN lookups (Team Cymru).
+This is monitoring evidence from an authenticated node, not a cryptographic
+attestation. No raw trace, SSH credential or subscription belongs in an issue.
+
+Service control schema v8 adds only bounded collector/check state with a paired
+consistent pre-migration backup and forward-only transaction; existing node
+identities/options, reports, traffic and probe configuration remain untouched.
+Older Agents continue their unchanged monitoring transport; they do not gain
+one-shot collection until updated. The UI identifies an unavailable collector
+rather than pretending a request executed. The removed administrator import API
+and SSH collection utility have no alias or runtime fallback.
+
+Net.Coffee uses the existing administrator-enabled IP information setting and
+fixed provider HTTP lane. A normal page refresh reads the bounded address cache
+only; it does not query a third party. Select a node's IP badge and choose
+**Update score** to use the saved result while it is less than 24 hours old,
+or query the registered address when missing or expired. Its original
+`trust_score` is shown as 0–100, higher is better; it is not an abuse probability,
+a computed purity percentage or an availability guarantee. IPv4/IPv6 each retain
+source and timestamp. Successful normalized results are committed to the control
+SQLite database before being returned and restored on Service startup, including
+the original collection time. Control schema v9 adds this cache using the existing
+paired pre-migration backup and a forward-only transaction; metrics remain v2.
+An older Service requires its matched pre-migration database pair for rollback.
+An initial upgrade cannot recover entries held only in an older process's memory;
+its next successful query starts durable caching.
+
+The shared IP information cache retains at most 256 records, each no larger than
+16 KiB, with deterministic oldest-first eviction in memory and SQLite. Only
+normalized lookup/latency fields are saved; raw provider responses and credentials
+are excluded. A changed registered address cannot use another address's result.
+Missing values show unknown. Expired scores keep their last value with a neutral
+**待更新** marker; failed requests and missing provider scores do not replace a
+previous score or advance its timestamp. Manual refresh obeys the same TTL and
+provider quotas. Existing opt-in, address checks and administrator privacy
+restrictions remain in effect.
+
+The IPv4/IPv6 switch lives in the shared **Network quality** header above the
+route pills and latency display. It controls the score, routes and latency
+together. A missing family stays unknown. Detection updates that family's IP
+score through the existing provider lane as well; a provider failure does not
+cancel a queued route check. Technical sources/targets remain inside details.
+The shared card/list/detail badge shows the score and its quality label:
+green **纯净** for 80–100, amber **一般** for 40–79 and red **高危** for 0–39.
+Missing and stale results use neutral gray, never a fabricated zero. The colors
+do not grade route speed or guarantee the absence of abuse history.

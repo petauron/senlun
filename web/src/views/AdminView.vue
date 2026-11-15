@@ -27,7 +27,7 @@ const settings = ref<SiteSettings>({
   site_name: 'Senlun',
   private_site: true,
   agent_interval_seconds: 3,
-  earth_view_mode: 'earth',
+  earth_view_mode: 'maps',
 })
 const loading = ref(false)
 const loadError = ref('')
@@ -57,6 +57,8 @@ async function refresh(): Promise<void> {
     if (!disposed) {
       state.value = response
       settings.value = { ...response.settings }
+      if (['earth', 'earth-stop'].includes(settings.value.earth_view_mode))
+        settings.value.earth_view_mode = 'maps'
       if (app.publicSettings) {
         app.publicSettings = {
           ...app.publicSettings,
@@ -153,7 +155,7 @@ async function logout(): Promise<void> {
             <label class="grid gap-2 text-sm">站点名称<Input v-model="settings.site_name" required maxlength="128" /></label>
             <label class="grid gap-2 text-sm">Agent 上报间隔（秒）<Input v-model="settings.agent_interval_seconds" type="number" min="1" max="300" step="1" required /></label>
             <label class="grid gap-2 text-sm">首页头部展示模式
-              <SelectControl aria-label="首页头部展示模式" v-model="settings.earth_view_mode" :disabled="busy" :options="[{ value: 'earth', label: '旋转地球' }, { value: 'earth-stop', label: '静止地球' }, { value: 'maps', label: '点状地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
+              <SelectControl aria-label="首页头部展示模式" v-model="settings.earth_view_mode" :disabled="busy" :options="[{ value: 'maps', label: '平面地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
             </label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.private_site" type="checkbox" class="size-4 accent-primary">私有站点：登录后才能查看监控数据</label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.ip_info_enabled" type="checkbox" class="size-4 accent-primary" aria-describedby="ip-info-privacy">启用 IP 信息查询（仅管理员）</label>

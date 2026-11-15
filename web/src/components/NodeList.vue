@@ -2,18 +2,22 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed, ref } from 'vue'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
+import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
-import { formatDateTime, getStatus } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
+import { getNodeDisplayTags } from '@/utils/nodeBadges'
 import { formatOfflineTime, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { parseTags } from '@/utils/tagHelper'
 
 interface ColumnConfig {
   key: string
@@ -40,6 +44,30 @@ const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
 
 const columns: ColumnConfig[] = [
   {
+    key: 'name',
+    label: '节点',
+    width: 'minmax(180px, 1.4fr)',
+    sortable: true,
+  },
+  {
+    key: 'quality',
+    label: 'IP 质量',
+    width: '162px',
+    sortable: false,
+  },
+  {
+    key: 'latency',
+    label: '三网延迟',
+    width: '240px',
+    sortable: false,
+  },
+  {
+    key: 'routes',
+    label: '三网回程',
+    width: '244px',
+    sortable: false,
+  },
+  {
     key: 'status',
     label: '状态',
     width: '40px',
@@ -52,33 +80,27 @@ const columns: ColumnConfig[] = [
     sortable: true,
   },
   {
-    key: 'name',
-    label: '节点',
-    width: 'minmax(160px, 1fr)',
-    sortable: true,
-  },
-  {
     key: 'tags',
     label: '标签',
-    width: 'minmax(180px, 1fr)',
+    width: 'minmax(84px, 1fr)',
     sortable: false,
   },
   {
     key: 'cpu',
     label: 'CPU',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
     key: 'mem',
     label: '内存',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
     key: 'disk',
     label: '硬盘',
-    width: '100px',
+    width: '62px',
     sortable: true,
   },
   {
@@ -90,14 +112,8 @@ const columns: ColumnConfig[] = [
   {
     key: 'rate',
     label: '速率',
-    width: '80px',
+    width: '128px',
     sortable: true,
-  },
-  {
-    key: 'networks',
-    label: '三网',
-    width: '136px',
-    sortable: false,
   },
 ]
 
@@ -221,7 +237,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 </script>
 
 <template>
-  <div class="overflow-x-auto overflow-y-hidden min-w-0 p-1 -m-1">
+  <div class="sen-list overflow-x-auto overflow-y-hidden min-w-0 p-1 -m-1">
     <div class="min-w-fit w-full flex flex-col gap-1">
       <!-- 表头 -->
       <div
@@ -261,7 +277,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
           role="button"
           tabindex="0"
           :aria-label="`查看 ${node.name} 节点详情，当前${node.online ? '在线' : '离线'}`"
-          class="relative flex h-16 cursor-pointer flex-col justify-center rounded-lg px-2 shadow-[0_0_4px,0_0_0_1px] shadow-transparent transition-all bg-background/60 hover:bg-background hover:shadow-emerald-600/10"
+          class="relative flex h-11 cursor-pointer flex-col justify-center rounded-lg px-2  shadow-transparent transition-all bg-background/60 hover:bg-background hover:shadow-emerald-600/10"
           :class="[pickSurfaceClass('', 'backdrop-blur-sm'), !node.online && '!shadow-red-600/10']"
           :style="getRowTransitionStyle(index)"
           @click="handleClick(node)"
@@ -289,6 +305,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                   >
                   <span class="truncate">{{ node.name }}</span>
                 </div>
+
                 <div class="flex flex-row text-[11px] text-muted-foreground/70">
                   <DataTooltip
                     v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="shrink-0" placement="right"
@@ -317,18 +334,21 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <!-- 标签 -->
               <div v-else-if="col.key === 'tags'">
                 <div class="flex flex-wrap gap-1 items-center">
-                  <NodeTagBadge v-for="(tag, tagIndex) in parseTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
+                  <NodeTagBadge v-for="(tag, tagIndex) in getNodeDisplayTags(node.tags)" :key="tagIndex" :text="tag.text" :color="tag.color" />
                 </div>
               </div>
 
               <!-- 探测详情 -->
-              <div
-                v-else-if="col.key === 'networks'"
-                class="flex flex-col gap-0.5 text-[11px] text-muted-foreground"
-              >
+              <div v-else-if="col.key === 'quality'" class="flex min-w-0 items-center whitespace-nowrap">
+                <NodeIpScores :node="node" />
+                <NodeNetworkControls :node="node" compact />
+              </div>
+              <div v-else-if="col.key === 'latency'" class="min-w-0">
                 <NodeProbePanel :node="node" compact />
               </div>
-
+              <div v-else-if="col.key === 'routes'" class="min-w-0">
+                <NodeReturnRoutes :node="node" compact />
+              </div>
               <!-- 操作系统 -->
               <div v-else-if="col.key === 'os'" class="flex justify-center">
                 <img :src="getOSImage(node.os)" :alt="getOSName(node.os)" class="size-4">
@@ -398,17 +418,21 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <div v-else-if="col.key === 'traffic'" class="min-w-0">
                 <DataTooltip placement="top" class="block" content-class="mb-1.5">
                   <div class="space-y-1 w-full">
-                    <div class="text-[10px] text-muted-foreground truncate">{{ trafficSourceLabel(node.selected_traffic) }}</div>
+                    <div class="text-[10px] text-muted-foreground truncate">
+                      {{ trafficSourceLabel(node.selected_traffic) }}
+                    </div>
                     <div class="text-[10px] truncate">
                       {{ node.selected_traffic?.percentage === null || node.selected_traffic?.percentage === undefined ? '--' : `${node.selected_traffic.percentage.toFixed(1)}%` }}
                     </div>
                     <ProgressThin v-if="node.selected_traffic?.percentage !== null && node.selected_traffic?.percentage !== undefined" :percentage="Math.min(node.selected_traffic.percentage, 100)" status="success" :height="4" />
                     <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
-                    <p v-if="trafficSelectionMessage(node.selected_traffic)" role="status" class="text-[10px] text-muted-foreground truncate" :title="trafficSelectionDetails(node.selected_traffic)">{{ trafficSelectionMessage(node.selected_traffic) }}</p>
+                    <p v-if="trafficSelectionMessage(node.selected_traffic)" role="status" class="text-[10px] text-muted-foreground truncate" :title="trafficSelectionDetails(node.selected_traffic)">
+                      {{ trafficSelectionMessage(node.selected_traffic) }}
+                    </p>
                   </div>
                   <template #content>
                     <div class="max-w-xs text-xs">
-                      <p>{{ node.selected_traffic?.used_bytes === null || node.selected_traffic?.used_bytes === undefined ? '暂无用量' : formatBytes(node.selected_traffic.used_bytes) }} / {{ node.selected_traffic?.status === 'unlimited' ? '∞' : node.selected_traffic?.limit_bytes ? formatBytes(node.selected_traffic.limit_bytes) : '额度未知' }}</p>
+                      <p>{{ node.selected_traffic?.used_bytes === null || node.selected_traffic?.used_bytes === undefined ? '暂无用量' : formatBytes(node.selected_traffic.used_bytes) }} / {{ node.selected_traffic?.status === 'unlimited' ? '∞' : node.selected_traffic?.limit_bytes ? formatTrafficQuota(node.selected_traffic.limit_bytes) : '额度未知' }}</p>
                       <p>{{ trafficSelectionDetails(node.selected_traffic) }}</p>
                     </div>
                   </template>
@@ -416,7 +440,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               </div>
 
               <!-- 速率 -->
-              <div v-else-if="col.key === 'rate'">
+              <div v-else-if="col.key === 'rate'" class="flex items-center gap-1">
                 <div class="text-[10px] flex flex-col ">
                   <span class="text-emerald-600 flex flex-row gap-1 items-center">
                     <Icon icon="tabler:chevron-up" width="12" height="12" />
@@ -427,6 +451,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                     {{ formatBytesPerSecond(node.net_in ?? 0) }}
                   </span>
                 </div>
+                <NodeBandwidthBadge :node="node" />
               </div>
             </template>
           </div>

@@ -8,6 +8,10 @@ export type TrafficLimitType = 'up' | 'down' | 'min' | 'max' | 'sum'
 
 /** 节点完整信息（合并 Client 和 Status） */
 export interface NodeData {
+  return_route_checks?: Client['return_route_checks']
+  return_route_capability?: Client['return_route_capability']
+  return_routes?: Client['return_routes']
+  ip_scores?: Client['ip_scores']
   probes?: NodeProbe[]
   uuid: string
   // Client 信息
@@ -144,6 +148,10 @@ const useNodesStore = defineStore('nodes', () => {
       os: client.os,
       kernel_version: client.kernel_version,
       gpu_name: client.gpu_name,
+      return_route_checks: client.return_route_checks,
+      return_route_capability: client.return_route_capability,
+      return_routes: client.return_routes,
+      ip_scores: client.ip_scores,
       ipv4: client.ipv4,
       ipv6: client.ipv6,
       region: client.region,

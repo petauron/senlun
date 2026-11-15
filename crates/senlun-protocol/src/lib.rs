@@ -12,6 +12,56 @@ pub const MAX_PROBE_TASKS: usize = 16;
 pub const MAX_PROBE_CONCURRENCY: usize = 4;
 pub const MAX_GPU_DEVICES: usize = 16;
 
+/// Fixed one-shot Shanghai TCP route monitoring; never an executable or command.
+pub const RETURN_ROUTE_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnRouteClaim {
+    pub schema_version: u16,
+    pub agent_version: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnRouteTask {
+    pub id: String,
+    pub family: u8,
+    pub address: String,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnRouteReport {
+    pub family: u8,
+    pub address: String,
+    pub region: String,
+    pub protocol: String,
+    pub source: String,
+    pub revision: String,
+    pub checked_at_unix_ms: u64,
+    pub carriers: Vec<CarrierRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CarrierRoute {
+    pub carrier: String,
+    pub target: String,
+    pub status: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnRouteOutcome {
+    pub id: String,
+    pub report: Option<ReturnRouteReport>,
+    pub error: Option<String>,
+}
+
 /// Administrator-selected monitoring configuration, fetched by the Agent.
 /// This is deliberately a closed set of probes, never a command channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

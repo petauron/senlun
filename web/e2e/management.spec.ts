@@ -73,13 +73,21 @@ test('administrator can switch the Emerald header to the bundled map', async ({ 
   const original = await (await page.request.get('/api/admin/state')).json()
   try {
     await page.getByLabel('首页头部展示模式').click()
-    await page.getByRole('option', { name: '点状地图', exact: true }).click()
+    await page.getByRole('option', { name: '平面地图', exact: true }).click()
     await page.getByRole('button', { name: '保存设置' }).click()
     await expect(page.getByRole('status').filter({ hasText: '已保存' })).toBeVisible()
     const updated = await (await page.request.get('/api/admin/state')).json()
     expect(updated.settings.earth_view_mode).toBe('maps')
     await page.goto('/')
-    await expect(page.getByTestId('earth-map').locator('canvas')).toBeVisible()
+    if (await page.evaluate(() => innerWidth <= 640))
+      await page.getByRole('button', { name: /地区流量/ }).click()
+    if (await page.evaluate(() => innerWidth <= 640)) {
+      await expect(page.getByTestId('earth-map').getByLabel('地区上下行速率')).toBeVisible()
+      await expect(page.getByTestId('earth-map').locator('canvas')).toHaveCount(0)
+    }
+    else {
+      await expect(page.getByTestId('earth-map').locator('canvas')).toBeVisible()
+    }
   }
   finally {
     await mutation(page.request, '/api/admin/settings', original.settings)
@@ -134,8 +142,12 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: '列表视图' }).click()
     const listProbe = page.getByRole('button', { name: 'e2e-node 延迟 / 失败率详情' })
-    await expect(listProbe.locator('[data-probe-metric="latency"] > *')).toHaveCount(10)
-    await expect(listProbe.locator('[data-probe-metric="loss"] > *')).toHaveCount(10)
+    for (const metric of ['latency', 'loss']) {
+      const carriers = listProbe.locator(`[data-probe-metric="${metric}"]`)
+      await expect(carriers).toHaveCount(3)
+      for (const carrier of await carriers.all())
+        await expect(carrier.locator(':scope > *')).toHaveCount(10)
+    }
     await listProbe.click()
     await expect(page.getByRole('dialog', { name: 'e2e-node 延迟 / 失败率' })).toBeVisible()
     await page.keyboard.press('Escape')

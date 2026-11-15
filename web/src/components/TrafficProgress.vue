@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { formatBytes } from '@/utils/helper'
+import { formatBytes, formatTrafficQuota } from '@/utils/helper'
 import { calculateTrafficUsed } from '@/utils/nodeHelpers'
 
 export interface TrafficProgressProps {
@@ -76,7 +76,7 @@ const progressHeight = computed(() => {
     <div v-if="showIndicator && showProgress" class="traffic-progress__indicator">
       <span>{{ totalPercentage.toFixed(1) }}%</span>
       <span class="traffic-progress__indicator-detail">
-        {{ formatBytes(usedTraffic) }} / {{ formatBytes(trafficLimit) }}
+        {{ formatBytes(usedTraffic) }} / {{ formatTrafficQuota(trafficLimit) }}
       </span>
     </div>
   </div>
