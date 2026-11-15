@@ -54,6 +54,19 @@ export function formatBytes(bytes: number, decimals = 1): string {
   return `${(bytes / k ** i).toFixed(decimals)} ${unit}`
 }
 
+/** 流量额度使用 1024 进制的简短单位；不改变已用量等通用字节格式。 */
+export function formatTrafficQuota(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0)
+    return '0B'
+
+  const index = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1))
+  const value = Number((bytes / 1024 ** index).toFixed(2))
+  const unit = index === 0
+    ? 'B'
+    : (BYTE_UNITS[index] ?? 'PB').replace('B', '')
+  return `${value}${unit}`
+}
+
 /**
  * 格式化字节数为可读单位（支持自定义精度配置）
  * @param bytes 字节数

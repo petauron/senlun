@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import { DataTooltip } from '@/components/ui/data-tooltip'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/helper'
-import { getProbeToneColor, selectHomeProbes } from '@/utils/nodeHelpers'
+import { getProbeToneColor, isIPv6Probe, selectHomeProbes } from '@/utils/nodeHelpers'
 import { failureRateLabel } from '@/utils/probeLabels'
 
 const props = defineProps<{ probes?: NodeProbe[], compact?: boolean, nodeUuid?: string, interactive?: boolean, nodeName?: string, ipVersion?: 'ipv4' | 'ipv6' }>()
@@ -33,9 +33,11 @@ const emptyPoints: NodeProbe['points'] = Array.from({ length: 10 }, (_, bucket) 
   successful_samples: 0,
 }))
 const rows = computed(() => {
-  const selected = props.nodeUuid
-    ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
-    : props.probes ?? []
+  const selected = props.compact
+    ? ['电信', '联通', '移动'].map(carrier => props.probes?.find(task => task.name.includes(carrier) && isIPv6Probe(task.name) === (props.ipVersion === 'ipv6')) ?? null)
+    : props.nodeUuid
+      ? selectHomeProbes(props.probes ?? [], props.nodeUuid, app.publicSettings?.theme_settings, props.ipVersion)
+      : props.probes ?? []
   return selected.map((task, index) => {
     if (!task) {
       return {
@@ -109,7 +111,7 @@ function onMetricKeydown(event: KeyboardEvent) {
 <template>
   <div v-if="!compact" class="flex flex-col gap-y-2 text-[11px]" :aria-label="`最近 ${historyLabel}的平均延迟与探测结果，每格约 ${historyHours * 6} 分钟`">
     <div v-for="row in rows" :key="row.id" class="grid h-8 grid-cols-[minmax(64px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2">
-      <DataTooltip placement="top" :content="row.name" class="min-w-0" content-class="min-w-24">
+      <DataTooltip :stop-click-propagation="false" placement="top" :content="row.name" class="min-w-0" content-class="min-w-24">
         <span class="block truncate font-medium text-foreground/75">{{ row.name }}</span>
         <span v-if="row.stale" class="sr-only">暂无数据</span>
       </DataTooltip>
@@ -142,8 +144,9 @@ function onMetricKeydown(event: KeyboardEvent) {
     <span v-if="!rows.length" class="text-muted-foreground">未配置探测</span>
   </div>
   <!-- On touch, the list cell opens details on the first tap instead of opening a bar tooltip. -->
-  <div v-else class="group flex h-8 w-full flex-col justify-center gap-px pr-4" aria-label="首个探测任务的延迟与探测结果概览，点击查看详情" @pointerdown.capture.stop>
-    <div v-for="row in rows.slice(0, 1)" :key="row.id" class="flex flex-col gap-px">
+  <div v-else class="grid h-8 w-full grid-cols-3 items-center gap-1.5" aria-label="电信、联通、移动的延迟与探测结果概览，点击查看详情" @pointerdown.capture.stop>
+    <div v-for="(row, index) in rows" :key="index" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-px">
+      <span class="row-span-2 text-[11px] text-muted-foreground">{{ ['电', '联', '移'][index] }}</span>
       <div v-for="metric in metrics" :key="metric" class="group/panel relative opacity-80 hover:opacity-100" :title="panelTooltip(row, metric)">
         <div :data-probe-metric="metric" class="grid h-1 grid-cols-10 items-end gap-px transition-all hover:h-2.5 motion-reduce:transition-none">
           <DataTooltip

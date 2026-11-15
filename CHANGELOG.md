@@ -4,6 +4,146 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.65](https://github.com/petauron/senlun/compare/v0.1.0-alpha.64...v0.1.0-alpha.65) (2026-11-15)
+
+
+### Bug Fixes
+
+* **web:** preserve node detail clicks outside card controls ([#225](https://github.com/petauron/senlun/issues/225)) ([6743e4f](https://github.com/petauron/senlun/commit/6743e4f21f28e21d94485ac257569af9368a20f1))
+* **web:** share current return route labels with node details ([#231](https://github.com/petauron/senlun/issues/231)) ([4b654ad](https://github.com/petauron/senlun/commit/4b654adee17387fe2f7c08f5d61939615ba1c86b)), closes [#229](https://github.com/petauron/senlun/issues/229)
+
+## [0.1.0-alpha.64](https://github.com/petauron/senlun/compare/v0.1.0-alpha.63...v0.1.0-alpha.64) (2026-11-15)
+
+
+### Bug Fixes
+
+* **web:** keep only configured node group filters ([#227](https://github.com/petauron/senlun/issues/227)) ([959133d](https://github.com/petauron/senlun/commit/959133de3ac53f03f51e71948e44773d557c0f70)), closes [#226](https://github.com/petauron/senlun/issues/226)
+
+## [0.1.0-alpha.63](https://github.com/petauron/senlun/compare/v0.1.0-alpha.62...v0.1.0-alpha.63) (2026-11-15)
+
+
+### Bug Fixes
+
+* keep saved IP quality scores without display expiry ([#222](https://github.com/petauron/senlun/issues/222)) ([09634e1](https://github.com/petauron/senlun/commit/09634e1712e85a5a07c6b03a6f95627e5e2e4629)), closes [#221](https://github.com/petauron/senlun/issues/221)
+
+## [0.1.0-alpha.62](https://github.com/petauron/senlun/compare/v0.1.0-alpha.61...v0.1.0-alpha.62) (2026-11-15)
+
+
+### Features
+
+* **web:** integrate regional overview, flat map and compact carrier history ([#219](https://github.com/petauron/senlun/issues/219)) ([a5e26bb](https://github.com/petauron/senlun/commit/a5e26bbb5de3c2dd26b2d286cf7ad5e73f2d21f4)), closes [#218](https://github.com/petauron/senlun/issues/218)
+
+## [0.1.0-alpha.61](https://github.com/petauron/senlun/compare/v0.1.0-alpha.60...v0.1.0-alpha.61) (2026-11-14)
+
+
+### Features
+
+* unify node card network quality and inline controls ([#216](https://github.com/petauron/senlun/issues/216)) ([db02d50](https://github.com/petauron/senlun/commit/db02d50f14047c36cde79ec96c9e70a2166d36aa))
+
+## [0.1.0-alpha.60](https://github.com/petauron/senlun/compare/v0.1.0-alpha.59...v0.1.0-alpha.60) (2026-11-14)
+
+
+### Features
+
+* **web:** color ordinary home routes by hourly probe loss ([#213](https://github.com/petauron/senlun/issues/213)) ([2a88ea7](https://github.com/petauron/senlun/commit/2a88ea733b84c4efbe57273983b6bd4712aca5b8))
+
+## [0.1.0-alpha.59](https://github.com/petauron/senlun/compare/v0.1.0-alpha.58...v0.1.0-alpha.59) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** compact home card return routes into a single line ([#210](https://github.com/petauron/senlun/issues/210)) ([fa6b7d6](https://github.com/petauron/senlun/commit/fa6b7d678f4064ab37dbe85cfe51406a8c9983ab))
+
+## [0.1.0-alpha.58](https://github.com/petauron/senlun/compare/v0.1.0-alpha.57...v0.1.0-alpha.58) (2026-11-14)
+
+
+### Features
+
+* **web:** refine return routes on home node cards ([#207](https://github.com/petauron/senlun/issues/207)) ([dfe8827](https://github.com/petauron/senlun/commit/dfe8827eff2d3fa5dc38c6d197231b3062410c81))
+
+## [0.1.0-alpha.57](https://github.com/petauron/senlun/compare/v0.1.0-alpha.56...v0.1.0-alpha.57) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** simplify rate labels and premium route badges ([#204](https://github.com/petauron/senlun/issues/204)) ([a81a82b](https://github.com/petauron/senlun/commit/a81a82b309392e1f24f553f5f22f59af490d7c7f))
+
+## [0.1.0-alpha.56](https://github.com/petauron/senlun/compare/v0.1.0-alpha.55...v0.1.0-alpha.56) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** align return route and IP quality badge colors ([#201](https://github.com/petauron/senlun/issues/201)) ([09b9eb7](https://github.com/petauron/senlun/commit/09b9eb7605c1b5d29bc6ae8321f1faeb80713efc))
+
+## [0.1.0-alpha.55](https://github.com/petauron/senlun/compare/v0.1.0-alpha.54...v0.1.0-alpha.55) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** restore carrier colors and move bandwidth next to rate ([#198](https://github.com/petauron/senlun/issues/198)) ([ca53a82](https://github.com/petauron/senlun/commit/ca53a8234e7762aecf6626b08f949bb0d4d53ba8))
+
+## [0.1.0-alpha.54](https://github.com/petauron/senlun/compare/v0.1.0-alpha.53...v0.1.0-alpha.54) (2026-11-14)
+
+
+### Bug Fixes
+
+* persist IP quality cache across service restarts ([#193](https://github.com/petauron/senlun/issues/193)) ([b739b07](https://github.com/petauron/senlun/commit/b739b074f1bb1ea0fab4da759d0c7fd480652adf))
+* **web:** keep three carrier routes on one row ([#195](https://github.com/petauron/senlun/issues/195)) ([d84bde3](https://github.com/petauron/senlun/commit/d84bde36afbe002a000d0919bcf6c91225d3ce53))
+
+## [0.1.0-alpha.53](https://github.com/petauron/senlun/compare/v0.1.0-alpha.52...v0.1.0-alpha.53) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** clarify node quality and bandwidth badges ([#190](https://github.com/petauron/senlun/issues/190)) ([31c376b](https://github.com/petauron/senlun/commit/31c376bd3e26eae0275142795654457988348c2d))
+
+## [0.1.0-alpha.52](https://github.com/petauron/senlun/compare/v0.1.0-alpha.51...v0.1.0-alpha.52) (2026-11-14)
+
+
+### Bug Fixes
+
+* **web:** make IP version switch respond immediately ([#188](https://github.com/petauron/senlun/issues/188)) ([67d0364](https://github.com/petauron/senlun/commit/67d0364d3bc7f4352c5ee9272e0d08d52c3ad00d))
+
+## [0.1.0-alpha.51](https://github.com/petauron/senlun/compare/v0.1.0-alpha.50...v0.1.0-alpha.51) (2026-11-13)
+
+
+### Features
+
+* run bounded Shanghai route checks from the node panel ([#186](https://github.com/petauron/senlun/issues/186)) ([3e55d99](https://github.com/petauron/senlun/commit/3e55d991627988a6818e732c9ee0f8173b412748))
+
+## [0.1.0-alpha.50](https://github.com/petauron/senlun/compare/v0.1.0-alpha.49...v0.1.0-alpha.50) (2026-11-13)
+
+
+### Bug Fixes
+
+* polish node quality badges and synchronize IP family selection ([870cda0](https://github.com/petauron/senlun/commit/870cda02dfbc1a0616462f34731141170edc125c))
+
+## [0.1.0-alpha.49](https://github.com/petauron/senlun/compare/v0.1.0-alpha.48...v0.1.0-alpha.49) (2026-11-13)
+
+
+### Bug Fixes
+
+* enrich the active dashboard with route and score controls ([e901dd9](https://github.com/petauron/senlun/commit/e901dd9df265ef041bf6fa55b1227ee8a13b25d5))
+
+## [0.1.0-alpha.48](https://github.com/petauron/senlun/compare/v0.1.0-alpha.47...v0.1.0-alpha.48) (2026-11-13)
+
+
+### Features
+
+* display Shanghai TCP return routes and Net.Coffee scores ([#179](https://github.com/petauron/senlun/issues/179)) ([e6e6722](https://github.com/petauron/senlun/commit/e6e6722533c2c30bdf6839334d8c15cd7c1c6b21))
+
+
+### Bug Fixes
+
+* run Shanghai collector with a supported terminal environment ([4311552](https://github.com/petauron/senlun/commit/4311552947aaf307d605e2be29a09dfc3719094d))
+
+## [0.1.0-alpha.47](https://github.com/petauron/senlun/compare/v0.1.0-alpha.46...v0.1.0-alpha.47) (2026-11-13)
+
+
+### Bug Fixes
+
+* compact traffic quota labels ([#176](https://github.com/petauron/senlun/issues/176)) ([e92c29f](https://github.com/petauron/senlun/commit/e92c29f316359db19f1032c880088bd64546d7c1)), closes [#175](https://github.com/petauron/senlun/issues/175)
+
 ## [0.1.0-alpha.46](https://github.com/petauron/senlun/compare/v0.1.0-alpha.45...v0.1.0-alpha.46) (2026-11-11)
 
 

@@ -1,6 +1,7 @@
 mod extended_metrics;
 mod probes;
 mod region;
+mod return_routes;
 mod system_command;
 
 use std::{
@@ -270,6 +271,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         credentials.agent_token.clone(),
         config.interval,
     )?;
+    let _routes = return_routes::RouteRunner::start(
+        client.clone(),
+        config.service_url.clone(),
+        credentials.agent_token.clone(),
+    );
     tracing::info!(node_id = %credentials.node_id, "Senlun Agent started");
 
     let mut collector = Collector::new().await;

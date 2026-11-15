@@ -2,7 +2,11 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
+import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeProbePanel from '@/components/NodeProbePanel.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
 import { CardX } from '@/components/ui/card-x'
 import { DataTooltip } from '@/components/ui/data-tooltip'
@@ -10,11 +14,11 @@ import { ProgressThin } from '@/components/ui/progress-thin'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useAppStore } from '@/stores/app'
-import { formatDateTime, getStatus } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota, getStatus } from '@/utils/helper'
+import { getNodeDisplayTags } from '@/utils/nodeBadges'
 import { getDiskPercentage, getMemPercentage, getPriceTags, getRemainingTimeTagClass, hasRegion, trafficSelectionDetails, trafficSelectionMessage, trafficSourceLabel } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { parseTags } from '@/utils/tagHelper'
 
 const props = defineProps<{ node: NodeData }>()
 
@@ -65,7 +69,7 @@ const externalTrafficPercentage = computed(() => {
     ? Math.min((snapshot.used_bytes / snapshot.limit_bytes) * 100, 100)
     : 0
 })
-const customTags = computed(() => parseTags(props.node.tags))
+const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 </script>
 
 <template>
@@ -95,7 +99,8 @@ const customTags = computed(() => parseTags(props.node.tags))
     </template>
 
     <template #header-extra>
-      <div class="flex gap-2 items-center">
+      <div class="flex gap-1.5 items-center">
+        <NodeIpScores :node="node" />
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
           v-if="hasRegion(props.node.region)" :src="getFlagSrc(props.node.region)"
@@ -131,7 +136,7 @@ const customTags = computed(() => parseTags(props.node.tags))
               <span>{{ memPercentage.toFixed(1) }}%</span>
             </div>
             <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" />
-            <DataTooltip placement="top" class="block" :content-class="[!props.node.swap && '!hidden']">
+            <DataTooltip :stop-click-propagation="false" placement="top" class="block" :content-class="[!props.node.swap && '!hidden']">
               <div class="text-[11px] text-muted-foreground truncate">
                 {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
               </div>
@@ -167,12 +172,12 @@ const customTags = computed(() => parseTags(props.node.tags))
             <ProgressThin v-if="selectedTraffic?.percentage !== null && selectedTraffic?.percentage !== undefined" :percentage="Math.min(selectedTraffic.percentage, 100)" status="success" :height="4" />
             <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
             <DataTooltip
-              placement="top" class="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabindex="0" role="group"
+              :stop-click-propagation="false" placement="top" class="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabindex="0" role="group"
               :aria-label="`${trafficSourceLabel(selectedTraffic)}，${trafficMode}，上传 ${selectedTraffic?.up_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.up_bytes)}，下载 ${selectedTraffic?.down_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.down_bytes)}`"
             >
               <div class="text-[11px] text-muted-foreground truncate">
                 {{ selectedTraffic?.used_bytes === null || selectedTraffic?.used_bytes === undefined ? '暂无用量' : formatBytes(selectedTraffic.used_bytes) }} /
-                {{ selectedTraffic?.status === 'unlimited' ? '∞' : selectedTraffic?.limit_bytes ? formatBytes(selectedTraffic.limit_bytes) : '额度未知' }}
+                {{ selectedTraffic?.status === 'unlimited' ? '∞' : selectedTraffic?.limit_bytes ? formatTrafficQuota(selectedTraffic.limit_bytes) : '额度未知' }}
               </div>
               <template #content>
                 <div class="flex items-center justify-between gap-3 whitespace-nowrap">
@@ -202,7 +207,7 @@ const customTags = computed(() => parseTags(props.node.tags))
           <template v-if="externalTraffic.snapshot">
             <div class="mt-1 flex items-center justify-between gap-2">
               <span class="text-muted-foreground">计费已用</span>
-              <span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }} / {{ externalTraffic.snapshot.limit_bytes === null ? '未提供额度' : formatBytes(externalTraffic.snapshot.limit_bytes) }}</span>
+              <span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }} / {{ externalTraffic.snapshot.limit_bytes === null ? '未提供额度' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span>
             </div>
             <ProgressThin
               v-if="externalTraffic.snapshot.limit_bytes"
@@ -210,7 +215,9 @@ const customTags = computed(() => parseTags(props.node.tags))
               :status="externalTrafficStale ? 'warning' : 'success'" :height="4"
             />
           </template>
-          <p v-else class="mt-1 text-muted-foreground">暂无服务商流量快照</p>
+          <p v-else class="mt-1 text-muted-foreground">
+            暂无服务商流量快照
+          </p>
         </div>
         <div class="relative text-[11px] text-muted-foreground">
           <div
@@ -221,9 +228,10 @@ const customTags = computed(() => parseTags(props.node.tags))
             <div>{{ offlineTime }}</div>
           </div>
           <div class="flex flex-col gap-y-2" :class="[!props.node.online && 'blur-xs opacity-60 pointer-events-none']">
-            <div class="flex items-center">
-              <span class="truncate">
+            <div class="metric-row flex items-center">
+              <span class="inline-flex shrink-0 items-center gap-1">
                 速率
+                <NodeBandwidthBadge :node="node" />
               </span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <div class="truncate flex flex-row gap-1">
@@ -237,19 +245,20 @@ const customTags = computed(() => parseTags(props.node.tags))
                 </div>
               </div>
             </div>
-            <div v-if="priceTags.length" class="flex items-center justify-between">
+            <div class="metric-row online-row flex items-center justify-between">
               <span class="truncate">
                 在线
               </span>
+              <NodeNetworkControls :node="node" compact />
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <span class="truncate">
                 {{ props.node.uptime > 0 ? formatUptime(props.node.uptime) : '' }}
               </span>
             </div>
-            <div class="flex items-center justify-between">
+            <div class="metric-row flex items-center justify-between">
               <span class="truncate">费用</span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-              <DataTooltip placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
+              <DataTooltip :stop-click-propagation="false" placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
                 <span class="flex flex-row gap-1 truncate">
                   <template v-for="(tag, index) in priceTags" :key="index">
                     <span v-if="index > 0">·</span>
@@ -258,6 +267,9 @@ const customTags = computed(() => parseTags(props.node.tags))
                   </template>
                 </span>
               </DataTooltip>
+            </div>
+            <div class="route-line">
+              <NodeReturnRoutes :node="node" />
             </div>
             <NodeProbePanel :node="props.node" />
           </div>
@@ -274,5 +286,58 @@ const customTags = computed(() => parseTags(props.node.tags))
 .node-card {
   position: relative;
   overflow: hidden;
+}
+
+.node-card :deep(.ip-quality-trigger) {
+  background: transparent;
+  border: 0;
+  padding-inline: 2px;
+  gap: 4px;
+  box-shadow: none;
+}
+.node-card :deep(.ip-quality-trigger) {
+  color: var(--muted-foreground);
+}
+.node-card :deep(.ip-quality-trigger:is([data-rating='纯净'], [data-rating='极度纯净'])) {
+  color: var(--success);
+}
+.node-card :deep(.ip-quality-trigger:is([data-rating='良好'], [data-rating='中性'])) {
+  color: var(--warning);
+}
+.node-card :deep(.ip-quality-trigger[data-rating='可疑']) {
+  color: var(--destructive);
+}
+.node-card :deep(.score-prefix) {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+.route-line {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.route-line > :deep(button) {
+  flex: 1;
+  min-width: 0;
+}
+.metric-row {
+  height: 20px;
+  line-height: 16px;
+}
+.metric-row :deep([aria-label^='标称带宽']) {
+  min-height: 0;
+  height: 15px;
+  line-height: 15px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 4px;
+  box-shadow: none;
+  background: var(--muted);
+  font-size: 10px;
+  font-weight: 550;
+  font-variant-numeric: tabular-nums;
+}
+.online-row {
+  position: relative;
 }
 </style>

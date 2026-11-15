@@ -177,6 +177,8 @@ pub(crate) struct NodeOptions {
     pub weight: i32,
     pub hidden: bool,
     pub tags: String,
+    #[serde(default)]
+    pub return_routes: Vec<crate::return_routes::RouteReport>,
     pub public_remark: String,
     pub ipv4: String,
     pub ipv6: String,
@@ -286,10 +288,10 @@ fn text(value: &str, max: usize) -> bool {
     value.len() <= max && !value.chars().any(char::is_control)
 }
 
-fn integer(value: u64) -> i64 {
+pub(crate) fn integer(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
-fn unsigned(value: i64) -> u64 {
+pub(crate) fn unsigned(value: i64) -> u64 {
     u64::try_from(value).unwrap_or(0)
 }
 
@@ -494,6 +496,11 @@ impl Storage {
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
         let previous = options_or_none(&tx, id)?;
+        // Route reports are read-only metadata here; only an authenticated,
+        // matching one-shot result may replace them. Preserve them on unrelated editor saves.
+        options.return_routes = previous
+            .as_ref()
+            .map_or_else(Vec::new, |old| old.return_routes.clone());
         let old_source = previous
             .as_ref()
             .map_or(TrafficSource::Local, |old| old.traffic_source);
@@ -945,7 +952,7 @@ impl Storage {
     }
 }
 
-fn authenticated_node(db: &Connection, token: &str) -> Result<String, StorageError> {
+pub(crate) fn authenticated_node(db: &Connection, token: &str) -> Result<String, StorageError> {
     db.query_row(
         "SELECT id FROM nodes WHERE token_hash=?1 AND disabled_at_ms IS NULL",
         [hash_token(token)],
@@ -1313,6 +1320,7 @@ pub(crate) fn dashboard_probes(
     config: &DashboardProbeConfig,
 ) -> Result<Vec<Value>, StorageError> {
     use crate::storage::rollups::{ProbeTotals, probe_summaries};
+    let hour_start = now.saturating_sub(3_600_000);
     let range_ms = u64::from(config.hours) * 3_600_000;
     let start = now.saturating_sub(range_ms);
     let width = range_ms.div_ceil(10).max(1);
@@ -1331,6 +1339,7 @@ pub(crate) fn dashboard_probes(
     let mut result = Vec::new();
     for task in selected {
         let mut total = ProbeTotals::default();
+        let mut hour = ProbeTotals::default();
         let mut buckets: [ProbeTotals; 10] = std::array::from_fn(|_| ProbeTotals::default());
         probe_summaries(
             db,
@@ -1340,6 +1349,9 @@ pub(crate) fn dashboard_probes(
             now,
             |p, _| {
                 total.add(&p);
+                if p.last_received > hour_start {
+                    hour.add(&p);
+                }
                 let index = p.last_received.saturating_sub(start).saturating_sub(1) / width;
                 if let Some(bucket) = usize::try_from(index).ok().and_then(|i| buckets.get_mut(i)) {
                     bucket.add(&p);
@@ -1352,6 +1364,7 @@ pub(crate) fn dashboard_probes(
             "loss":v.loss().unwrap_or(0.0),"samples":v.samples,"successful_samples":v.successful,"bucket":i
         })).collect();
         result.push(json!({"id":task.id,"name":task.name,"kind":task.kind,"interval_seconds":task.interval_seconds,
+            "hour_loss_percent":if hour.samples >= 2 { hour.loss() } else { None },
             "samples":total.samples,"avg_latency_ms":total.average(),"loss_percent":total.loss(),"points":points}));
     }
     Ok(result)
@@ -1392,6 +1405,8 @@ pub(crate) fn decorate_client(
         crate::storage::unix_time_ms()?,
     )?);
     if let Some(o) = options {
+        crate::return_routes::decorate(&o, value, crate::storage::unix_time_ms()?);
+        crate::return_routes::decorate_checks(db, node, value, crate::storage::unix_time_ms()?)?;
         value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);
         if !o.region.is_empty() {

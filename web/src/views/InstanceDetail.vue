@@ -3,6 +3,10 @@ import { Icon } from '@iconify/vue'
 import { useNow } from '@vueuse/core'
 import { computed, defineAsyncComponent, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
+import NodeIpScores from '@/components/NodeIpScores.vue'
+import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
+import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -12,7 +16,7 @@ import { useExchangeRates } from '@/composables/useExchangeRates'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useNodesStore } from '@/stores/nodes'
 import { CURRENCY_SYMBOLS, getStoredFinanceCurrency, normalizeCurrency } from '@/utils/financeHelper'
-import { formatDateTime } from '@/utils/helper'
+import { formatDateTime, formatTrafficQuota } from '@/utils/helper'
 import { getTrafficUsed } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
@@ -232,7 +236,7 @@ const trafficUsageText = computed(() => {
   if (!hasTrafficLimit.value)
     return '无限流量'
 
-  return `${formatBytes(trafficUsed.value)} / ${formatBytes(data.value?.traffic_limit ?? 0)}`
+  return `${formatBytes(trafficUsed.value)} / ${formatTrafficQuota(data.value?.traffic_limit ?? 0)}`
 })
 
 const externalTraffic = computed(() => data.value?.external_traffic)
@@ -265,7 +269,7 @@ const trafficProgressStyle = computed(() => ({
     </div>
 
     <template v-else>
-      <div class="px-4 flex gap-4 items-center">
+      <div class="px-4 flex flex-wrap gap-3 items-center">
         <Button
           variant="ghost" size="icon-sm" aria-label="返回节点列表"
           class="bg-background/50 hover:bg-background" @click="router.push('/')"
@@ -282,6 +286,11 @@ const trafficProgressStyle = computed(() => ({
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
         </Badge>
+        <NodeIpScores :node="data" />
+      </div>
+      <div class="max-w-md px-4">
+        <NodeNetworkControls :node="data" />
+        <NodeReturnRoutes :node="data" />
       </div>
 
       <div class="px-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -409,7 +418,8 @@ const trafficProgressStyle = computed(() => ({
             <div class="min-w-0 flex flex-col gap-1 rounded-sm bg-slate-500/5 p-2">
               <div class="flex gap-1 items-center text-muted-foreground">
                 <Icon icon="icon-park-outline:dashboard-one" :width="14" :height="14" />
-                <span class="text-xs sm:text-sm">网络速率</span>
+                <span class="text-xs sm:text-sm">速率</span>
+                <NodeBandwidthBadge :node="data" />
               </div>
               <span class="text-xs sm:text-sm break-all flex flex-row flex-wrap items-center gap-1">
                 <Icon icon="tabler:chevron-up" width="12" height="12" />
@@ -432,7 +442,7 @@ const trafficProgressStyle = computed(() => ({
           </p>
           <div v-if="externalTraffic.snapshot" class="grid grid-cols-2 gap-3 text-sm">
             <div class="rounded-sm bg-slate-500/5 p-2">计费已用<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }}</span></div>
-            <div class="rounded-sm bg-slate-500/5 p-2">额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatBytes(externalTraffic.snapshot.limit_bytes) }}</span></div>
+            <div class="rounded-sm bg-slate-500/5 p-2">额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span></div>
             <div class="rounded-sm bg-slate-500/5 p-2">上行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.up_bytes) }}</span></div>
             <div class="rounded-sm bg-slate-500/5 p-2">下行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.down_bytes) }}</span></div>
           </div>

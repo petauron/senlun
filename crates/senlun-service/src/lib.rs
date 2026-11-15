@@ -40,6 +40,7 @@ mod komari;
 mod luminaplus;
 mod management;
 mod notifications;
+mod return_routes;
 mod session_gate;
 mod storage;
 mod themes;
@@ -141,6 +142,7 @@ impl AppState {
         let themes = Arc::new(
             themes::ThemeStore::open(&config.database_path).map_err(std::io::Error::other)?,
         );
+        let ip_info = Arc::new(ip_info::IpInfo::new(storage.ip_info_cache()?)?);
         Ok(Self {
             storage: Arc::new(storage),
             database_permit: Arc::new(Semaphore::new(1)),
@@ -153,7 +155,7 @@ impl AppState {
             auth,
             session_gate,
             themes,
-            ip_info: Arc::new(ip_info::IpInfo::new()?),
+            ip_info,
             traffic_key,
             trusted_proxy_ip: config.trusted_proxy_ip,
         })
@@ -445,6 +447,7 @@ pub fn router(state: AppState) -> Router {
         .merge(management::routes())
         .merge(external_traffic::routes())
         .merge(ip_info::routes())
+        .merge(return_routes::routes())
         .route("/api/rpc2", post(rpc_handler))
         .route(
             "/admin/ping",
@@ -720,7 +723,7 @@ async fn rpc_handler(
         Ok(mut value)
             if matches!(
                 request.method.as_str(),
-                "common:getNodes" | "public:getNodesInformation"
+                "common:getNodes" | "public:getNodesInformation" | "common:getDashboard"
             ) =>
         {
             match ip_info::enrich_nodes(&state, &headers, &mut value).await {

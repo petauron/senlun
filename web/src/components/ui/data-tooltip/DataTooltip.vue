@@ -20,11 +20,14 @@ interface Props {
   class?: HTMLAttributes['class']
   /** 气泡的附加类 */
   contentClass?: HTMLAttributes['class']
+  /** Let informational tooltips inside navigable cards preserve card clicks. */
+  stopClickPropagation?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
   placement: 'top',
   as: 'div',
+  stopClickPropagation: true,
 })
 const slots = useSlots()
 
@@ -102,7 +105,7 @@ function handlePointerDown(event: PointerEvent) {
 }
 
 function handleClick(event: MouseEvent) {
-  if (shouldStopNextClick && Date.now() - lastTouchOpenAt < 800)
+  if (props.stopClickPropagation && shouldStopNextClick && Date.now() - lastTouchOpenAt < 800)
     event.stopPropagation()
 
   shouldStopNextClick = false
