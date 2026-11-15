@@ -13,8 +13,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
+import { getCountryCodeFromRegion } from '@/utils/geoHelper'
 import { isNodeInGroup, parseNodeGroups } from '@/utils/groupHelper'
-import { isRegionMatch } from '@/utils/regionHelper'
+import { getRegionDisplayName, isRegionMatch } from '@/utils/regionHelper'
 
 defineOptions({ name: 'HomeView' })
 
@@ -53,21 +54,32 @@ watch(searchText, (value) => {
   updateDebouncedSearch(value)
 })
 
-const groups = computed(() => [
-  { tab: '全部节点', name: 'all' },
-  ...nodesStore.groups.map(g => ({ tab: g, name: g })),
-])
+const groups = computed(() => {
+  const regions = new Map<string, string>()
+  for (const node of nodesStore.nodes) {
+    const code = getCountryCodeFromRegion(node.region)
+    if (code)
+      regions.set(code, getRegionDisplayName(node.region))
+  }
+  return [
+    { tab: '全部节点', name: 'all', region: '' },
+    ...Array.from(regions, ([region, tab]) => ({ tab, name: `region:${region}`, region })),
+    ...nodesStore.groups.map(group => ({ tab: group, name: group, region: '' })),
+  ]
+})
 
-watch(
-  () => nodesStore.groups,
-  (gs) => {
-    const cur = appStore.nodeSelectedGroup
-    if (cur !== 'all' && !gs.includes(cur)) {
-      appStore.nodeSelectedGroup = 'all'
-    }
-  },
-  { immediate: true },
-)
+watch(groups, (items) => {
+  if (nodesStore.nodes.length && !items.some(item => item.name === appStore.nodeSelectedGroup))
+    appStore.nodeSelectedGroup = 'all'
+}, { immediate: true })
+
+const selectedRegion = computed(() => groups.value.find(item => item.name === appStore.nodeSelectedGroup)?.region)
+
+function matchesSelection(node: typeof nodesStore.nodes[number]) {
+  return selectedRegion.value
+    ? getCountryCodeFromRegion(node.region) === selectedRegion.value
+    : isNodeInGroup(node.group, appStore.nodeSelectedGroup)
+}
 
 function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string): boolean {
   if (!search.trim())
@@ -89,11 +101,11 @@ function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string
 }
 
 const groupNodeList = computed(() => {
-  return nodesStore.nodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.nodes.filter(matchesSelection)
 })
 
 const sampledGroupNodeList = computed(() => {
-  return nodesStore.earthNodes.filter(node => isNodeInGroup(node.group, appStore.nodeSelectedGroup))
+  return nodesStore.earthNodes.filter(matchesSelection)
 })
 
 const nodeList = computed(() => {
