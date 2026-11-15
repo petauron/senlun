@@ -4,6 +4,17 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.66](https://github.com/petauron/senlun/compare/v0.1.0-alpha.65...v0.1.0-alpha.66) (2026-11-15)
+
+
+### Bug Fixes
+
+* **deps-dev:** bump @playwright/test from 1.63.0 to 1.65.0 in /web ([437681f](https://github.com/petauron/senlun/commit/437681fcdba7c3aead3ab2266ce1ed461f48d4f4))
+* **deps-dev:** bump @vitejs/plugin-vue to 6.0.11 ([#172](https://github.com/petauron/senlun/issues/172)) ([13c0d7f](https://github.com/petauron/senlun/commit/13c0d7f268ed67092e2527f7a957753376ba7a2e))
+* **deps-dev:** bump TypeScript to 6.0.3 ([#168](https://github.com/petauron/senlun/issues/168)) ([7fb5d4d](https://github.com/petauron/senlun/commit/7fb5d4deb7db00a3ed6e0f94d53a3e11e0a19f2a))
+* **deps-dev:** bump Vitest to 5.1.0 ([#174](https://github.com/petauron/senlun/issues/174)) ([4ae11c4](https://github.com/petauron/senlun/commit/4ae11c4c31d6c4926c99f4630a5d5af82422d6d6))
+* **deps:** bump docker/login-action from 4.7.0 to 4.8.0 ([15b0ba6](https://github.com/petauron/senlun/commit/15b0ba696ca71cef1dfb697855c210cb172be947))
+
 ## [0.1.0-alpha.65](https://github.com/petauron/senlun/compare/v0.1.0-alpha.64...v0.1.0-alpha.65) (2026-11-15)
 
 
