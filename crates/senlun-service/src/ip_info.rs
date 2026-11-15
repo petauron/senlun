@@ -450,17 +450,24 @@ pub(crate) async fn enrich_nodes(
     value: &mut Value,
 ) -> Result<(), ApiError> {
     let include_addresses = state.auth.authorize(headers, true, true).await.is_ok();
-    let admin = state.database(Storage::admin_state).await?;
-    if admin["settings"]["ip_info_enabled"] != true {
-        return Ok(());
-    }
-    let Some(nodes) = admin["nodes"].as_array() else {
-        return Ok(());
-    };
+    let nodes = state.database(|db| {
+        if !db.settings()?.ip_info_enabled {
+            return Ok(HashMap::new());
+        }
+        let connection = db.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT n.id, coalesce(json_extract(o.data,'$.ipv4'),''), coalesce(json_extract(o.data,'$.ipv6'),'')
+             FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id WHERE n.disabled_at_ms IS NULL",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, [row.get::<_, String>(1)?, row.get::<_, String>(2)?]))
+        })?;
+        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
+    }).await?;
     let cache = state.ip_info.inner.lock().await;
     enrich_scores(
         value,
-        nodes,
+        &nodes,
         &cache,
         crate::current_time()? / 1000,
         include_addresses,
@@ -472,26 +479,24 @@ pub(crate) async fn enrich_nodes(
 // clients receive the family and score metadata without the registered address.
 fn enrich_scores(
     value: &mut Value,
-    nodes: &[Value],
+    nodes: &HashMap<String, [String; 2]>,
     cache: &Cache,
     now: u64,
     include_addresses: bool,
 ) {
     if let Some(id) = value["uuid"].as_str() {
-        let Some(node) = nodes
-            .iter()
-            .find(|node| node["id"] == id && node["disabled"] == false)
-        else {
+        let Some(addresses) = nodes.get(id) else {
             return;
         };
         if include_addresses {
-            value["ipv4"] = node["ipv4"].clone();
-            value["ipv6"] = node["ipv6"].clone();
+            value["ipv4"] = json!(addresses[0]);
+            value["ipv6"] = json!(addresses[1]);
         }
-        let scores: Vec<Value> = [("ipv4", 4), ("ipv6", 6)]
-            .into_iter()
-            .filter_map(|(key, family)| {
-                let ip = node[key].as_str()?.parse::<IpAddr>().ok()?;
+        let scores: Vec<Value> = addresses
+            .iter()
+            .zip([4, 6])
+            .filter_map(|(address, family)| {
+                let ip = address.parse::<IpAddr>().ok()?;
                 let entry = cache.entries.get(&format!("{ip}:false"));
                 let score =
                     entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());

@@ -142,8 +142,12 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
     await page.keyboard.press('Escape')
     await page.getByRole('button', { name: '列表视图' }).click()
     const listProbe = page.getByRole('button', { name: 'e2e-node 延迟 / 失败率详情' })
-    await expect(listProbe.locator('[data-probe-metric="latency"] > *')).toHaveCount(10)
-    await expect(listProbe.locator('[data-probe-metric="loss"] > *')).toHaveCount(10)
+    for (const metric of ['latency', 'loss']) {
+      const carriers = listProbe.locator(`[data-probe-metric="${metric}"]`)
+      await expect(carriers).toHaveCount(3)
+      for (const carrier of await carriers.all())
+        await expect(carrier.locator(':scope > *')).toHaveCount(10)
+    }
     await listProbe.click()
     await expect(page.getByRole('dialog', { name: 'e2e-node 延迟 / 失败率' })).toBeVisible()
     await page.keyboard.press('Escape')
