@@ -28,7 +28,7 @@ const score = computed(() => {
     ? value
     : null
 })
-const grade = computed(() => getIpScoreGrade(score.value, Boolean(entry.value?.stale)))
+const grade = computed(() => getIpScoreGrade(score.value))
 const displayScore = computed(() => score.value ?? '—')
 const routeReport = computed(() => props.node.return_routes?.find(report => report.family === family.value))
 watch(family, () => {
@@ -58,7 +58,6 @@ async function refresh() {
         score: result.data.reputation.trust_score,
         provider: 'Net.Coffee',
         updated_at_unix_ms: Date.parse(result.meta.updated_at),
-        stale: result.meta.stale,
       },
     ]
     if (family.value !== selectedFamily)
@@ -68,7 +67,7 @@ async function refresh() {
       : result.data.reputation.trust_score === null
         ? '暂时没有可用评分。'
         : result.meta.cache === 'hit'
-          ? '评分仍在有效期内，已复用保存的结果。'
+          ? '已复用保存的评分，检测时间保持不变。'
           : '评分已更新。'
   }
   catch {

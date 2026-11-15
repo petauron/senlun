@@ -44,7 +44,6 @@ export interface IpScore {
   score: number | null
   provider: string
   updated_at_unix_ms: number | null
-  stale: boolean
 }
 
 export interface ReturnRoute {

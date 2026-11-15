@@ -30,10 +30,10 @@ export const nodeBadgeTones = {
 const qualityGreen = 'border-[#228d5a]/50 bg-[#0d2817] text-[#04b84c]'
 const qualityAmber = 'border-[#ca8f3e]/50 bg-[#302416] text-[#ca8f3e]'
 
-export function getIpScoreGrade(score: number | null, stale = false) {
-  if (stale || score === null || !Number.isFinite(score) || score < 0 || score > 100) {
+export function getIpScoreGrade(score: number | null) {
+  if (score === null || !Number.isFinite(score) || score < 0 || score > 100) {
     return {
-      label: stale ? '待更新' : '待检测',
+      label: '待检测',
       tone: nodeBadgeTones.unknown.tone,
     }
   }
