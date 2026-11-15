@@ -85,7 +85,7 @@ impl AgentConfig {
             node_name: env::var("SENLUN_NODE_NAME")
                 .ok()
                 .filter(|name| !name.trim().is_empty())
-                .or_else(System::host_name)
+                .or_else(|| System::host_name().ok())
                 .unwrap_or_else(|| "unnamed-node".to_owned()),
             region: env::var("SENLUN_NODE_REGION").unwrap_or_default(),
             geoip_provider: region::Provider::parse(
@@ -132,23 +132,23 @@ struct Collector {
 }
 
 impl Collector {
-    async fn new() -> Self {
-        let mut system = System::new();
+    async fn new() -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let mut system = System::new()?;
         system.refresh_memory();
         system.refresh_cpu_all();
         tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
         system.refresh_cpu_all();
 
-        Self {
+        Ok(Self {
             system,
-            disks: Disks::new_with_refreshed_list(),
-            networks: Networks::new_with_refreshed_list(),
+            disks: Disks::new_with_refreshed_list()?,
+            networks: Networks::new_with_refreshed_list()?,
             last_network_refresh: Instant::now(),
             operating_system: extended_metrics::operating_system()
-                .or_else(System::long_os_version)
+                .or_else(|| System::long_os_version().ok())
                 .filter(|name| name.len() <= 128)
                 .unwrap_or_else(|| "Unknown".to_owned()),
-        }
+        })
     }
 
     fn collect(
@@ -167,7 +167,7 @@ impl Collector {
         let mut seen_disks = HashSet::new();
         let mut disk_total_bytes = 0_u64;
         let mut disk_used_bytes = 0_u64;
-        for disk in self.disks.list() {
+        for disk in &self.disks {
             let mount_point = disk.mount_point().to_string_lossy();
             if config
                 .disk_mount_points
@@ -190,7 +190,10 @@ impl Collector {
         let mut network_transmitted = 0_u64;
         let mut network_total_received = 0_u64;
         let mut network_total_transmitted = 0_u64;
-        for (name, network) in self.networks.list() {
+        for (name, network) in &self.networks {
+            let Some(name) = name.to_str() else {
+                continue;
+            };
             if !include_network_interface(name, config.network_interfaces.as_ref()) {
                 continue;
             }
@@ -201,7 +204,7 @@ impl Collector {
             network_total_transmitted =
                 network_total_transmitted.saturating_add(network.total_transmitted());
         }
-        let load = System::load_average();
+        let load = System::load_average()?;
         let cpu_name = self
             .system
             .cpus()
@@ -217,14 +220,14 @@ impl Collector {
             host_name: Some(config.node_name.clone()),
             agent_version: env!("CARGO_PKG_VERSION").to_owned(),
             operating_system: self.operating_system.clone(),
-            kernel_version: System::kernel_long_version(),
+            kernel_version: System::kernel_long_version()?,
             architecture: System::cpu_arch(),
             cpu_name,
             cpu_cores: self.system.cpus().len().try_into()?,
             virtualization: config.virtualization.clone(),
             region: config.region.clone(),
             group: config.group.clone(),
-            uptime_seconds: System::uptime(),
+            uptime_seconds: System::uptime()?,
             cpu_usage_percent: self.system.global_cpu_usage(),
             load_one: load.one,
             load_five: load.five,
@@ -278,7 +281,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
     tracing::info!(node_id = %credentials.node_id, "Senlun Agent started");
 
-    let mut collector = Collector::new().await;
+    let mut collector = Collector::new().await?;
     let mut ticker = interval(config.interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut collected_sequence = 0_u64;

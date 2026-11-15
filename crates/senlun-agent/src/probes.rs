@@ -768,7 +768,7 @@ mod tests {
         queue_result(&mut pending, result(0, 3, true));
         queue_result(&mut pending, result(0, 4, true));
         let (blocked, wake) = take_pending_results(&mut pending, &schedules, &last_delivery, now);
-        assert!(blocked.is_empty());
+        assert_eq!(blocked.len(), 0);
         let ready = now + Duration::from_millis(5001);
         assert_eq!(wake, Some(ready));
         let (bounded, _) = take_pending_results(&mut pending, &schedules, &last_delivery, ready);

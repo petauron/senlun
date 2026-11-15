@@ -9,11 +9,11 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM rust:1.98-bookworm@sha256:9a73a5088750b4c95158ab26629c854c3d6fc4b173cb7bc8079ad252d8ed7bfa AS rust-builder
+FROM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS rust-builder
 WORKDIR /src
 ARG SENLUN_BUILD_GIT_HASH=unknown
 ENV SENLUN_BUILD_GIT_HASH=${SENLUN_BUILD_GIT_HASH} \
-    RUSTUP_TOOLCHAIN=1.98.0
+    RUSTUP_TOOLCHAIN=1.99.0
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ crates/
 COPY --from=web-builder /src/web/dist web/dist

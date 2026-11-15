@@ -57,7 +57,7 @@ fn reporting_cli_authenticates_stdin_without_returning_secrets() {
             assert!(record.get("token").is_none());
         } else {
             assert!(!output.status.success());
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout.len(), 0);
         }
     }
 }

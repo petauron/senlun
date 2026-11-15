@@ -341,7 +341,7 @@ mod tests {
             12345
         );
         drop(metrics);
-        assert!(!enrollment.token.is_empty());
+        assert_ne!(enrollment.token.len(), 0);
         drop(db);
         drop(original);
         migrate_storage(&source, &destination, 64 << 20).unwrap();

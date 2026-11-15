@@ -30,5 +30,5 @@ fn admin_cli_inspects_exact_enrollment_without_returning_a_secret() {
         .output()
         .unwrap();
     assert!(!missing.status.success());
-    assert!(missing.stdout.is_empty());
+    assert_eq!(missing.stdout.len(), 0);
 }
