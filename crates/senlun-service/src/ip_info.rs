@@ -465,13 +465,7 @@ pub(crate) async fn enrich_nodes(
         Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
     }).await?;
     let cache = state.ip_info.inner.lock().await;
-    enrich_scores(
-        value,
-        &nodes,
-        &cache,
-        crate::current_time()? / 1000,
-        include_addresses,
-    );
+    enrich_scores(value, &nodes, &cache, include_addresses);
     Ok(())
 }
 
@@ -481,7 +475,6 @@ fn enrich_scores(
     value: &mut Value,
     nodes: &HashMap<String, [String; 2]>,
     cache: &Cache,
-    now: u64,
     include_addresses: bool,
 ) {
     if let Some(id) = value["uuid"].as_str() {
@@ -502,19 +495,18 @@ fn enrich_scores(
                     entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
                 Some(
                     json!({"family":family,"score":score,"provider":"Net.Coffee",
-                    "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000),
-                    "stale":entry.is_some_and(|entry|entry.stale(now))}),
+                    "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000)}),
                 )
             })
             .collect();
         value["ip_scores"] = json!(scores);
     } else if let Some(items) = value.as_object_mut() {
         for item in items.values_mut() {
-            enrich_scores(item, nodes, cache, now, include_addresses);
+            enrich_scores(item, nodes, cache, include_addresses);
         }
     } else if let Some(items) = value.as_array_mut() {
         for item in items {
-            enrich_scores(item, nodes, cache, now, include_addresses);
+            enrich_scores(item, nodes, cache, include_addresses);
         }
     }
 }

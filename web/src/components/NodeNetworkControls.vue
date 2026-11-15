@@ -120,7 +120,7 @@ async function detect() {
     const result = await getSharedApi().post<NetworkState>(`admin/nodes/${encodeURIComponent(uuid)}/return-routes/check`, { family: selectedFamily })
     apply(uuid, result)
     try {
-      const score = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { updated_at: string, stale: boolean } }>('admin/ip-info/v1/refresh', { uuid, ip })
+      const score = await getSharedApi().post<{ data: { reputation: { trust_score: number | null } }, meta: { updated_at: string } }>('admin/ip-info/v1/refresh', { uuid, ip })
       const node = nodes.nodes.find(value => value.uuid === uuid)
       const nowAddress = selectedFamily === 4
         ? node?.ipv4
@@ -133,7 +133,6 @@ async function detect() {
             score: score.data.reputation.trust_score,
             provider: 'Net.Coffee',
             updated_at_unix_ms: Date.parse(score.meta.updated_at),
-            stale: score.meta.stale,
           },
         ]
       }
