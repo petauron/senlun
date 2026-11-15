@@ -4,9 +4,9 @@ import { computed, ref } from 'vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
-import { getReturnRouteGrade, nodeBadgeTones } from '@/utils/nodeBadges'
+import { getReturnRouteGrade } from '@/utils/nodeBadges'
 
-const props = defineProps<{ node: NodeData, compact?: boolean, homeCard?: boolean }>()
+const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
 const { family } = useNodeIpVersion(() => props.node)
 const report = computed(() => props.node.return_routes?.find(value => value.family === family.value))
@@ -16,19 +16,16 @@ const carriers = [
     id: 'telecom',
     name: '电信',
     short: '电',
-    tone: 'bg-violet-500/15 text-violet-700 dark:text-violet-300',
   },
   {
     id: 'unicom',
     name: '联通',
     short: '联',
-    tone: 'bg-rose-500/15 text-rose-700 dark:text-rose-300',
   },
   {
     id: 'mobile',
     name: '移动',
     short: '移',
-    tone: 'bg-teal-500/15 text-teal-700 dark:text-teal-300',
   },
 ]
 const rows = computed(() => carriers.map((carrier) => {
@@ -64,24 +61,19 @@ const summary = computed(() => {
     <DialogTrigger as-child>
       <button
         type="button" :aria-label="summary"
-        class="grid w-full min-w-0 grid-cols-3 items-center gap-1 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        class="route-summary grid w-full min-w-0 grid-cols-3 items-center text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+        :class="{ 'route-summary-compact': compact }"
         @click.stop @keydown.stop
       >
         <span
           v-for="row in rows" :key="row.id"
-          class="flex min-w-0 items-center justify-center gap-0.5 border font-semibold transition-colors"
-          :data-carrier="homeCard ? row.id : undefined"
-          :data-grade="homeCard ? row.grade?.label : undefined"
+          class="route-summary-cell flex min-w-0 items-center justify-center transition-colors"
+          :data-carrier="row.id"
+          :data-grade="row.grade?.label"
           :title="`${row.name}：${row.label}${row.grade ? ` · ${row.grade.label}` : ''}`"
-          :class="[
-            homeCard ? 'route-summary-cell h-[25px] rounded-full text-[11px]' : ['rounded-full py-1', compact ? 'px-0.5 text-[10px]' : 'px-1 text-[11px]'],
-            !homeCard && (row.grade?.tone ?? nodeBadgeTones.unknown.tone),
-            !homeCard && row.grade?.premium && 'shadow-sm ring-1 ring-[#228d5a]/25',
-          ]"
         >
-          <span v-if="homeCard" aria-hidden="true" class="w-3 shrink-0 rounded-sm text-center text-[9px] leading-[14px]">{{ row.short }}</span>
-          <span v-else aria-hidden="true" class="flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold" :class="row.tone">{{ row.short }}</span>
-          <span :class="homeCard ? 'whitespace-nowrap font-[Arial,sans-serif] tabular-nums' : 'min-w-0 truncate'">{{ homeCard ? row.label.replaceAll('→', '-') : row.label }}</span>
+          <span aria-hidden="true" class="w-3 shrink-0 text-center">{{ row.short }}</span>
+          <span class="whitespace-nowrap font-[Arial,sans-serif] tabular-nums">{{ row.label.replaceAll('→', '-') }}</span>
           <span v-if="row.grade" class="sr-only">，{{ row.grade.label }}</span>
         </span>
       </button>
@@ -131,6 +123,83 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
+/* 回程摘要按三个等宽的数据栏显示。 */
+.route-summary {
+  gap: 0;
+  grid-template-columns: repeat(3, minmax(max-content, 1fr));
+  padding: 4px 0;
+  border-radius: 0;
+  border-block: 1px solid var(--border);
+  background: transparent;
+}
+.route-summary-cell {
+  position: relative;
+  height: 24px;
+  align-items: baseline;
+  padding-block: 4px;
+  line-height: 16px;
+  gap: 3px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 500;
+}
+.route-summary-cell + .route-summary-cell::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 6px;
+  height: 12px;
+  width: 1px;
+  background: var(--border);
+}
+.route-summary-cell {
+  --carrier-hue: #5796e6;
+  --route-ink: var(--muted-foreground);
+}
+[data-carrier='unicom'] {
+  --carrier-hue: #ef7477;
+}
+[data-carrier='mobile'] {
+  --carrier-hue: #91bd50;
+}
+[data-grade='顶级优化'] {
+  --route-ink: oklch(from var(--warning) calc(l - 0.08) calc(c * 0.72) calc(h - 12));
+}
+[data-grade='一般优化'] {
+  --route-ink: var(--success);
+}
+[data-grade='普通线路'] {
+  --route-ink: var(--muted-foreground);
+}
+.route-summary-cell > span:first-child {
+  color: var(--carrier-hue);
+  font-size: 12px;
+  font-weight: 600;
+}
+.route-summary-cell > span:nth-child(2) {
+  color: var(--route-ink);
+  font-size: 13px;
+  font-weight: 550;
+}
+.route-summary-compact {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+  border: 0;
+}
+.route-summary-compact .route-summary-cell {
+  height: 18px;
+  padding: 0;
+  gap: 2px;
+}
+.route-summary-compact .route-summary-cell::before {
+  display: none;
+}
+.route-summary-compact .route-summary-cell > span {
+  font-size: 11px;
+  line-height: 14px;
+}
 .route-detail-row {
   display: flex;
   align-items: center;
