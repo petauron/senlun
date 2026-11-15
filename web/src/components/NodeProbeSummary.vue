@@ -111,7 +111,7 @@ function onMetricKeydown(event: KeyboardEvent) {
 <template>
   <div v-if="!compact" class="flex flex-col gap-y-2 text-[11px]" :aria-label="`最近 ${historyLabel}的平均延迟与探测结果，每格约 ${historyHours * 6} 分钟`">
     <div v-for="row in rows" :key="row.id" class="grid h-8 grid-cols-[minmax(64px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2">
-      <DataTooltip placement="top" :content="row.name" class="min-w-0" content-class="min-w-24">
+      <DataTooltip :stop-click-propagation="false" placement="top" :content="row.name" class="min-w-0" content-class="min-w-24">
         <span class="block truncate font-medium text-foreground/75">{{ row.name }}</span>
         <span v-if="row.stale" class="sr-only">暂无数据</span>
       </DataTooltip>

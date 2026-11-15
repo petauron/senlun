@@ -16,10 +16,10 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
 </script>
 
 <template>
-  <div @click.stop>
+  <div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      :aria-label="`${node.name} 延迟 / ${rateLabel}详情`" @click="open = true" @keydown.enter.self.prevent="open = true" @keydown.space.self.prevent="open = true"
+      :aria-label="`${node.name} 延迟 / ${rateLabel}详情`" @click.stop="open = true" @keydown.enter.self.stop.prevent="open = true" @keydown.space.self.stop.prevent="open = true"
     >
       <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" :ip-version="probeIPVersion" />
     </div>
