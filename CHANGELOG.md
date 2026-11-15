@@ -4,6 +4,14 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.65](https://github.com/petauron/senlun/compare/v0.1.0-alpha.64...v0.1.0-alpha.65) (2026-11-15)
+
+
+### Bug Fixes
+
+* **web:** preserve node detail clicks outside card controls ([#225](https://github.com/petauron/senlun/issues/225)) ([6743e4f](https://github.com/petauron/senlun/commit/6743e4f21f28e21d94485ac257569af9368a20f1))
+* **web:** share current return route labels with node details ([#231](https://github.com/petauron/senlun/issues/231)) ([4b654ad](https://github.com/petauron/senlun/commit/4b654adee17387fe2f7c08f5d61939615ba1c86b)), closes [#229](https://github.com/petauron/senlun/issues/229)
+
 ## [0.1.0-alpha.64](https://github.com/petauron/senlun/compare/v0.1.0-alpha.63...v0.1.0-alpha.64) (2026-11-15)
 
 
