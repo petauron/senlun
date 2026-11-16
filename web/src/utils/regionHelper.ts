@@ -1870,6 +1870,7 @@ export function isRegionMatch(regionEmoji: string, searchTerm: string): boolean 
  */
 export function getRegionDisplayName(regionEmoji: string, language: 'en' | 'zh' = 'zh'): string {
   const regionInfo = emojiToRegionMap[regionEmoji]
+    ?? (regionEmoji.trim().toUpperCase() === 'HK' ? emojiToRegionMap['🇭🇰'] : undefined)
   if (!regionInfo) {
     return regionEmoji
   }
