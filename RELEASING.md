@@ -26,7 +26,7 @@ Cargo.lock selectors use `name.value` because this updater queries tagged TOML
 values; third-party crates are excluded.
 
 The Agent component tracks the Agent and shared protocol source, excluding
-Service-only source. Its `dependencies.sha256` records Cargo's resolved normal
+Service-only source and standalone Agent tests. Its `dependencies.sha256` records Cargo's resolved normal
 and build dependency graphs and enabled features for both supported Linux musl
 targets, relevant profiles and Agent build inputs. Service-only build commands
 are isolated in `scripts/build-linux-service.sh` and its smoke-check helper.
