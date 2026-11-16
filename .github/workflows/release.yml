@@ -25,7 +25,7 @@ env:
 jobs:
   prepare:
     name: Prepare release from checked main
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && !(github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'senlun-agent-v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
@@ -39,6 +39,9 @@ jobs:
       release_tag: ${{ steps.source.outputs.release_tag }}
       provenance: ${{ steps.source.outputs.provenance }}
       pending_draft: ${{ steps.pending.outputs.exists }}
+      agent_created: ${{ steps.agent.outputs.created }}
+      agent_tag: ${{ steps.agent.outputs.tag }}
+      agent_sha: ${{ steps.agent.outputs.sha }}
     steps:
       - name: Wait for the exact source CI
         env:
@@ -102,11 +105,43 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag || steps.release.outputs.tag_name }}
           EXPECTED_RELEASE_SHA: ${{ steps.release.outputs.sha }}
         run: node scripts/release-source.mjs
+      - name: Resolve the matching Agent draft
+        if: steps.source.outputs.release_created == 'true'
+        id: agent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.release_sha }}
+          CREATED_AGENT_TAG: ${{ steps.release.outputs['crates--tag_name'] }}
+          CREATED_AGENT_SHA: ${{ steps.release.outputs['crates--sha'] }}
+          CREATED_AGENT: ${{ steps.release.outputs['crates--release_created'] }}
+        run: |
+          set -eu
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            if [ "$CREATED_AGENT" = true ]; then
+              test "$CREATED_AGENT_SHA" = "$SOURCE_SHA"
+              echo "created=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$CREATED_AGENT_TAG" >> "$GITHUB_OUTPUT"
+              echo "sha=$CREATED_AGENT_SHA" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            tags=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" | \
+              jq -r --arg sha "$SOURCE_SHA" '.[] | select(.draft and (.tag_name | startswith("senlun-agent-v"))) | select(.target_commitish == $sha) | .tag_name')
+            count=$(printf '%s\n' "$tags" | sed '/^$/d' | wc -l)
+            test "$count" -le 1
+            if [ "$count" -eq 1 ]; then
+              echo "created=true" >> "$GITHUB_OUTPUT"
+              echo "tag=$tags" >> "$GITHUB_OUTPUT"
+              echo "sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+            fi
+          fi
 
   verify-source:
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      AGENT_CREATED: ${{ needs.prepare.outputs.agent_created }}
+      AGENT_TAG: ${{ needs.prepare.outputs.agent_tag }}
+      AGENT_SHA: ${{ needs.prepare.outputs.agent_sha }}
     needs: prepare
     if: needs.prepare.outputs.release_created == 'true'
     name: Verify protected release source
@@ -138,10 +173,22 @@ jobs:
           if git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"; then
             test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_SHA"
           fi
-          cargo_version=$(cargo metadata --locked --no-deps --format-version 1 | jq -r '[.packages[].version] | unique | if length == 1 then .[0] else empty end')
+          cargo_versions=$(cargo metadata --locked --no-deps --format-version 1)
+          cargo_version=$(printf '%s' "$cargo_versions" | jq -r '.packages[] | select(.name == "senlun-service") | .version')
+          protocol_version=$(printf '%s' "$cargo_versions" | jq -r '.packages[] | select(.name == "senlun-protocol") | .version')
+          agent_version=$(printf '%s' "$cargo_versions" | jq -r '.packages[] | select(.name == "senlun-agent") | .version')
           web_version=$(jq -r .version web/package.json)
           test "$cargo_version" = "$release_version"
+          test "$protocol_version" = "$release_version"
           test "$web_version" = "$release_version"
+          test "$agent_version" = "$(cat crates/senlun-agent/version.txt)"
+          test "$agent_version" = "$(jq -r '.crates' .release-please-manifest.json)"
+          if [ "$AGENT_CREATED" = true ]; then
+            test "$AGENT_TAG" = "senlun-agent-v$agent_version"
+            test "$AGENT_SHA" = "$RELEASE_SHA"
+            test "$(gh release view "$AGENT_TAG" --json isDraft --jq .isDraft)" = true
+            test "$(gh release view "$AGENT_TAG" --json targetCommitish --jq .targetCommitish)" = "$RELEASE_SHA"
+          fi
           gate=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_SHA/check-runs?per_page=100" \
             --jq '[.check_runs[] | select(.name == "rust" and .conclusion == "success")] | length')
           test "$gate" -ge 1
@@ -431,10 +478,67 @@ jobs:
             gh api --method DELETE "$delete_endpoint"
           fi
 
+  publish-agent:
+    name: Publish Senlun Agent release
+    needs: [prepare, verify-source, publish]
+    if: needs.prepare.outputs.agent_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
+      AGENT_TAG: ${{ needs.prepare.outputs.agent_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out checked publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify, stage, and publish the Agent release
+        run: sh scripts/publish-agent-draft.sh
+
+  recover-agent:
+    name: Recover Senlun Agent release
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'senlun-agent-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+      attestations: read
+    env:
+      AGENT_TAG: ${{ inputs.release_tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out checked publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Resolve the Agent draft's immutable source
+        run: |
+          set -eu
+          printf '%s' "$AGENT_TAG" | grep -Eq '^senlun-agent-v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'
+          source_sha=$(gh release view "$AGENT_TAG" --json targetCommitish --jq .targetCommitish)
+          printf '%s' "$source_sha" | grep -Eq '^[a-f0-9]{40}$'
+          service_version=$(gh api "repos/$GITHUB_REPOSITORY/contents/version.txt?ref=$source_sha" --jq .content | base64 --decode)
+          agent_version=$(gh api "repos/$GITHUB_REPOSITORY/contents/crates/senlun-agent/version.txt?ref=$source_sha" --jq .content | base64 --decode)
+          printf '%s' "$service_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'
+          test "$AGENT_TAG" = "senlun-agent-v$agent_version"
+          echo "RELEASE_SHA=$source_sha" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=v$service_version" >> "$GITHUB_ENV"
+      - name: Verify and complete the original Agent draft
+        run: sh scripts/publish-agent-draft.sh
+
   release-pr:
     name: Prepare next version PR and start its CI
-    needs: [prepare, publish]
-    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.pending_draft != 'true' && (needs.publish.result == 'success' || (needs.prepare.outputs.release_created != 'true' && needs.publish.result == 'skipped'))
+    needs: [prepare, publish, publish-agent]
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.pending_draft != 'true' && (needs.publish.result == 'success' || (needs.prepare.outputs.release_created != 'true' && needs.publish.result == 'skipped')) && (needs.publish-agent.result == 'success' || (needs.prepare.outputs.agent_created != 'true' && needs.publish-agent.result == 'skipped'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

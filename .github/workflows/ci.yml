@@ -54,6 +54,7 @@ jobs:
         run: |
           npm install --prefix "$RELEASE_PLEASE_TEST_ROOT" --ignore-scripts --no-audit --no-fund --package-lock=false release-please@17.6.0
           node scripts/check-release-please.mjs
+          node scripts/agent-dependencies.mjs --check
       - name: Lint Web source
         run: npm run lint
       - name: Test Web data handling

@@ -14,19 +14,38 @@ Like Vastora, it uses only the built-in GITHUB_TOKEN; no extra release secret or
 personal token is needed. Repository settings must allow Actions to create pull
 requests. Existing branch protection and required CI remain mandatory.
 
-Senlun is one release unit: its virtual Rust workspace uses
-`workspace.package.version`, and all three crates inherit that version. The
-pinned action bundles release-please 17.6.0, whose native Rust strategy expects
-literal `package.version` values and cannot update this layout. Use the native
-`simple` strategy with `version.txt` and native TOML/JSON extra-file updaters to
-keep Cargo.toml, the three workspace Cargo.lock entries, and Web package files
-in sync with the generated manifest. Do not replace inherited crate versions
-with independently maintained versions. Cargo.lock selectors use `name.value`
-because this updater queries tagged TOML values; third-party crates are excluded.
+The Service and Agent are independently versioned Release Please components.
+The Service and internal protocol retain `workspace.package.version`; Web
+versions follow the Service. The Agent has its own literal Cargo package
+version, `crates/senlun-agent/version.txt`, manifest entry and component release
+tag. Bootstrap its manifest at the latest already-published combined version;
+do not create a historical tag or change an existing release. Both components
+use the pinned built-in `simple` strategy and TOML/JSON extra-file updaters.
+The root Cargo.lock selectors update only the corresponding local packages.
+Cargo.lock selectors use `name.value` because this updater queries tagged TOML
+values; third-party crates are excluded.
+
+The Agent component tracks the Agent and shared protocol source, excluding
+Service-only source. Its `dependencies.sha256` records the locked dependency
+closure, inherited workspace dependencies and the Agent's build inputs. When a
+change affects these inputs, refresh that marker in the same source PR using
+the existing pinned Release Please engine:
+
+```sh
+export RELEASE_PLEASE_TEST_ROOT=/path/to/existing/release-please-regression
+node scripts/agent-dependencies.mjs --write
+```
+
+The existing CI version job verifies the marker; a stale marker blocks the PR
+rather than silently missing an Agent release. An unrelated dependency outside
+the Agent closure does not change it. The marker never includes runtime data,
+credentials or a host path. Shared protocol and Agent build changes also count
+as Agent changes. CI still uses the actual Cargo lock and existing security and
+license checks for the entire workspace.
 
 CI runs `scripts/check-release-please.mjs` against that pinned engine. It builds
-a candidate version PR in memory using the repository configuration and checks
-all version updates, inherited crate manifests, and unchanged dependencies.
+candidate Service and Agent version changes in memory using the repository
+configuration and checks their separate version updates and unchanged dependencies.
 It has no GitHub client or write credentials and does not create a PR or tag.
 When updating the action SHA, review its bundled release-please version and
 update the regression engine pin together. The candidate version's ordinary
@@ -57,11 +76,14 @@ The aggregate gate does not run in cancelled workflows, but still fails on any
 failed or skipped dependency in an ordinary run. Release preparation requires a
 complete successful CI workflow; cancellation or a skipped gate cannot publish.
 
-Publication runs in the same release.yml, gated by release_created, using the
-Release Please output tag and immutable source SHA. For new releases the source
-must equal the workflow commit. Builds and provenance checks remain required;
-only successful publication makes the draft public. Tags are not a second
-release entry point. A stale push skips preparation when main moved.
+Publication runs in the same release.yml, gated by Release Please's output tags
+and immutable source SHA. For new releases the source must equal the workflow
+commit. A changed Agent gets a separate `senlun-agent-v...` draft; after the
+combined native artifacts pass all checks and the Service release is published,
+the Agent job verifies and copies those same attested archives and SBOMs into its
+draft before publication. An unchanged Agent gets no new component release.
+Tags are not a second release entry point. A stale push skips preparation when
+main moved.
 
 ## Recover an unpublished draft
 
@@ -73,6 +95,12 @@ to the exact unfinished tag, for example:
 ```sh
 gh workflow run release.yml --ref main -f release_tag=v0.1.0-alpha.15
 ```
+
+If the Service release is already public but its Agent draft needs recovery,
+dispatch the same workflow with the exact `senlun-agent-v...` draft tag instead.
+The recovery verifies protected-main ancestry, exact-source and workflow CI,
+the published Service release, both archive checksums and attested source before
+copying into the original Agent draft. A public Agent release is never overwritten.
 
 Recovery does not invoke Release Please to recreate the release. It requires an
 existing bot-created draft whose target is a full commit SHA. It preserves that

@@ -52,8 +52,11 @@
   jobs is not proof of a release. Documentation edits do not authorize a push,
   merge, release, signing operation or production deployment.
 
-- Read `RELEASING.md` before changing release workflows. Keep the Rust workspace,
-  Cargo lockfile, Web package files and manifest on the same release version.
+- Read `RELEASING.md` before changing release workflows. Keep the Service,
+  workspace, Web and Service manifest versions aligned; keep the Agent crate,
+  lockfile entry and Agent manifest on their independently released version.
+  Refresh the checked Agent dependency marker when its dependency closure or
+  build inputs change; unrelated Service-only changes must not bump the Agent.
   Verify both supported Linux architectures and preserve required licenses,
   checksums, SBOMs and provenance in distribution assets.
 
