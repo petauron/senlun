@@ -47,7 +47,7 @@
       "changelog-path": "senlun-agent/CHANGELOG.md",
       "package-name": "senlun-agent",
       "component": "senlun-agent",
-      "exclude-paths": ["crates/senlun-service"],
+      "exclude-paths": ["crates/senlun-service", "crates/senlun-agent/tests"],
       "include-component-in-tag": true,
       "include-v-in-tag": true,
       "draft": true,
