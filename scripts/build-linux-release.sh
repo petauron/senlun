@@ -33,7 +33,7 @@ docker run --rm \
   "$builder" sh -c '
     set -eu
     test "$(rustc -vV | sed -n "s/^host: //p")" = "$SENLUN_BUILD_TARGET"
-    cargo build --locked --release -p senlun-service
+    sh scripts/build-linux-service.sh
     linker_key="CARGO_TARGET_$(printf %s "$SENLUN_MUSL_TARGET" | tr "a-z-" "A-Z_")_LINKER"
     cc_key="CC_$(printf %s "$SENLUN_MUSL_TARGET" | tr - _)"
     # Debian musl-gcc specs inject an interpreter even into static PIE output.
@@ -56,14 +56,11 @@ docker run --rm --network none --read-only "$builder" \
 test -s "$repository/target/release/MUSL_COPYRIGHT.txt"
 
 # A successful link on a newer runner does not prove compatibility with users.
+sh "$repository/scripts/verify-linux-service.sh" "$runtime" "$repository"
 docker run --rm --network none --read-only --user 65532:65532 \
   --cap-drop ALL --memory 192m --pids-limit 64 \
   --mount "type=bind,src=$repository/target/release,dst=/opt/senlun,readonly" \
-  "$runtime" sh -c '
-    set -eu
-    /opt/senlun/senlun-service --version
-    /opt/senlun/senlun-agent --version
-  '
+  "$runtime" /opt/senlun/senlun-agent --version
 
 expected_agent_version=$(cat "$repository/crates/senlun-agent/version.txt")
 test "$(docker run --rm --network none --read-only --user 65532:65532 \
