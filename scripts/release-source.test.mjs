@@ -84,7 +84,7 @@ test('release workflow retains draft permissions, identity gates and one publica
   assert.deepEqual(Object.keys(workflow.on).sort(), ['push', 'workflow_dispatch']);
   assert.equal(workflow.on.workflow_dispatch.inputs.release_tag.required, true);
   assert.equal(workflow.permissions.contents, 'read');
-  assert.equal(workflow.jobs.prepare.if, "github.ref == 'refs/heads/main'");
+  assert.equal(workflow.jobs.prepare.if, "github.ref == 'refs/heads/main' && !(github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'senlun-agent-v'))");
   for (const name of ['verify-source', 'binaries', 'container', 'publish']) {
     assert.equal(workflow.jobs[name].permissions.contents, 'write', `${name} must see draft releases`);
     const checkout = workflow.jobs[name].steps.find((step) => step.uses?.startsWith('actions/checkout@'));

@@ -64,3 +64,9 @@ docker run --rm --network none --read-only --user 65532:65532 \
     /opt/senlun/senlun-service --version
     /opt/senlun/senlun-agent --version
   '
+
+expected_agent_version=$(cat "$repository/crates/senlun-agent/version.txt")
+test "$(docker run --rm --network none --read-only --user 65532:65532 \
+  --cap-drop ALL --memory 192m --pids-limit 64 \
+  --mount "type=bind,src=$repository/target/release,dst=/opt/senlun,readonly" \
+  "$runtime" /opt/senlun/senlun-agent --version)" = "senlun-agent $expected_agent_version"
