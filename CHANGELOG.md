@@ -4,6 +4,13 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.68](https://github.com/petauron/senlun/compare/v0.1.0-alpha.67...v0.1.0-alpha.68) (2026-11-16)
+
+
+### Bug Fixes
+
+* **web:** keep traffic tooltip readable on narrow screens ([4762993](https://github.com/petauron/senlun/commit/47629937a69c7bd1d73d12544601760a1a8bfbe4))
+
 ## [0.1.0-alpha.67](https://github.com/petauron/senlun/compare/v0.1.0-alpha.66...v0.1.0-alpha.67) (2026-11-16)
 
 
