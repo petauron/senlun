@@ -26,10 +26,12 @@ Cargo.lock selectors use `name.value` because this updater queries tagged TOML
 values; third-party crates are excluded.
 
 The Agent component tracks the Agent and shared protocol source, excluding
-Service-only source. Its `dependencies.sha256` records the locked dependency
-closure, inherited workspace dependencies and the Agent's build inputs. When a
-change affects these inputs, refresh that marker in the same source PR using
-the existing pinned Release Please engine:
+Service-only source. Its `dependencies.sha256` records Cargo's resolved normal
+and build dependency graphs and enabled features for both supported Linux musl
+targets, relevant profiles and Agent build inputs. Service-only build commands
+are isolated in `scripts/build-linux-service.sh` and its smoke-check helper.
+When a change affects Agent inputs, refresh the marker in the same source PR
+using the pinned Rust toolchain and existing Release Please engine:
 
 ```sh
 export RELEASE_PLEASE_TEST_ROOT=/path/to/existing/release-please-regression
@@ -38,7 +40,7 @@ node scripts/agent-dependencies.mjs --write
 
 The existing CI version job verifies the marker; a stale marker blocks the PR
 rather than silently missing an Agent release. An unrelated dependency outside
-the Agent closure does not change it. The marker never includes runtime data,
+the Agent's resolved graphs does not change it. The marker never includes runtime data,
 credentials or a host path. Shared protocol and Agent build changes also count
 as Agent changes. CI still uses the actual Cargo lock and existing security and
 license checks for the entire workspace.
