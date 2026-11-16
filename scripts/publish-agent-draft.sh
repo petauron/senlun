@@ -27,6 +27,17 @@ test "$RELEASE_TAG" = "v$service_version"
 test "$AGENT_TAG" = "senlun-agent-v$agent_version"
 test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
 test "$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)" = "$RELEASE_SHA"
+object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" --jq .object)
+for _ in 1 2 3 4; do
+  type=$(printf '%s' "$object" | jq -r .type)
+  sha=$(printf '%s' "$object" | jq -r .sha)
+  printf '%s' "$sha" | grep -Eq '^[a-f0-9]{40}$'
+  if [ "$type" = commit ]; then break; fi
+  test "$type" = tag
+  object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq .object)
+done
+test "$type" = commit
+test "$sha" = "$RELEASE_SHA"
 test "$(gh release view "$AGENT_TAG" --json targetCommitish --jq .targetCommitish)" = "$RELEASE_SHA"
 test "$(gh release view "$AGENT_TAG" --json author --jq .author.login)" = 'github-actions[bot]'
 agent_draft=$(gh release view "$AGENT_TAG" --json isDraft --jq .isDraft)
