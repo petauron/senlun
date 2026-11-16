@@ -4,6 +4,15 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.0-alpha.67](https://github.com/petauron/senlun/compare/v0.1.0-alpha.66...v0.1.0-alpha.67) (2026-11-16)
+
+
+### Bug Fixes
+
+* **deps:** repair Agent and accessibility compatibility for dependency updates ([#235](https://github.com/petauron/senlun/issues/235)) ([7ce5ae4](https://github.com/petauron/senlun/commit/7ce5ae4381ab06b19b22719ccf31e894419035fb))
+* **security:** resolve vulnerable lint toolchain dependencies ([#238](https://github.com/petauron/senlun/issues/238)) ([179fe81](https://github.com/petauron/senlun/commit/179fe81d55c4d112bc59d90bb0b293223750f1c3))
+* **web:** use short Hong Kong region name ([6887706](https://github.com/petauron/senlun/commit/6887706b57879ef44e652851bdb8c5e6a6f0dcd2))
+
 ## [0.1.0-alpha.66](https://github.com/petauron/senlun/compare/v0.1.0-alpha.65...v0.1.0-alpha.66) (2026-11-15)
 
 
