@@ -67,6 +67,8 @@
     "vue-tsc": "^3.3.14"
   },
   "overrides": {
+    "katex@^0.16.0": "0.18.2",
+    "minimatch@^10.2.2": "11.0.1",
     "oxfmt": {
       "tinypool": "2.1.2"
     }
