@@ -20,13 +20,11 @@ pub(crate) async fn run(client: Client, target_client: Client, service_url: Url,
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         ticker.tick().await;
-        let Ok(response) = client
-            .get(endpoint.clone())
-            .query(&[("after", &cursor)])
-            .bearer_auth(&token)
-            .send()
-            .await
-        else {
+        let mut plan_url = endpoint.clone();
+        if !cursor.is_empty() {
+            plan_url.query_pairs_mut().append_pair("after", &cursor);
+        }
+        let Ok(response) = client.get(plan_url).bearer_auth(&token).send().await else {
             continue;
         };
         if !response.status().is_success() {

@@ -55,25 +55,47 @@ watch(() => props.nodeId, (nodeId, _, onCleanup) => {
     <p v-if="loadState !== 'ready'" role="status" class="text-sm text-muted-foreground">
       {{ loadState === 'loading' ? '正在加载…' : '暂时无法读取节点互测结果' }}
     </p>
-    <p v-else-if="!rows.length" class="text-sm text-muted-foreground">暂无其他节点</p>
+    <p v-else-if="!rows.length" class="text-sm text-muted-foreground">
+      暂无其他节点
+    </p>
     <div v-else class="overflow-x-auto">
       <table class="w-full text-left text-sm">
         <thead class="text-muted-foreground">
           <tr>
-            <th scope="col" class="p-2">对端节点</th>
-            <th scope="col" class="p-2">协议</th>
-            <th scope="col" class="p-2">地址族</th>
-            <th scope="col" class="p-2">延迟</th>
-            <th scope="col" class="p-2">状态</th>
+            <th scope="col" class="p-2">
+              对端节点
+            </th>
+            <th scope="col" class="p-2">
+              协议
+            </th>
+            <th scope="col" class="p-2">
+              地址族
+            </th>
+            <th scope="col" class="p-2">
+              延迟
+            </th>
+            <th scope="col" class="p-2">
+              状态
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="row in rows" :key="row.node_id" class="border-t border-border">
-            <th scope="row" class="p-2 font-medium break-all">{{ row.name }}</th>
-            <td class="p-2">{{ row.kind?.toUpperCase() ?? '—' }}</td>
-            <td class="p-2">{{ row.family ? `IPv${row.family}` : '—' }}</td>
-            <td class="p-2 whitespace-nowrap tabular-nums">{{ row.latency_ms !== null ? `${row.latency_ms} ms` : '—' }}</td>
-            <td class="p-2 whitespace-nowrap">{{ labels[row.status] }}</td>
+            <th scope="row" class="p-2 font-medium break-all">
+              {{ row.name }}
+            </th>
+            <td class="p-2">
+              {{ row.kind?.toUpperCase() ?? '—' }}
+            </td>
+            <td class="p-2">
+              {{ row.family ? `IPv${row.family}` : '—' }}
+            </td>
+            <td class="p-2 whitespace-nowrap tabular-nums">
+              {{ row.latency_ms !== null ? `${row.latency_ms} ms` : '—' }}
+            </td>
+            <td class="p-2 whitespace-nowrap">
+              {{ labels[row.status] }}
+            </td>
           </tr>
         </tbody>
       </table>

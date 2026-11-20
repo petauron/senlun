@@ -1,7 +1,5 @@
 <script lang="ts">
 import { createSharedComposable, useTimestamp } from '@vueuse/core'
-
-const usePeerClock = createSharedComposable(() => useTimestamp({ interval: 1000 }))
 </script>
 
 <script setup lang="ts">
@@ -14,6 +12,9 @@ import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
 import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
+
+const usePeerClock = createSharedComposable(() => useTimestamp({ interval: 1000 }))
+
 const open = ref(false)
 const now = usePeerClock()
 const bestPeer = computed(() => {
@@ -54,8 +55,12 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
         @click.stop
       >
         <DialogHeader class="relative isolate flex h-13 flex-row items-center overflow-hidden px-4">
-          <DialogTitle class="relative z-10 min-w-0 flex-1 truncate pr-8">{{ node.name }} 延迟 / {{ rateLabel }}</DialogTitle>
-          <DialogDescription class="sr-only">TCP 界面的“丢包”表示连接探测失败率，并非 ICMP 数据包丢失；HTTP 显示请求失败率。详情按所选时间范围统计。</DialogDescription>
+          <DialogTitle class="relative z-10 min-w-0 flex-1 truncate pr-8">
+            {{ node.name }} 延迟 / {{ rateLabel }}
+          </DialogTitle>
+          <DialogDescription class="sr-only">
+            TCP 界面的“丢包”表示连接探测失败率，并非 ICMP 数据包丢失；HTTP 显示请求失败率。详情按所选时间范围统计。
+          </DialogDescription>
           <div aria-hidden="true" class="pointer-events-none absolute inset-0 bg-slate-50 dark:bg-slate-900/50">
             <div class="absolute top-0 left-1/2 -ml-152 h-100 w-325 dark:mask-[linear-gradient(white,transparent)]">
               <div class="absolute inset-0 bg-linear-to-r from-emerald-500 to-lime-300 mask-[radial-gradient(farthest-side_at_top,white,transparent)] opacity-40 dark:from-emerald-500/30 dark:to-lime-300/30 dark:opacity-100">

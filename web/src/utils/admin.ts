@@ -197,7 +197,11 @@ export function nodeMetadata(node: ManagedNode): ManagedNode {
     public_remark,
     ipv4: ipv4 ?? '',
     ipv6: ipv6 ?? '',
-    ...(peer_probe ? { peer_probe: { ...peer_probe } } : {}),
+    ...(peer_probe
+      ? {
+          peer_probe: { ...peer_probe },
+        }
+      : {}),
     price,
     currency,
     billing_cycle_days,
