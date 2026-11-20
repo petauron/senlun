@@ -94,10 +94,12 @@ to ICMP, choose an explicit address family, or disable incoming measurements
 in the editor. ICMP requires the Agent account to be allowed to use the system
 ping command. No additional listening service is needed.
 
-Each direction is an independent measurement. Agents attempt up to four peers
-every 30 seconds, one at a time with a three-second deadline. This rotation
-uses its own schedule and does not take slots from configured carrier probes.
-The Service keeps only the latest result for up to 64 destinations per source
+Each direction is an independent measurement. Agents fetch up to 32 targets
+per page and run at most four peer probes concurrently, with a three-second
+deadline per probe. Each slot takes the next queued target as soon as it
+becomes free. The Agent processes successive pages before waiting 30 seconds
+for the next full round. Carrier probes use their own schedule.
+The Service keeps only the latest result for up to 99 destinations per source
 in memory. Results expire from the dashboard after five minutes and the cache
 repopulates after Service restart. Dashboard reads expose names, protocol,
 address family and results; only the assigned Agents receive target addresses.

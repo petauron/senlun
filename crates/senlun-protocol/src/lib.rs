@@ -198,7 +198,7 @@ pub struct SnapshotResponse {
 }
 
 pub const PEER_PROBE_SCHEMA_VERSION: u16 = 1;
-pub const MAX_PEER_PROBE_BATCH: usize = 4;
+pub const MAX_PEER_PROBE_BATCH: usize = 32;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +224,7 @@ pub struct PeerProbePlan {
     pub schema_version: u16,
     pub issued_at_unix_ms: u64,
     pub targets: Vec<PeerProbeTarget>,
+    pub next_after: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -26,7 +26,7 @@ use crate::{
 const MAX_PLAN_AGE_MS: u64 = 120_000;
 const FRESHNESS_MS: u64 = 300_000;
 const RETENTION_MS: u64 = 1_800_000;
-const MAX_RESULTS_PER_SOURCE: u32 = 64;
+const MAX_RESULTS_PER_SOURCE: u32 = crate::DEFAULT_MAX_NODES - 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -225,32 +225,22 @@ impl Storage {
         let source = authenticated_node(&db, token)?;
         let peers = directory(&db, now, offline)?;
         let mut targets = Vec::new();
+        let mut next_after = None;
         if peers.get(&source).is_some_and(|node| node.online) {
-            let eligible = peers
+            let mut eligible = peers
                 .iter()
-                .filter(|(id, peer)| *id != &source && peer.online)
-                .filter_map(|(id, peer)| peer.target.as_ref().map(|target| (id.as_str(), target)));
-            targets.extend(
-                eligible
-                    .clone()
-                    .filter(|(id, _)| *id > after)
-                    .map(|(_, target)| target)
-                    .take(MAX_PEER_PROBE_BATCH)
-                    .cloned(),
-            );
-            if targets.is_empty() && !after.is_empty() {
-                targets.extend(
-                    eligible
-                        .map(|(_, target)| target)
-                        .take(MAX_PEER_PROBE_BATCH)
-                        .cloned(),
-                );
+                .filter(|(id, peer)| id.as_str() > after && *id != &source && peer.online)
+                .filter_map(|(_, peer)| peer.target.as_ref());
+            targets.extend(eligible.by_ref().take(MAX_PEER_PROBE_BATCH).cloned());
+            if eligible.next().is_some() {
+                next_after = targets.last().map(|target| target.node_id.clone());
             }
         }
         Ok(PeerProbePlan {
             schema_version: PEER_PROBE_SCHEMA_VERSION,
             issued_at_unix_ms: now,
             targets,
+            next_after,
         })
     }
 
@@ -642,19 +632,22 @@ mod tests {
                 .iter()
                 .collect::<Vec<_>>(),
         );
+        let cursor = first.next_after.as_deref().unwrap();
+        assert_eq!(cursor, first.targets[MAX_PEER_PROBE_BATCH - 1].node_id);
         let second = storage
-            .peer_probe_plan(
-                &source.agent_token,
-                &first.targets[MAX_PEER_PROBE_BATCH - 1].node_id,
-                now,
-                60,
-            )
+            .peer_probe_plan(&source.agent_token, cursor, now, 60)
             .unwrap();
         assert_eq!(second.targets.len(), 1);
         assert_eq!(second.targets[0].node_id, target_ids[MAX_PEER_PROBE_BATCH]);
+        assert_eq!(second.next_after, None);
+        let exhausted = storage
+            .peer_probe_plan(&source.agent_token, &second.targets[0].node_id, now, 60)
+            .unwrap();
+        assert_eq!(exhausted.targets, Vec::<PeerProbeTarget>::new());
+        assert_eq!(exhausted.next_after, None);
         assert_eq!(
             storage
-                .peer_probe_plan(&source.agent_token, &second.targets[0].node_id, now, 60)
+                .peer_probe_plan(&source.agent_token, "", now, 60)
                 .unwrap()
                 .targets,
             first.targets
