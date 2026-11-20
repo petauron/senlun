@@ -1,6 +1,10 @@
 //! Latest bounded, directional latency for administrator-registered node addresses.
 
-use std::{collections::BTreeMap, net::IpAddr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    net::IpAddr,
+    ops::Bound::{Excluded, Unbounded},
+};
 
 use axum::{
     Json, Router,
@@ -10,8 +14,8 @@ use axum::{
 };
 use rusqlite::{Connection, Row, params, types::Type};
 use senlun_protocol::{
-    MAX_PEER_PROBE_BATCH, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch, PeerProbeKind, PeerProbePlan,
-    PeerProbeStatus, PeerProbeTarget,
+    MAX_PEER_PROBE_BATCH, MAX_PEER_PROBE_TARGETS, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch,
+    PeerProbeKind, PeerProbePlan, PeerProbeStatus, PeerProbeTarget,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -23,7 +27,9 @@ use crate::{
     storage::{Storage, StorageError},
 };
 
-const MAX_PLAN_AGE_MS: u64 = 120_000;
+// A round of 99 dual-stack targets can take about 150 seconds at four
+// concurrent targets, leaving the rest of this window for transport.
+const MAX_PLAN_AGE_MS: u64 = 180_000;
 const FRESHNESS_MS: u64 = 300_000;
 const RETENTION_MS: u64 = 1_800_000;
 
@@ -99,8 +105,8 @@ async fn details(
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<(), StorageError> {
-    // A full mesh can have one row per directed pair of enrolled nodes. Let
-    // SQLite spill beyond the page cache into a file it deletes on close.
+    // Each source can cache up to MAX_PEER_PROBE_TARGETS rows. Let SQLite
+    // spill beyond the page cache into a file it deletes on close.
     db.execute_batch(
         "PRAGMA temp_store=FILE;
          ATTACH DATABASE '' AS peer_cache;
@@ -117,18 +123,21 @@ pub(crate) fn initialize(db: &Connection) -> Result<(), StorageError> {
          ) WITHOUT ROWID;
          CREATE INDEX peer_cache.peer_latencies_age ON peer_latencies(issued_at_ms);
          CREATE INDEX peer_cache.peer_latencies_target ON peer_latencies(target_id);
-         CREATE INDEX peer_cache.peer_latencies_ready ON peer_latencies(source_id,latency_ms)
+         CREATE INDEX peer_cache.peer_latencies_ready ON peer_latencies(source_id,issued_at_ms)
              WHERE status='ready';",
     )?;
     Ok(())
 }
 
-pub(crate) fn invalidate_node(db: &Connection, id: &str) -> Result<(), StorageError> {
-    db.execute(
+pub(crate) fn invalidate_node(db: &Connection, id: &str) {
+    // Call after committing node changes. A cache I/O failure must not roll
+    // back a control decision, and readers recheck current node metadata.
+    if let Err(error) = db.execute(
         "DELETE FROM peer_cache.peer_latencies WHERE source_id=?1 OR target_id=?1",
         [id],
-    )?;
-    Ok(())
+    ) {
+        tracing::warn!(%error, "could not invalidate peer latency cache");
+    }
 }
 
 pub(crate) fn prune(db: &Connection, now: u64) -> Result<(), StorageError> {
@@ -146,6 +155,19 @@ pub(crate) struct PeerNode {
 }
 
 pub(crate) type PeerDirectory = BTreeMap<String, PeerNode>;
+
+fn assigned_targets<'a>(peers: &'a PeerDirectory, source: &str) -> BTreeSet<&'a str> {
+    // Start after the source ID and wrap around to distribute selection across
+    // larger sites. Keep offline targets assigned so pages stay stable as they
+    // go online and offline.
+    peers
+        .range::<str, _>((Excluded(source), Unbounded))
+        .chain(peers.range::<str, _>((Unbounded, Excluded(source))))
+        .filter(|(_, peer)| peer.target.is_some())
+        .take(MAX_PEER_PROBE_TARGETS)
+        .map(|(id, _)| id.as_str())
+        .collect()
+}
 
 fn configured_target(
     id: &str,
@@ -242,10 +264,13 @@ impl Storage {
         let mut targets = Vec::new();
         let mut next_after = None;
         if peers.get(&source).is_some_and(|node| node.online) {
-            let mut eligible = peers
-                .iter()
-                .filter(|(id, peer)| id.as_str() > after && *id != &source && peer.online)
-                .filter_map(|(_, peer)| peer.target.as_ref());
+            let mut eligible = assigned_targets(&peers, &source)
+                .into_iter()
+                .filter(|id| *id > after)
+                .filter_map(|id| {
+                    let peer = peers.get(id)?;
+                    peer.target.as_ref().filter(|_| peer.online)
+                });
             targets.extend(eligible.by_ref().take(MAX_PEER_PROBE_BATCH).cloned());
             if eligible.next().is_some() {
                 next_after = targets.last().map(|target| target.node_id.clone());
@@ -280,6 +305,16 @@ impl Storage {
         if !peers.get(&source).is_some_and(|node| node.online) {
             return Ok(());
         }
+        let assigned = assigned_targets(&peers, &source);
+        let assignments = serde_json::to_string(&assigned)
+            .map_err(|_| StorageError::InvalidInput("could not encode assigned peer targets"))?;
+        // A configuration change can replace targets between reports. Remove
+        // their old rows before upserting results for the current assignment.
+        tx.execute(
+            "DELETE FROM peer_cache.peer_latencies WHERE source_id=?1
+             AND target_id NOT IN (SELECT value FROM json_each(?2))",
+            params![source, assignments],
+        )?;
         for sample in batch.samples {
             if sample
                 .latency_ms
@@ -291,14 +326,16 @@ impl Storage {
             }
             // An address/settings change, deletion or offline transition can
             // invalidate one result while other targets on its page remain valid.
-            if !peers.get(&sample.node_id).is_some_and(|node| {
-                node.online
-                    && node.accepts_address(sample.address)
-                    && node
-                        .target
-                        .as_ref()
-                        .is_some_and(|target| target.kind == sample.kind)
-            }) {
+            if !assigned.contains(sample.node_id.as_str())
+                || !peers.get(&sample.node_id).is_some_and(|node| {
+                    node.online
+                        && node.accepts_address(sample.address)
+                        && node
+                            .target
+                            .as_ref()
+                            .is_some_and(|target| target.kind == sample.kind)
+                })
+            {
                 continue;
             }
             let status = match sample.status {
@@ -329,10 +366,14 @@ impl Storage {
         let db = self.connection()?;
         let peers = directory(&db, now, offline)?;
         let source = peers.get(id).ok_or(StorageError::NotFound)?;
+        let assigned = assigned_targets(&peers, id);
         let samples = samples(&db, id)?;
         let mut result: Vec<_> = peers
             .iter()
-            .filter(|(target, _)| target.as_str() != id)
+            .filter(|(target, peer)| {
+                target.as_str() != id
+                    && (peer.target.is_none() || assigned.contains(target.as_str()))
+            })
             .map(|(target, peer)| latency(target, peer, source.online, samples.get(target), now))
             .collect();
         result.sort_by(compare_latency);
@@ -454,19 +495,18 @@ pub(crate) fn best(
     let mut statement = db.prepare_cached(
         "SELECT target_id,address,kind,status,latency_ms,issued_at_ms
          FROM peer_cache.peer_latencies
-         WHERE source_id=?1 AND status='ready' AND issued_at_ms>?2 ORDER BY latency_ms",
+         WHERE source_id=?1 AND status='ready' AND issued_at_ms>?2",
     )?;
     let mut rows = statement.query(params![id, integer(now) - integer(FRESHNESS_MS)])?;
+    let mut assigned = None;
     let mut best: Option<PeerLatency> = None;
     while let Some(row) = rows.next()? {
-        let sample = read_sample(row)?;
-        if let Some(best) = &best
-            && sample.latency_ms > best.latency_ms
-        {
-            break;
-        }
+        let assigned = assigned.get_or_insert_with(|| assigned_targets(peers, id));
         let target: String = row.get(0)?;
-        if let Some(peer) = peers.get(&target) {
+        if assigned.contains(target.as_str())
+            && let Some(peer) = peers.get(&target)
+        {
+            let sample = read_sample(row)?;
             let result = latency(&target, peer, true, Some(&sample), now);
             if result.latency_ms.is_some()
                 && best
@@ -599,29 +639,47 @@ mod tests {
         let fallback = planned.fallback_address.unwrap();
         assert!(fallback.is_ipv6());
         planned.address = fallback;
-        report_sample(&storage, &source, planned.clone(), now, now, Some(11.0));
+        let received = now + 150_000;
+        heartbeat(&storage, &source, received);
+        heartbeat(&storage, &target, received);
+        report_sample(
+            &storage,
+            &source,
+            planned.clone(),
+            now,
+            received,
+            Some(11.0),
+        );
 
         planned.address = "2606:4700:4700::1001".parse().unwrap();
-        report_sample(&storage, &source, planned, now + 1, now + 1, Some(1.0));
+        report_sample(
+            &storage,
+            &source,
+            planned,
+            received + 1,
+            received + 1,
+            Some(1.0),
+        );
         let rows = storage
-            .peer_latencies(&source.node_id, now + 1, 60)
+            .peer_latencies(&source.node_id, received + 1, 60)
             .unwrap();
         assert_eq!(rows[0].family, Some(6));
         assert_eq!(rows[0].latency_ms, Some(11.0));
         let db = storage.connection().unwrap();
-        let peers = directory(&db, now + 1, 60).unwrap();
-        let lowest = best(&db, &peers, &source.node_id, now + 1)
+        let peers = directory(&db, received + 1, 60).unwrap();
+        let lowest = best(&db, &peers, &source.node_id, received + 1)
             .unwrap()
             .unwrap();
         assert_eq!(lowest.family, Some(6));
     }
 
     #[test]
-    fn keeps_all_fresh_results_for_more_than_100_nodes() {
-        const TARGETS: usize = 101;
+    fn caps_plans_and_results_at_99_assigned_targets() {
+        const TARGETS: usize = MAX_PEER_PROBE_TARGETS + 2;
         let (_dir, storage, source) = fixture();
         let now = unix_time_ms().unwrap();
         heartbeat(&storage, &source, now);
+        let mut target_ids = BTreeSet::new();
         for _ in 0..TARGETS {
             let target = enroll(&storage, now);
             configure(
@@ -631,6 +689,7 @@ mod tests {
                 PeerAddressFamily::Ipv4,
                 now,
             );
+            target_ids.insert(target.node_id);
         }
         let mut plan = storage
             .peer_probe_plan(&source.agent_token, "", now, 60)
@@ -638,6 +697,9 @@ mod tests {
         let fastest = plan.targets[0].node_id.clone();
         let mut issued = now;
         loop {
+            for target in &plan.targets {
+                assert!(target_ids.remove(&target.node_id));
+            }
             let samples = plan
                 .targets
                 .into_iter()
@@ -667,13 +729,69 @@ mod tests {
                 .peer_probe_plan(&source.agent_token, &cursor, issued, 60)
                 .unwrap();
         }
+        assert_eq!(target_ids.len(), TARGETS - MAX_PEER_PROBE_TARGETS);
+        let unassigned = {
+            let db = storage.connection().unwrap();
+            let peers = directory(&db, issued, 60).unwrap();
+            let target = target_ids.first().unwrap();
+            peers[target].target.clone().unwrap()
+        };
+        report_sample(
+            &storage,
+            &source,
+            unassigned,
+            issued + 1,
+            issued + 1,
+            Some(0.0),
+        );
         let rows = storage.peer_latencies(&source.node_id, issued, 60).unwrap();
-        assert_eq!(rows.len(), TARGETS);
+        assert_eq!(rows.len(), MAX_PEER_PROBE_TARGETS);
         assert!(rows.iter().all(|row| row.status == "ready"));
         let db = storage.connection().unwrap();
+        assert_eq!(
+            samples(&db, &source.node_id).unwrap().len(),
+            MAX_PEER_PROBE_TARGETS
+        );
         let peers = directory(&db, issued, 60).unwrap();
         let lowest = best(&db, &peers, &source.node_id, issued).unwrap().unwrap();
         assert_eq!(lowest.node_id, fastest);
+    }
+
+    #[test]
+    fn node_changes_and_maintenance_survive_unavailable_peer_cache() {
+        let (_dir, storage, source) = fixture();
+        let now = unix_time_ms().unwrap();
+        let target = enroll(&storage, now);
+        configure(
+            &storage,
+            &target,
+            PeerProbeKind::Tcp,
+            PeerAddressFamily::Auto,
+            now,
+        );
+        storage
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TABLE peer_cache.peer_latencies")
+            .unwrap();
+
+        configure(
+            &storage,
+            &target,
+            PeerProbeKind::Icmp,
+            PeerAddressFamily::Ipv6,
+            now,
+        );
+        storage.revoke_node(&source.node_id, now).unwrap();
+        storage.delete_node(&target.node_id, now).unwrap();
+        storage.prune_expired(now, 7).unwrap();
+        let db = storage.connection().unwrap();
+        for node in [&source, &target] {
+            assert!(matches!(
+                authenticated_node(&db, &node.agent_token),
+                Err(StorageError::Unauthorized)
+            ));
+        }
     }
 
     #[test]

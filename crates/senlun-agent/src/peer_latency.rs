@@ -9,16 +9,16 @@ use std::{
 
 use reqwest::{Client, Url};
 use senlun_protocol::{
-    MAX_PEER_PROBE_BATCH, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch, PeerProbeKind, PeerProbePlan,
-    PeerProbeSample, PeerProbeStatus, PeerProbeTarget, ProbeKind, ProbeTask,
+    MAX_PEER_PROBE_BATCH, MAX_PEER_PROBE_TARGETS, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch,
+    PeerProbeKind, PeerProbePlan, PeerProbeSample, PeerProbeStatus, PeerProbeTarget, ProbeKind,
+    ProbeTask,
 };
 
 use tokio::{sync::Semaphore, task::JoinSet};
 
 const ROUND_PAUSE: Duration = Duration::from_secs(30);
 const MAX_CONCURRENT_PEERS: usize = 4;
-// Service enrollment supports up to 1,000 active nodes.
-const MAX_ROUND_PAGES: usize = 1_000_usize.div_ceil(MAX_PEER_PROBE_BATCH);
+const MAX_ROUND_PAGES: usize = MAX_PEER_PROBE_TARGETS.div_ceil(MAX_PEER_PROBE_BATCH);
 const MAX_PLAN_BYTES: usize = 8 * 1024;
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 
@@ -33,32 +33,74 @@ pub(crate) async fn run(client: Client, target_client: Client, service_url: Url,
 }
 
 async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, token: &str) {
+    let target_client = target_client.clone();
+    let (report_client, report_url, report_token) =
+        (client.clone(), endpoint.clone(), token.to_owned());
+    run_round_with(
+        |after| fetch_plan(client, endpoint, token, after),
+        move |target| {
+            let client = target_client.clone();
+            async move {
+                measure(target, |kind, address| {
+                    measure_address(&client, kind, address)
+                })
+                .await
+            }
+        },
+        move |batch| {
+            let request = report_client
+                .post(report_url.clone())
+                .bearer_auth(&report_token)
+                .json(&batch);
+            async move {
+                let _ = request.send().await;
+            }
+        },
+    )
+    .await;
+}
+
+async fn fetch_plan(
+    client: &Client,
+    endpoint: &Url,
+    token: &str,
+    after: String,
+) -> Option<PeerProbePlan> {
+    let mut plan_url = endpoint.clone();
+    if !after.is_empty() {
+        plan_url.query_pairs_mut().append_pair("after", &after);
+    }
+    let response = client.get(plan_url).bearer_auth(token).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    crate::read_json_with_limit(response, MAX_PLAN_BYTES)
+        .await
+        .ok()
+}
+
+async fn run_round_with<Fetch, Probe, Report>(
+    mut fetch: impl FnMut(String) -> Fetch,
+    probe: impl FnMut(PeerProbeTarget) -> Probe + Clone + Send + 'static,
+    report: impl FnMut(PeerProbeBatch) -> Report + Clone + Send + 'static,
+) where
+    Fetch: Future<Output = Option<PeerProbePlan>>,
+    Probe: Future<Output = PeerProbeSample> + Send + 'static,
+    Report: Future<Output = ()> + Send + 'static,
+{
     let mut after = String::new();
+    let mut remaining = MAX_PEER_PROBE_TARGETS;
     let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PEERS));
     let mut pages = JoinSet::new();
+    // At most four pages and 99 targets can be outstanding. Fetch subsequent
+    // pages while earlier pages measure and report through the shared slots.
     for _ in 0..MAX_ROUND_PAGES {
-        // Keep the current page and one prefetched page in flight. Both
-        // queues share the same slots, including any address fallback.
-        if pages.len() == 2 {
-            let _ = pages.join_next().await;
-        }
-        let mut plan_url = endpoint.clone();
-        if !after.is_empty() {
-            plan_url.query_pairs_mut().append_pair("after", &after);
-        }
-        let Ok(response) = client.get(plan_url).bearer_auth(token).send().await else {
-            break;
-        };
-        if !response.status().is_success() {
-            break;
-        }
-        let Ok(plan) = crate::read_json_with_limit::<PeerProbePlan>(response, MAX_PLAN_BYTES).await
-        else {
+        let Some(plan) = fetch(after.clone()).await else {
             break;
         };
         if plan.schema_version != PEER_PROBE_SCHEMA_VERSION
             || plan.targets.is_empty()
-            || plan.targets.len() > MAX_PEER_PROBE_BATCH
+            || plan.targets.len() > remaining.min(MAX_PEER_PROBE_BATCH)
             || plan.next_after.as_ref().is_some_and(|cursor| {
                 cursor <= &after
                     || plan
@@ -69,33 +111,24 @@ async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, toke
         {
             break;
         }
-        let (client, endpoint, token) = (client.clone(), endpoint.clone(), token.to_owned());
-        let target_client = target_client.clone();
+        remaining -= plan.targets.len();
+        let probe = probe.clone();
+        let mut report = report.clone();
         let slots = Arc::clone(&slots);
         pages.spawn(async move {
-            let samples = probe_queue(plan.targets, slots, |target| {
-                let client = target_client.clone();
-                async move {
-                    measure(target, |kind, address| {
-                        measure_address(&client, kind, address)
-                    })
-                    .await
-                }
-            })
-            .await;
+            let samples = probe_queue(plan.targets, slots, probe).await;
             if !samples.is_empty() {
-                let _ = client
-                    .post(endpoint)
-                    .bearer_auth(token)
-                    .json(&PeerProbeBatch {
-                        schema_version: PEER_PROBE_SCHEMA_VERSION,
-                        issued_at_unix_ms: plan.issued_at_unix_ms,
-                        samples,
-                    })
-                    .send()
-                    .await;
+                report(PeerProbeBatch {
+                    schema_version: PEER_PROBE_SCHEMA_VERSION,
+                    issued_at_unix_ms: plan.issued_at_unix_ms,
+                    samples,
+                })
+                .await;
             }
         });
+        if remaining == 0 {
+            break;
+        }
         let Some(cursor) = plan.next_after else {
             break;
         };
@@ -217,6 +250,68 @@ mod tests {
     #[tokio::test]
     async fn free_slot_starts_peer_on_next_page_before_first_page_finishes() {
         assert_queue_refills(true).await;
+    }
+
+    #[tokio::test]
+    async fn slow_reports_do_not_block_later_pages() {
+        let (measuring, mut measured) = mpsc::channel(MAX_ROUND_PAGES);
+        let (reporting, mut reported) = mpsc::channel(MAX_ROUND_PAGES);
+        let allow_reports = Arc::new(Semaphore::new(0));
+        let round = tokio::spawn(run_round_with(
+            |after| {
+                let index = after.parse::<usize>().unwrap_or(0) + 1;
+                ready(Some(PeerProbePlan {
+                    schema_version: PEER_PROBE_SCHEMA_VERSION,
+                    issued_at_unix_ms: 1,
+                    targets: vec![target(index)],
+                    next_after: (index < MAX_ROUND_PAGES).then(|| index.to_string()),
+                }))
+            },
+            move |target| {
+                let measuring = measuring.clone();
+                async move {
+                    measuring.send(target.node_id.clone()).await.unwrap();
+                    measure(target, |_, _| ready((PeerProbeStatus::Ready, Some(1.0)))).await
+                }
+            },
+            {
+                let allow_reports = Arc::clone(&allow_reports);
+                move |batch| {
+                    let reporting = reporting.clone();
+                    let allow_reports = Arc::clone(&allow_reports);
+                    async move {
+                        reporting
+                            .send(batch.samples[0].node_id.clone())
+                            .await
+                            .unwrap();
+                        allow_reports.acquire().await.unwrap().forget();
+                    }
+                }
+            },
+        ));
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut measurements = Vec::new();
+            let mut reports = Vec::new();
+            for _ in 0..MAX_ROUND_PAGES {
+                measurements.push(measured.recv().await.unwrap());
+                reports.push(reported.recv().await.unwrap());
+            }
+            measurements.sort_unstable();
+            reports.sort_unstable();
+            assert_eq!(
+                measurements,
+                (1..=MAX_ROUND_PAGES)
+                    .map(|id| id.to_string())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(reports, measurements);
+            assert!(!round.is_finished());
+            allow_reports.add_permits(MAX_ROUND_PAGES);
+            round.await.unwrap();
+        })
+        .await
+        .expect("peer rotation waited for a slow report");
     }
 
     async fn assert_queue_refills(two_pages: bool) {

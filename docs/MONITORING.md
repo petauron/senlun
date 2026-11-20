@@ -89,20 +89,25 @@ alerts cover an absent Agent separately.
 
 Agents rotate through visible, online peers using only the public IPv4/IPv6
 addresses registered in the node editor. The default is a TCP connection to
-port 443, with IPv4 preferred when both families are registered. Set a target
-to ICMP, choose an explicit address family, or disable incoming measurements
-in the editor. ICMP requires the Agent account to be allowed to use the system
-ping command. No additional listening service is needed.
+port 443. Automatic mode tries registered IPv4 first and falls back to
+registered IPv6 if IPv4 fails. Set a target to ICMP, choose an explicit
+address family, or disable incoming measurements in the editor. ICMP requires
+the Agent account to be allowed to use the system ping command. No additional
+listening service is needed.
 
-Each direction is an independent measurement. Agents fetch up to 32 targets
-per page and run at most four peer probes concurrently, with a three-second
-deadline per probe. Each slot takes the next queued target as soon as it
-becomes free. The Agent processes successive pages before waiting 30 seconds
-for the next full round. Carrier probes use their own schedule.
-The Service keeps only the latest result for up to 99 destinations per source
-in memory. Results expire from the dashboard after five minutes and the cache
-repopulates after Service restart. Dashboard reads expose names, protocol,
-address family and results; only the assigned Agents receive target addresses.
+Each direction is an independent measurement. The Service assigns each source
+up to 99 configured peers. Above that limit, assignments start after the
+source's node ID and wrap around the list. Offline peers keep their assignment
+and are skipped until they reconnect. Agents prefetch pages of up to 32 targets
+and share four concurrent probe slots, with three seconds allowed per address.
+They can fetch and measure the next page while reports are in flight. The
+30-second wait starts after the round completes. Carrier probes use their own
+schedule.
+
+The Service keeps the latest result per assigned peer in a temporary SQLite
+cache. Results count as fresh for five minutes and the cache repopulates after
+Service restart. Dashboard reads expose names, protocol, measured address
+family and results. Agents get target addresses for their assigned peers.
 
 A node card shows its lowest current successful result. Node details list peer
 results in latency order and mark offline, unconfigured, pending, failed and

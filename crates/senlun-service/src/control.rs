@@ -501,14 +501,12 @@ impl Storage {
         if options.peer_probe.is_none() {
             options.peer_probe = previous.as_ref().and_then(|old| old.peer_probe);
         }
-        if previous.as_ref().is_some_and(|old| {
+        let invalidate_peer_latency = previous.as_ref().is_some_and(|old| {
             old.hidden != options.hidden
                 || old.ipv4 != options.ipv4
                 || old.ipv6 != options.ipv6
                 || old.peer_probe.unwrap_or_default() != options.peer_probe.unwrap_or_default()
-        }) {
-            crate::peer_latency::invalidate_node(&tx, id)?;
-        }
+        });
         // Route reports are read-only metadata here; only an authenticated,
         // matching one-shot result may replace them. Preserve them on unrelated editor saves.
         options.return_routes = previous
@@ -539,6 +537,9 @@ impl Storage {
         tx.execute("INSERT INTO node_options(node_id,data) VALUES(?1,?2) ON CONFLICT(node_id) DO UPDATE SET data=excluded.data",params![id,encode(options)?])?;
         configuration_audit(&tx, "node.metadata.update", id)?;
         tx.commit()?;
+        if invalidate_peer_latency {
+            crate::peer_latency::invalidate_node(&db, id);
+        }
         Ok(())
     }
 

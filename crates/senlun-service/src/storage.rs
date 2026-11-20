@@ -419,9 +419,9 @@ impl Storage {
         if changed == 0 {
             return Err(StorageError::NotFound);
         }
-        crate::peer_latency::invalidate_node(&transaction, node_id)?;
         insert_audit_transaction(&transaction, now_ms, "node.revoke", node_id)?;
         transaction.commit()?;
+        crate::peer_latency::invalidate_node(&connection, node_id);
         Ok(())
     }
 
@@ -433,9 +433,9 @@ impl Storage {
         if changed == 0 {
             return Err(StorageError::NotFound);
         }
-        crate::peer_latency::invalidate_node(&transaction, node_id)?;
         insert_audit_transaction(&transaction, now_ms, "node.delete", node_id)?;
         transaction.commit()?;
+        crate::peer_latency::invalidate_node(&connection, node_id);
         // Control-plane deletion is durable first. Startup retries interrupted
         // metric cleanup, since WAL commits are not atomic across both files.
         metrics::delete_node(&mut connection, node_id)?;
@@ -476,7 +476,6 @@ impl Storage {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let cutoff = to_i64(now_ms.saturating_sub(u64::from(retention_days) * 86_400_000))?;
-        crate::peer_latency::prune(&transaction, now_ms)?;
         let hot_snapshots = transaction.execute(
             "DELETE FROM hot.snapshots WHERE received_at_ms<?1",
             [cutoff],
@@ -491,6 +490,9 @@ impl Storage {
             (SELECT id FROM probe_minutes WHERE bucket_ms<=?1-60000 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
         rollups::flush(&transaction, now_ms, false)?;
         transaction.commit()?;
+        if let Err(error) = crate::peer_latency::prune(&connection, now_ms) {
+            tracing::warn!(%error, "could not prune peer latency cache");
+        }
         Ok(removed
             .saturating_add(probe_removed)
             .saturating_add(hot_snapshots)

@@ -199,6 +199,7 @@ pub struct SnapshotResponse {
 
 pub const PEER_PROBE_SCHEMA_VERSION: u16 = 1;
 pub const MAX_PEER_PROBE_BATCH: usize = 32;
+pub const MAX_PEER_PROBE_TARGETS: usize = 99;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

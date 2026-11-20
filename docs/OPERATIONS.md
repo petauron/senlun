@@ -273,9 +273,7 @@ Take a backup before manually deleting preserved paths under `/var/lib/senlun`, 
 
 ## Capacity and metric selection
 
-Node-to-node latency uses up to four simultaneous targets per Agent. The Agent prefetches one page of up to 32 targets and waits 30 seconds after completing the round. In automatic address mode, it tries the registered IPv4 address first and falls back to the registered IPv6 address if IPv4 fails. The details panel shows the address family used for the result.
-
-The Service keeps the latest result for each directed pair of enrolled nodes. Results count as fresh for five minutes and become eligible for pruning after 30 minutes. The cache uses a 1 MiB SQLite page cache and can spill to temporary disk space. A Service restart clears it until Agents report again.
+The node-to-node latency cache holds up to 99 latest results per source node. Results count as fresh for five minutes and become eligible for pruning after 30 minutes. The cache uses a 1 MiB SQLite page cache and can spill to temporary disk space. A Service restart clears it until Agents report again.
 
 `SENLUN_RETENTION_DAYS`, `SENLUN_MAX_NODES`, and `SENLUN_MAX_DATABASE_BYTES` form hard Service bounds. The defaults are 7 days, 100 active nodes, and **2 GiB per database file** (up to 4 GiB across the pair, excluding WAL files, backups and migration scratch space). The size limit is checked and enforced independently on both files. Expired history is removed in bounded batches at startup and by hourly maintenance even without Agents. A failed write is not acknowledged; Agents resume reporting with fresh samples on later intervals when storage is available. The Service also limits request concurrency, request bodies, history responses, its statement cache (32 entries), and SQLite page caches (1 MiB control + 3 MiB metrics; authentication has its own existing 1 MiB cache). Monitor filesystem free space independently and alert before limits are reached.
 
