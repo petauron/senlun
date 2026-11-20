@@ -1,6 +1,11 @@
 //! Work through each peer queue independently of the carrier probes.
 
-use std::{future::Future, net::SocketAddr, time::Duration};
+use std::{
+    future::Future,
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+    time::Duration,
+};
 
 use reqwest::{Client, Url};
 use senlun_protocol::{
@@ -8,7 +13,7 @@ use senlun_protocol::{
     PeerProbeSample, PeerProbeStatus, PeerProbeTarget, ProbeKind, ProbeTask,
 };
 
-use tokio::task::JoinSet;
+use tokio::{sync::Semaphore, task::JoinSet};
 
 const ROUND_PAUSE: Duration = Duration::from_secs(30);
 const MAX_CONCURRENT_PEERS: usize = 4;
@@ -29,8 +34,14 @@ pub(crate) async fn run(client: Client, target_client: Client, service_url: Url,
 
 async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, token: &str) {
     let mut after = String::new();
-    let mut delivery = JoinSet::new();
+    let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PEERS));
+    let mut pages = JoinSet::new();
     for _ in 0..MAX_ROUND_PAGES {
+        // Keep the current page and one prefetched page in flight. Both
+        // queues share the same slots, including any address fallback.
+        if pages.len() == 2 {
+            let _ = pages.join_next().await;
+        }
         let mut plan_url = endpoint.clone();
         if !after.is_empty() {
             plan_url.query_pairs_mut().append_pair("after", &after);
@@ -58,17 +69,21 @@ async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, toke
         {
             break;
         }
-        let samples = probe_queue(plan.targets, |target| {
-            let client = target_client.clone();
-            async move { measure(&client, target).await }
-        })
-        .await;
-        if !samples.is_empty() {
-            // Overlap one report with the next page. Bound pending results
-            // while a slow Service processes the previous report.
-            let _ = delivery.join_next().await;
-            let (client, endpoint, token) = (client.clone(), endpoint.clone(), token.to_owned());
-            delivery.spawn(async move {
+        let (client, endpoint, token) = (client.clone(), endpoint.clone(), token.to_owned());
+        let target_client = target_client.clone();
+        let slots = Arc::clone(&slots);
+        pages.spawn(async move {
+            let samples = probe_queue(plan.targets, slots, |target| {
+                let client = target_client.clone();
+                async move {
+                    measure(target, |kind, address| {
+                        measure_address(&client, kind, address)
+                    })
+                    .await
+                }
+            })
+            .await;
+            if !samples.is_empty() {
                 let _ = client
                     .post(endpoint)
                     .bearer_auth(token)
@@ -79,18 +94,19 @@ async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, toke
                     })
                     .send()
                     .await;
-            });
-        }
+            }
+        });
         let Some(cursor) = plan.next_after else {
             break;
         };
         after = cursor;
     }
-    let _ = delivery.join_next().await;
+    while pages.join_next().await.is_some() {}
 }
 
 async fn probe_queue<F>(
     targets: Vec<PeerProbeTarget>,
+    slots: Arc<Semaphore>,
     mut probe: impl FnMut(PeerProbeTarget) -> F,
 ) -> Vec<PeerProbeSample>
 where
@@ -101,7 +117,12 @@ where
     let mut active = JoinSet::new();
     loop {
         for target in pending.by_ref().take(MAX_CONCURRENT_PEERS - active.len()) {
-            active.spawn(probe(target));
+            let slots = Arc::clone(&slots);
+            let probe = probe(target);
+            active.spawn(async move {
+                let _slot = slots.acquire().await.expect("peer slots are never closed");
+                probe.await
+            });
         }
         let Some(outcome) = active.join_next().await else {
             break;
@@ -113,16 +134,41 @@ where
     samples
 }
 
-async fn measure(client: &Client, target: PeerProbeTarget) -> PeerProbeSample {
-    let (kind, address) = match target.kind {
-        PeerProbeKind::Tcp => (
-            ProbeKind::Tcp,
-            SocketAddr::new(target.address, 443).to_string(),
-        ),
-        PeerProbeKind::Icmp => (ProbeKind::Icmp, target.address.to_string()),
+async fn measure<F>(
+    target: PeerProbeTarget,
+    mut probe: impl FnMut(PeerProbeKind, IpAddr) -> F,
+) -> PeerProbeSample
+where
+    F: Future<Output = (PeerProbeStatus, Option<f64>)>,
+{
+    let mut address = target.address;
+    let (mut status, mut latency_ms) = probe(target.kind, address).await;
+    if status != PeerProbeStatus::Ready
+        && let Some(fallback) = target.fallback_address
+    {
+        address = fallback;
+        (status, latency_ms) = probe(target.kind, address).await;
+    }
+    PeerProbeSample {
+        node_id: target.node_id,
+        address,
+        kind: target.kind,
+        status,
+        latency_ms,
+    }
+}
+
+async fn measure_address(
+    client: &Client,
+    kind: PeerProbeKind,
+    address: IpAddr,
+) -> (PeerProbeStatus, Option<f64>) {
+    let (kind, address) = match kind {
+        PeerProbeKind::Tcp => (ProbeKind::Tcp, SocketAddr::new(address, 443).to_string()),
+        PeerProbeKind::Icmp => (ProbeKind::Icmp, address.to_string()),
     };
     let task = ProbeTask {
-        id: target.node_id.clone(),
+        id: String::new(),
         name: "Node latency".into(),
         kind,
         target: address,
@@ -130,7 +176,7 @@ async fn measure(client: &Client, target: PeerProbeTarget) -> PeerProbeSample {
         timeout_seconds: PROBE_DEADLINE.as_secs(),
         enabled: true,
     };
-    let (status, latency_ms) = match tokio::time::timeout(
+    match tokio::time::timeout(
         PROBE_DEADLINE,
         crate::probes::run_probe(client.clone(), task),
     )
@@ -142,37 +188,52 @@ async fn measure(client: &Client, target: PeerProbeTarget) -> PeerProbeSample {
         }
         Ok(result) if result.error.as_deref() != Some("timeout") => (PeerProbeStatus::Failed, None),
         _ => (PeerProbeStatus::Timeout, None),
-    };
-    PeerProbeSample {
-        target,
-        status,
-        latency_ms,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{net::Ipv4Addr, sync::Arc};
-    use tokio::sync::{Semaphore, mpsc};
+    use std::{
+        future::ready,
+        net::{Ipv4Addr, Ipv6Addr},
+    };
+    use tokio::sync::mpsc;
+
+    fn target(index: usize) -> PeerProbeTarget {
+        PeerProbeTarget {
+            node_id: index.to_string(),
+            address: Ipv4Addr::LOCALHOST.into(),
+            fallback_address: None,
+            kind: PeerProbeKind::Tcp,
+        }
+    }
 
     #[tokio::test]
     async fn free_slot_starts_next_peer_without_waiting_for_other_probes() {
-        let count = MAX_CONCURRENT_PEERS + 1;
-        let targets = (0..count)
-            .map(|index| PeerProbeTarget {
-                node_id: index.to_string(),
-                address: Ipv4Addr::LOCALHOST.into(),
-                kind: PeerProbeKind::Tcp,
-            })
-            .collect();
+        assert_queue_refills(false).await;
+    }
+
+    #[tokio::test]
+    async fn free_slot_starts_peer_on_next_page_before_first_page_finishes() {
+        assert_queue_refills(true).await;
+    }
+
+    async fn assert_queue_refills(two_pages: bool) {
+        let count = if two_pages {
+            MAX_CONCURRENT_PEERS
+        } else {
+            MAX_CONCURRENT_PEERS + 1
+        };
+        let targets = (0..count).map(target).collect();
+        let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PEERS));
         let (started, mut events) = mpsc::channel(count);
         let first = Arc::new(Semaphore::new(0));
         let others = Arc::new(Semaphore::new(0));
-        let queue = tokio::spawn(probe_queue(targets, {
+        let probe = {
             let first = Arc::clone(&first);
             let others = Arc::clone(&others);
-            move |target| {
+            move |target: PeerProbeTarget| {
                 let started = started.clone();
                 let gate = Arc::clone(if target.node_id == "0" {
                     &first
@@ -183,13 +244,16 @@ mod tests {
                     started.send(target.node_id.clone()).await.unwrap();
                     gate.acquire().await.unwrap().forget();
                     PeerProbeSample {
-                        target,
+                        node_id: target.node_id,
+                        address: target.address,
+                        kind: target.kind,
                         status: PeerProbeStatus::Ready,
                         latency_ms: Some(1.0),
                     }
                 }
             }
-        }));
+        };
+        let queue = tokio::spawn(probe_queue(targets, Arc::clone(&slots), probe.clone()));
 
         tokio::time::timeout(Duration::from_secs(5), async {
             let mut initial = Vec::with_capacity(MAX_CONCURRENT_PEERS);
@@ -203,6 +267,14 @@ mod tests {
                     .map(|index| index.to_string())
                     .collect::<Vec<_>>()
             );
+            let next_page = two_pages.then(|| {
+                tokio::spawn(probe_queue(
+                    vec![target(MAX_CONCURRENT_PEERS)],
+                    slots,
+                    probe,
+                ))
+            });
+            tokio::task::yield_now().await;
             assert!(matches!(
                 events.try_recv(),
                 Err(mpsc::error::TryRecvError::Empty)
@@ -212,8 +284,40 @@ mod tests {
             assert_eq!(events.recv().await, Some(MAX_CONCURRENT_PEERS.to_string()));
             others.add_permits(MAX_CONCURRENT_PEERS);
             assert_eq!(queue.await.unwrap().len(), count);
+            if let Some(next_page) = next_page {
+                assert_eq!(next_page.await.unwrap().len(), 1);
+            }
         })
         .await
         .expect("peer rotation stalled with one free slot");
+    }
+
+    #[tokio::test]
+    async fn auto_probes_fallback_only_after_primary_fails() {
+        let mut dual_stack = target(0);
+        let fallback = Ipv6Addr::LOCALHOST.into();
+        dual_stack.fallback_address = Some(fallback);
+        let mut attempts = Vec::new();
+        let sample = measure(dual_stack.clone(), |_, address| {
+            attempts.push(address);
+            ready(if address == fallback {
+                (PeerProbeStatus::Ready, Some(5.0))
+            } else {
+                (PeerProbeStatus::Timeout, None)
+            })
+        })
+        .await;
+        assert_eq!(attempts, [dual_stack.address, fallback]);
+        assert_eq!(sample.address, fallback);
+        assert_eq!(sample.status, PeerProbeStatus::Ready);
+        assert_eq!(sample.latency_ms, Some(5.0));
+
+        let primary = dual_stack.address;
+        let sample = measure(dual_stack, |_, address| {
+            assert_eq!(address, primary);
+            ready((PeerProbeStatus::Ready, Some(1.0)))
+        })
+        .await;
+        assert_eq!(sample.address, primary);
     }
 }

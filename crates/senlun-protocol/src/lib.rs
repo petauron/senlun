@@ -208,13 +208,15 @@ pub enum PeerProbeKind {
     Icmp,
 }
 
-/// The Service resolves a registered numeric address. Agents never choose a
+/// The Service resolves registered numeric addresses. Agents never choose a
 /// hostname or port for this probe class.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeerProbeTarget {
     pub node_id: String,
     pub address: std::net::IpAddr,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_address: Option<std::net::IpAddr>,
     pub kind: PeerProbeKind,
 }
 
@@ -239,7 +241,9 @@ pub enum PeerProbeStatus {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PeerProbeSample {
-    pub target: PeerProbeTarget,
+    pub node_id: String,
+    pub address: std::net::IpAddr,
+    pub kind: PeerProbeKind,
     pub status: PeerProbeStatus,
     pub latency_ms: Option<f64>,
 }

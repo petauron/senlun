@@ -8,7 +8,7 @@ use axum::{
     http::HeaderMap,
     routing::get,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Row, params, types::Type};
 use senlun_protocol::{
     MAX_PEER_PROBE_BATCH, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch, PeerProbeKind, PeerProbePlan,
     PeerProbeStatus, PeerProbeTarget,
@@ -26,7 +26,6 @@ use crate::{
 const MAX_PLAN_AGE_MS: u64 = 120_000;
 const FRESHNESS_MS: u64 = 300_000;
 const RETENTION_MS: u64 = 1_800_000;
-const MAX_RESULTS_PER_SOURCE: u32 = crate::DEFAULT_MAX_NODES - 1;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,10 +99,13 @@ async fn details(
 }
 
 pub(crate) fn initialize(db: &Connection) -> Result<(), StorageError> {
-    // Match the existing bounded hot store. The next rotation repopulates this
-    // latest-only view after restart, without adding write load to the disks.
+    // A full mesh can have one row per directed pair of enrolled nodes. Let
+    // SQLite spill beyond the page cache into a file it deletes on close.
     db.execute_batch(
-        "CREATE TABLE hot.peer_latencies (
+        "PRAGMA temp_store=FILE;
+         ATTACH DATABASE '' AS peer_cache;
+         PRAGMA peer_cache.cache_size=-1024;
+         CREATE TABLE peer_cache.peer_latencies (
              source_id TEXT NOT NULL,
              target_id TEXT NOT NULL,
              address TEXT NOT NULL,
@@ -113,15 +115,17 @@ pub(crate) fn initialize(db: &Connection) -> Result<(), StorageError> {
              issued_at_ms INTEGER NOT NULL,
              PRIMARY KEY(source_id,target_id)
          ) WITHOUT ROWID;
-         CREATE INDEX hot.peer_latencies_age ON peer_latencies(issued_at_ms);
-         CREATE INDEX hot.peer_latencies_recent ON peer_latencies(source_id,issued_at_ms DESC,target_id);",
+         CREATE INDEX peer_cache.peer_latencies_age ON peer_latencies(issued_at_ms);
+         CREATE INDEX peer_cache.peer_latencies_target ON peer_latencies(target_id);
+         CREATE INDEX peer_cache.peer_latencies_ready ON peer_latencies(source_id,latency_ms)
+             WHERE status='ready';",
     )?;
     Ok(())
 }
 
 pub(crate) fn invalidate_node(db: &Connection, id: &str) -> Result<(), StorageError> {
     db.execute(
-        "DELETE FROM hot.peer_latencies WHERE source_id=?1 OR target_id=?1",
+        "DELETE FROM peer_cache.peer_latencies WHERE source_id=?1 OR target_id=?1",
         [id],
     )?;
     Ok(())
@@ -129,7 +133,7 @@ pub(crate) fn invalidate_node(db: &Connection, id: &str) -> Result<(), StorageEr
 
 pub(crate) fn prune(db: &Connection, now: u64) -> Result<(), StorageError> {
     db.execute(
-        "DELETE FROM hot.peer_latencies WHERE issued_at_ms<?1",
+        "DELETE FROM peer_cache.peer_latencies WHERE issued_at_ms<?1",
         [integer(now.saturating_sub(RETENTION_MS))],
     )?;
     Ok(())
@@ -143,22 +147,37 @@ pub(crate) struct PeerNode {
 
 pub(crate) type PeerDirectory = BTreeMap<String, PeerNode>;
 
-fn configured_address(settings: PeerProbeSettings, ipv4: &str, ipv6: &str) -> Option<IpAddr> {
-    let ipv4 = ipv4
-        .parse::<IpAddr>()
-        .ok()
-        .filter(|ip| ip.is_ipv4() && crate::ip_info::public_ip(*ip));
-    let ipv6 = ipv6
-        .parse::<IpAddr>()
-        .ok()
-        .filter(|ip| ip.is_ipv6() && crate::ip_info::public_ip(*ip));
+fn configured_target(
+    id: &str,
+    settings: PeerProbeSettings,
+    ipv4: &str,
+    ipv6: &str,
+) -> Option<PeerProbeTarget> {
     if settings.disabled {
         return None;
     }
-    match settings.family {
-        PeerAddressFamily::Auto => ipv4.or(ipv6),
-        PeerAddressFamily::Ipv4 => ipv4,
-        PeerAddressFamily::Ipv6 => ipv6,
+    let ipv4 = ipv4.parse::<IpAddr>().ok().filter(IpAddr::is_ipv4);
+    let ipv6 = ipv6.parse::<IpAddr>().ok().filter(IpAddr::is_ipv6);
+    let ipv4 = ipv4.filter(|ip| crate::ip_info::public_ip(*ip));
+    let ipv6 = ipv6.filter(|ip| crate::ip_info::public_ip(*ip));
+    let (address, fallback_address) = match settings.family {
+        PeerAddressFamily::Auto => (ipv4.or(ipv6), ipv4.and(ipv6)),
+        PeerAddressFamily::Ipv4 => (ipv4, None),
+        PeerAddressFamily::Ipv6 => (ipv6, None),
+    };
+    Some(PeerProbeTarget {
+        node_id: id.to_owned(),
+        address: address?,
+        fallback_address,
+        kind: settings.kind,
+    })
+}
+
+impl PeerNode {
+    fn accepts_address(&self, address: IpAddr) -> bool {
+        self.target.as_ref().is_some_and(|target| {
+            target.address == address || target.fallback_address == Some(address)
+        })
     }
 }
 
@@ -192,11 +211,7 @@ pub(crate) fn directory(
                 serde_json::from_str(&raw)
             })
             .map_err(|_| StorageError::InvalidInput("invalid stored peer probe settings"))?;
-        let target = configured_address(settings, &ipv4, &ipv6).map(|address| PeerProbeTarget {
-            node_id: id.clone(),
-            address,
-            kind: settings.kind,
-        });
+        let target = configured_target(&id, settings, &ipv4, &ipv6);
         let online = last_seen.is_some_and(|seen| now.saturating_sub(unsigned(seen)) <= offline_ms);
         peers.insert(
             id,
@@ -266,21 +281,24 @@ impl Storage {
             return Ok(());
         }
         for sample in batch.samples {
-            let target = &sample.target;
             if sample
                 .latency_ms
                 .is_some_and(|value| !value.is_finite() || !(0.0..=3000.0).contains(&value))
                 || (sample.status == PeerProbeStatus::Ready) != sample.latency_ms.is_some()
-                || target.node_id == source
+                || sample.node_id == source
             {
                 return Err(StorageError::InvalidInput("invalid peer probe result"));
             }
             // An address/settings change, deletion or offline transition can
             // invalidate one result while other targets on its page remain valid.
-            if !peers
-                .get(&target.node_id)
-                .is_some_and(|node| node.online && node.target.as_ref() == Some(target))
-            {
+            if !peers.get(&sample.node_id).is_some_and(|node| {
+                node.online
+                    && node.accepts_address(sample.address)
+                    && node
+                        .target
+                        .as_ref()
+                        .is_some_and(|target| target.kind == sample.kind)
+            }) {
                 continue;
             }
             let status = match sample.status {
@@ -290,20 +308,14 @@ impl Storage {
                 PeerProbeStatus::Failed => "failed",
             };
             tx.execute(
-                "INSERT INTO hot.peer_latencies VALUES(?1,?2,?3,?4,?5,?6,?7)
+                "INSERT INTO peer_cache.peer_latencies VALUES(?1,?2,?3,?4,?5,?6,?7)
                  ON CONFLICT(source_id,target_id) DO UPDATE SET address=excluded.address,
                     kind=excluded.kind,status=excluded.status,latency_ms=excluded.latency_ms,issued_at_ms=excluded.issued_at_ms
                  WHERE excluded.issued_at_ms > peer_latencies.issued_at_ms",
-                params![source, target.node_id, target.address.to_string(), kind_name(target.kind), status, sample.latency_ms, integer(batch.issued_at_unix_ms)],
+                params![source, sample.node_id, sample.address.to_string(), kind_name(sample.kind), status, sample.latency_ms, integer(batch.issued_at_unix_ms)],
             )?;
         }
         prune(&tx, now)?;
-        tx.execute(
-            "DELETE FROM hot.peer_latencies WHERE source_id=?1 AND target_id IN
-                (SELECT target_id FROM hot.peer_latencies WHERE source_id=?1
-                 ORDER BY issued_at_ms DESC,target_id LIMIT -1 OFFSET ?2)",
-            params![source, MAX_RESULTS_PER_SOURCE],
-        )?;
         tx.commit()?;
         Ok(())
     }
@@ -336,30 +348,33 @@ fn kind_name(kind: PeerProbeKind) -> &'static str {
 }
 
 struct Sample {
-    address: String,
+    address: IpAddr,
     kind: String,
     status: String,
     latency_ms: Option<f64>,
     issued_at_ms: u64,
 }
 
+fn read_sample(row: &Row<'_>) -> rusqlite::Result<Sample> {
+    let address = row
+        .get::<_, String>(1)?
+        .parse()
+        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(1, Type::Text, Box::new(err)))?;
+    Ok(Sample {
+        address,
+        kind: row.get(2)?,
+        status: row.get(3)?,
+        latency_ms: row.get(4)?,
+        issued_at_ms: unsigned(row.get(5)?),
+    })
+}
+
 fn samples(db: &Connection, source: &str) -> Result<BTreeMap<String, Sample>, StorageError> {
     let mut statement = db.prepare_cached(
         "SELECT target_id,address,kind,status,latency_ms,issued_at_ms
-         FROM hot.peer_latencies WHERE source_id=?1",
+         FROM peer_cache.peer_latencies WHERE source_id=?1",
     )?;
-    let rows = statement.query_map([source], |row| {
-        Ok((
-            row.get(0)?,
-            Sample {
-                address: row.get(1)?,
-                kind: row.get(2)?,
-                status: row.get(3)?,
-                latency_ms: row.get(4)?,
-                issued_at_ms: unsigned(row.get(5)?),
-            },
-        ))
-    })?;
+    let rows = statement.query_map([source], |row| Ok((row.get(0)?, read_sample(row)?)))?;
     rows.collect::<Result<_, _>>().map_err(Into::into)
 }
 
@@ -383,9 +398,8 @@ fn latency(
 ) -> PeerLatency {
     let target = peer.target.as_ref();
     let matching = sample.filter(|sample| {
-        target.is_some_and(|target| {
-            sample.address == target.address.to_string() && sample.kind == kind_name(target.kind)
-        })
+        peer.accepts_address(sample.address)
+            && target.is_some_and(|target| sample.kind == kind_name(target.kind))
     });
     let status = if target.is_none() {
         "unconfigured"
@@ -404,7 +418,10 @@ fn latency(
         node_id: id.to_owned(),
         name: peer.name.clone(),
         kind: target.map(|target| target.kind),
-        family: target.map(|target| if target.address.is_ipv4() { 4 } else { 6 }),
+        family: target.map(|target| {
+            let address = matching.map_or(target.address, |sample| sample.address);
+            if address.is_ipv4() { 4 } else { 6 }
+        }),
         status: status.into(),
         latency_ms: matching.and_then(|sample| {
             if status == "ready" {
@@ -434,14 +451,33 @@ pub(crate) fn best(
     if !peers.get(id).is_some_and(|node| node.online) {
         return Ok(None);
     }
-    Ok(samples(db, id)?
-        .iter()
-        .filter_map(|(target, sample)| {
-            let peer = peers.get(target)?;
-            let result = latency(target, peer, true, Some(sample), now);
-            result.latency_ms.is_some().then_some(result)
-        })
-        .min_by(compare_latency))
+    let mut statement = db.prepare_cached(
+        "SELECT target_id,address,kind,status,latency_ms,issued_at_ms
+         FROM peer_cache.peer_latencies
+         WHERE source_id=?1 AND status='ready' AND issued_at_ms>?2 ORDER BY latency_ms",
+    )?;
+    let mut rows = statement.query(params![id, integer(now) - integer(FRESHNESS_MS)])?;
+    let mut best: Option<PeerLatency> = None;
+    while let Some(row) = rows.next()? {
+        let sample = read_sample(row)?;
+        if let Some(best) = &best
+            && sample.latency_ms > best.latency_ms
+        {
+            break;
+        }
+        let target: String = row.get(0)?;
+        if let Some(peer) = peers.get(&target) {
+            let result = latency(&target, peer, true, Some(&sample), now);
+            if result.latency_ms.is_some()
+                && best
+                    .as_ref()
+                    .is_none_or(|best| compare_latency(&result, best).is_lt())
+            {
+                best = Some(result);
+            }
+        }
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -468,7 +504,7 @@ mod tests {
                     group: String::new(),
                 },
                 &hash_token(&secret.token),
-                100,
+                1_000,
                 now,
             )
             .unwrap()
@@ -524,7 +560,9 @@ mod tests {
                     schema_version: PEER_PROBE_SCHEMA_VERSION,
                     issued_at_unix_ms: issued_at,
                     samples: vec![PeerProbeSample {
-                        target,
+                        node_id: target.node_id,
+                        address: target.address,
+                        kind: target.kind,
                         status: if latency.is_some() {
                             PeerProbeStatus::Ready
                         } else {
@@ -537,6 +575,105 @@ mod tests {
                 60,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn auto_accepts_either_registered_address_and_reports_the_measured_family() {
+        let (_dir, storage, source) = fixture();
+        let now = unix_time_ms().unwrap();
+        heartbeat(&storage, &source, now);
+        let target = enroll(&storage, now);
+        configure(
+            &storage,
+            &target,
+            PeerProbeKind::Tcp,
+            PeerAddressFamily::Auto,
+            now,
+        );
+        let mut planned = storage
+            .peer_probe_plan(&source.agent_token, "", now, 60)
+            .unwrap()
+            .targets
+            .remove(0);
+        assert!(planned.address.is_ipv4());
+        let fallback = planned.fallback_address.unwrap();
+        assert!(fallback.is_ipv6());
+        planned.address = fallback;
+        report_sample(&storage, &source, planned.clone(), now, now, Some(11.0));
+
+        planned.address = "2606:4700:4700::1001".parse().unwrap();
+        report_sample(&storage, &source, planned, now + 1, now + 1, Some(1.0));
+        let rows = storage
+            .peer_latencies(&source.node_id, now + 1, 60)
+            .unwrap();
+        assert_eq!(rows[0].family, Some(6));
+        assert_eq!(rows[0].latency_ms, Some(11.0));
+        let db = storage.connection().unwrap();
+        let peers = directory(&db, now + 1, 60).unwrap();
+        let lowest = best(&db, &peers, &source.node_id, now + 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(lowest.family, Some(6));
+    }
+
+    #[test]
+    fn keeps_all_fresh_results_for_more_than_100_nodes() {
+        const TARGETS: usize = 101;
+        let (_dir, storage, source) = fixture();
+        let now = unix_time_ms().unwrap();
+        heartbeat(&storage, &source, now);
+        for _ in 0..TARGETS {
+            let target = enroll(&storage, now);
+            configure(
+                &storage,
+                &target,
+                PeerProbeKind::Tcp,
+                PeerAddressFamily::Ipv4,
+                now,
+            );
+        }
+        let mut plan = storage
+            .peer_probe_plan(&source.agent_token, "", now, 60)
+            .unwrap();
+        let fastest = plan.targets[0].node_id.clone();
+        let mut issued = now;
+        loop {
+            let samples = plan
+                .targets
+                .into_iter()
+                .map(|target| PeerProbeSample {
+                    latency_ms: Some(if target.node_id == fastest { 1.0 } else { 10.0 }),
+                    node_id: target.node_id,
+                    address: target.address,
+                    kind: target.kind,
+                    status: PeerProbeStatus::Ready,
+                })
+                .collect();
+            storage
+                .record_peer_probes(
+                    &source.agent_token,
+                    PeerProbeBatch {
+                        schema_version: PEER_PROBE_SCHEMA_VERSION,
+                        issued_at_unix_ms: plan.issued_at_unix_ms,
+                        samples,
+                    },
+                    issued,
+                    60,
+                )
+                .unwrap();
+            let Some(cursor) = plan.next_after else { break };
+            issued += 1;
+            plan = storage
+                .peer_probe_plan(&source.agent_token, &cursor, issued, 60)
+                .unwrap();
+        }
+        let rows = storage.peer_latencies(&source.node_id, issued, 60).unwrap();
+        assert_eq!(rows.len(), TARGETS);
+        assert!(rows.iter().all(|row| row.status == "ready"));
+        let db = storage.connection().unwrap();
+        let peers = directory(&db, issued, 60).unwrap();
+        let lowest = best(&db, &peers, &source.node_id, issued).unwrap().unwrap();
+        assert_eq!(lowest.node_id, fastest);
     }
 
     #[test]
@@ -566,6 +703,7 @@ mod tests {
         assert_eq!(to_b[0].node_id, b.node_id);
         assert_eq!(to_b[0].kind, PeerProbeKind::Icmp);
         assert!(to_b[0].address.is_ipv6());
+        assert_eq!(to_b[0].fallback_address, None);
         let to_a = storage
             .peer_probe_plan(&b.agent_token, "", now, 60)
             .unwrap()
@@ -573,6 +711,7 @@ mod tests {
         assert_eq!(to_a.len(), 1);
         assert_eq!(to_a[0].kind, PeerProbeKind::Tcp);
         assert!(to_a[0].address.is_ipv4());
+        assert_eq!(to_a[0].fallback_address, None);
         report_sample(&storage, &a, to_b[0].clone(), now, now, Some(11.0));
         report_sample(&storage, &b, to_a[0].clone(), now, now, Some(45.0));
         for (node, expected) in [(&a, 11.0), (&b, 45.0)] {
