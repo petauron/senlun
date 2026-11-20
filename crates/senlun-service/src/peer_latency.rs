@@ -617,7 +617,7 @@ mod tests {
         let now = unix_time_ms().unwrap();
         heartbeat(&storage, &source, now);
         let mut target_ids = Vec::new();
-        for _ in 0..(MAX_PEER_PROBE_BATCH + 1) {
+        for _ in 0..=MAX_PEER_PROBE_BATCH {
             let target = enroll(&storage, now);
             configure(
                 &storage,
@@ -661,12 +661,12 @@ mod tests {
         );
         let later = now + 60_001;
         heartbeat(&storage, &source, later);
-        assert!(
+        assert_eq!(
             storage
                 .peer_probe_plan(&source.agent_token, "", later, 60)
                 .unwrap()
-                .targets
-                .is_empty()
+                .targets,
+            Vec::<PeerProbeTarget>::new(),
         );
         assert!(matches!(
             storage.peer_probe_plan("invalid", "", now, 60),
