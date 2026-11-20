@@ -775,6 +775,7 @@ mod tests {
             .execute_batch("DROP TABLE peer_cache.peer_latencies")
             .unwrap();
 
+        let now = now + 1_000;
         configure(
             &storage,
             &target,
