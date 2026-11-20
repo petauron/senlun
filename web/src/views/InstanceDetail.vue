@@ -24,6 +24,7 @@ import { getBillingCycleText, getExpireText, getExpireTextClass } from '@/utils/
 
 const LoadChart = defineAsyncComponent(() => import('@/components/LoadChart.vue'))
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
+const PeerLatencyPanel = defineAsyncComponent(() => import('@/components/PeerLatencyPanel.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -456,6 +457,7 @@ const trafficProgressStyle = computed(() => ({
       <LoadChart :uuid="data.uuid" class="px-4" />
       <div class="px-4">
         <ProbeHistory :uuid="data.uuid" />
+        <PeerLatencyPanel :node-id="data.uuid" class="mt-4" />
       </div>
     </template>
   </div>

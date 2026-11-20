@@ -182,6 +182,8 @@ pub(crate) struct NodeOptions {
     pub public_remark: String,
     pub ipv4: String,
     pub ipv6: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peer_probe: Option<crate::peer_latency::PeerProbeSettings>,
     pub price: f64,
     pub currency: String,
     pub billing_cycle_days: u32,
@@ -496,6 +498,17 @@ impl Storage {
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
         let previous = options_or_none(&tx, id)?;
+        if options.peer_probe.is_none() {
+            options.peer_probe = previous.as_ref().and_then(|old| old.peer_probe);
+        }
+        if previous.as_ref().is_some_and(|old| {
+            old.hidden != options.hidden
+                || old.ipv4 != options.ipv4
+                || old.ipv6 != options.ipv6
+                || old.peer_probe.unwrap_or_default() != options.peer_probe.unwrap_or_default()
+        }) {
+            crate::peer_latency::invalidate_node(&tx, id)?;
+        }
         // Route reports are read-only metadata here; only an authenticated,
         // matching one-shot result may replace them. Preserve them on unrelated editor saves.
         options.return_routes = previous

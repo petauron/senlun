@@ -194,6 +194,7 @@ impl Storage {
             transaction.commit()?;
         }
         rollups::initialize_hot(&connection)?;
+        crate::peer_latency::initialize(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             path: path.to_path_buf(),
@@ -418,6 +419,7 @@ impl Storage {
         if changed == 0 {
             return Err(StorageError::NotFound);
         }
+        crate::peer_latency::invalidate_node(&transaction, node_id)?;
         insert_audit_transaction(&transaction, now_ms, "node.revoke", node_id)?;
         transaction.commit()?;
         Ok(())
@@ -431,6 +433,7 @@ impl Storage {
         if changed == 0 {
             return Err(StorageError::NotFound);
         }
+        crate::peer_latency::invalidate_node(&transaction, node_id)?;
         insert_audit_transaction(&transaction, now_ms, "node.delete", node_id)?;
         transaction.commit()?;
         // Control-plane deletion is durable first. Startup retries interrupted
@@ -473,6 +476,7 @@ impl Storage {
         let mut connection = self.connection()?;
         let transaction = connection.transaction()?;
         let cutoff = to_i64(now_ms.saturating_sub(u64::from(retention_days) * 86_400_000))?;
+        crate::peer_latency::prune(&transaction, now_ms)?;
         let hot_snapshots = transaction.execute(
             "DELETE FROM hot.snapshots WHERE received_at_ms<?1",
             [cutoff],
@@ -600,6 +604,7 @@ impl Storage {
         let statuses = query_latest_statuses(&connection, offline_after_seconds)?;
         let probe_tasks = crate::control::dashboard_probe_tasks(&connection)?;
         let now = unix_time_ms()?;
+        let peers = crate::peer_latency::directory(&connection, now, offline_after_seconds)?;
         let mut client_values = serde_json::Map::new();
         let mut status_values = serde_json::Map::new();
         for client in clients {
@@ -616,6 +621,12 @@ impl Storage {
                 &probe_tasks,
                 now,
                 probe_config
+            )?);
+            value["peer_latency"] = json!(crate::peer_latency::best(
+                &connection,
+                &peers,
+                &client.id,
+                now
             )?);
             client_values.insert(client.id.clone(), value);
         }

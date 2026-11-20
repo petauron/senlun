@@ -1,3 +1,9 @@
+<script lang="ts">
+import { createSharedComposable, useTimestamp } from '@vueuse/core'
+
+const usePeerClock = createSharedComposable(() => useTimestamp({ interval: 1000 }))
+</script>
+
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import { computed, defineAsyncComponent, ref } from 'vue'
@@ -9,6 +15,14 @@ import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
 const open = ref(false)
+const now = usePeerClock()
+const bestPeer = computed(() => {
+  const sample = props.node.peer_latency
+  return props.node.online && sample?.status === 'ready' && sample.latency_ms !== null
+    && sample.expires_at_unix_ms !== null && sample.expires_at_unix_ms > now.value
+    ? sample
+    : null
+})
 const { version: probeIPVersion } = useNodeIpVersion(() => props.node)
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
 const { pickSurfaceClass } = useBackgroundSurface()
@@ -24,6 +38,15 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
       <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" :ip-version="probeIPVersion" />
     </div>
     <NodeProbeSummary v-else :probes="node.probes" :node-uuid="node.uuid" :ip-version="probeIPVersion" :node-name="node.name" interactive @open="open = true" />
+    <div v-if="!compact" class="mt-2 grid grid-cols-[minmax(64px,0.75fr)_minmax(0,2fr)] items-center gap-2 text-[11px]">
+      <span class="font-medium text-foreground/75">节点互测</span>
+      <span v-if="bestPeer" class="flex min-w-0 items-center gap-1.5">
+        <span class="truncate" :title="bestPeer.name">{{ bestPeer.name }}</span>
+        <span class="shrink-0 text-muted-foreground">{{ bestPeer.kind?.toUpperCase() }}</span>
+        <span class="ml-auto shrink-0 tabular-nums">{{ bestPeer.latency_ms }} ms</span>
+      </span>
+      <span v-else class="text-muted-foreground">暂无有效结果</span>
+    </div>
     <Dialog v-model:open="open">
       <DialogContent
         class="max-w-6xl gap-0 overflow-hidden border-emerald-600/10 p-0 shadow-[0_0_2rem] shadow-emerald-800/10 transition-all"

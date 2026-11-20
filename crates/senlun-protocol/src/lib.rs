@@ -197,6 +197,60 @@ pub struct SnapshotResponse {
     pub clock_skew_ms: i64,
 }
 
+pub const PEER_PROBE_SCHEMA_VERSION: u16 = 1;
+pub const MAX_PEER_PROBE_BATCH: usize = 4;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerProbeKind {
+    #[default]
+    Tcp,
+    Icmp,
+}
+
+/// The Service resolves a registered numeric address. Agents never choose a
+/// hostname or port for this probe class.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerProbeTarget {
+    pub node_id: String,
+    pub address: std::net::IpAddr,
+    pub kind: PeerProbeKind,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerProbePlan {
+    pub schema_version: u16,
+    pub issued_at_unix_ms: u64,
+    pub targets: Vec<PeerProbeTarget>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PeerProbeStatus {
+    Ready,
+    Timeout,
+    Unavailable,
+    Failed,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerProbeSample {
+    pub target: PeerProbeTarget,
+    pub status: PeerProbeStatus,
+    pub latency_ms: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PeerProbeBatch {
+    pub schema_version: u16,
+    pub issued_at_unix_ms: u64,
+    pub samples: Vec<PeerProbeSample>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

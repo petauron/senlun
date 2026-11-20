@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ManagedNode } from '@/utils/admin'
+import type { ManagedNode, PeerProbeSettings } from '@/utils/admin'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -20,7 +20,7 @@ const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }
 const route = useRoute()
 const router = useRouter()
 const selected = computed(() => props.nodes.find(n => n.id === route.query.node) ?? props.nodes[0])
-const draft = ref<ManagedNode | null>(null)
+const draft = ref<(ManagedNode & { peer_probe: PeerProbeSettings }) | null>(null)
 const expires = ref('')
 const quotaGiB = ref(0)
 const ttlHours = ref(24)
@@ -57,7 +57,7 @@ const actionHints = {
 
 watch(selected, (node) => {
   draft.value = node
-    ? nodeMetadata(node)
+    ? { ...nodeMetadata(node), peer_probe: { ...(node.peer_probe ?? { kind: 'tcp', family: 'auto', disabled: false }) } }
     : null
   newTagText.value = ''
   tagError.value = ''
@@ -183,8 +183,15 @@ async function execute(): Promise<void> {
           <label class="grid gap-2 text-sm">公网 IPv4（可选）<Input v-model="draft.ipv4" maxlength="15" aria-describedby="node-ip-privacy" /></label>
           <label class="grid gap-2 text-sm">公网 IPv6（可选）<Input v-model="draft.ipv6" maxlength="45" aria-describedby="node-ip-privacy" /></label>
           <p id="node-ip-privacy" class="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">
-            仅管理员可读取地址。启用站点的 IP 信息查询后用于 LuminaPlus；不接受内网、保留地址或域名，留空可移除。
+            登记地址用于节点互测，启用 IP 信息查询后也用于 LuminaPlus。探测 Agent 仅接收分配的地址，互测面板不显示地址。
           </p>
+          <label class="grid gap-2 text-sm">节点互测协议
+            <SelectControl v-model="draft.peer_probe.kind" :disabled="busy || draft.peer_probe.disabled" :options="[{ value: 'tcp', label: 'TCP 443' }, { value: 'icmp', label: 'ICMP Ping' }]" />
+          </label>
+          <label class="grid gap-2 text-sm">节点互测地址族
+            <SelectControl v-model="draft.peer_probe.family" :disabled="busy || draft.peer_probe.disabled" :options="[{ value: 'auto', label: '自动（优先 IPv4）' }, { value: 'ipv4', label: 'IPv4' }, { value: 'ipv6', label: 'IPv6' }]" />
+          </label>
+          <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="draft.peer_probe.disabled" type="checkbox" class="size-4 accent-primary">停用此节点的入向互测</label>
           <label class="grid gap-2 text-sm">分组<Input v-model="draft.group" maxlength="128" /></label>
           <label class="grid gap-2 text-sm">排序权重<Input v-model="draft.weight" type="number" min="-2147483648" max="2147483647" step="1" required /></label>
           <div class="grid gap-2 text-sm sm:col-span-2 lg:col-span-3">

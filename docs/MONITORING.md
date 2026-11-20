@@ -85,6 +85,28 @@ is diagnostic. Probe storage has a hard 100000-row per-node cap in addition to
 retention. Missing samples are not counted as received failures: node-offline
 alerts cover an absent Agent separately.
 
+## Node-to-node latency
+
+Agents rotate through visible, online peers using only the public IPv4/IPv6
+addresses registered in the node editor. The default is a TCP connection to
+port 443, with IPv4 preferred when both families are registered. Set a target
+to ICMP, choose an explicit address family, or disable incoming measurements
+in the editor. ICMP requires the Agent account to be allowed to use the system
+ping command. No additional listening service is needed.
+
+Each direction is an independent measurement. Agents attempt up to four peers
+every 30 seconds, one at a time with a three-second deadline. This rotation
+uses its own schedule and does not take slots from configured carrier probes.
+The Service keeps only the latest result for up to 64 destinations per source
+in memory. Results expire from the dashboard after five minutes and the cache
+repopulates after Service restart. Dashboard reads expose names, protocol,
+address family and results; only the assigned Agents receive target addresses.
+
+A node card shows its lowest current successful result. Node details list peer
+results in latency order and mark offline, unconfigured, pending, failed and
+expired results. Agent-to-Service configuration and reporting for existing
+carrier probes keep their existing format.
+
 ## Alerts and notifications
 
 Rules monitor offline state, CPU/memory/disk utilization, traffic-limit percentage
