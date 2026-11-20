@@ -200,6 +200,9 @@ pub struct SnapshotResponse {
 pub const PEER_PROBE_SCHEMA_VERSION: u16 = 1;
 pub const MAX_PEER_PROBE_BATCH: usize = 32;
 pub const MAX_PEER_PROBE_TARGETS: usize = 99;
+pub const DEFAULT_PEER_PROBE_INTERVAL_SECONDS: u64 = 60;
+pub const MIN_PEER_PROBE_INTERVAL_SECONDS: u64 = 5;
+pub const MAX_PEER_PROBE_INTERVAL_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -226,6 +229,7 @@ pub struct PeerProbeTarget {
 pub struct PeerProbePlan {
     pub schema_version: u16,
     pub issued_at_unix_ms: u64,
+    pub interval_seconds: u64,
     pub targets: Vec<PeerProbeTarget>,
     pub next_after: Option<String>,
 }

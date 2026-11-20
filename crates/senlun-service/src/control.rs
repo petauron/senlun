@@ -3,7 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
-use senlun_protocol::{AgentRuntimeConfig, ProbeBatch, ProbeKind, ProbeTask, SystemSnapshot};
+use senlun_protocol::{
+    AgentRuntimeConfig, DEFAULT_PEER_PROBE_INTERVAL_SECONDS, MAX_PEER_PROBE_INTERVAL_SECONDS,
+    MIN_PEER_PROBE_INTERVAL_SECONDS, ProbeBatch, ProbeKind, ProbeTask, SystemSnapshot,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use time::{Date, Month, OffsetDateTime};
@@ -117,6 +120,7 @@ pub(crate) struct Settings {
     pub site_name: String,
     pub private_site: bool,
     pub agent_interval_seconds: u64,
+    pub peer_probe_interval_seconds: Option<u64>,
     pub ip_info_enabled: bool,
     pub daily_exchange_rates: bool,
     pub earth_view_mode: EarthViewMode,
@@ -139,10 +143,18 @@ impl Default for Settings {
             site_name: "Senlun".into(),
             private_site: true,
             agent_interval_seconds: 3,
+            peer_probe_interval_seconds: None,
             ip_info_enabled: false,
             daily_exchange_rates: false,
             earth_view_mode: EarthViewMode::Earth,
         }
+    }
+}
+
+impl Settings {
+    pub(crate) fn peer_probe_interval(&self) -> u64 {
+        self.peer_probe_interval_seconds
+            .unwrap_or(DEFAULT_PEER_PROBE_INTERVAL_SECONDS)
     }
 }
 
@@ -394,25 +406,31 @@ pub(crate) fn verify_nodes(db: &Connection, ids: &[String]) -> Result<(), Storag
 impl Storage {
     pub(crate) fn settings(&self) -> Result<Settings, StorageError> {
         let db = self.connection()?;
-        decode(&db.query_row::<String, _, _>(
-            "SELECT data FROM monitoring_settings WHERE id=1",
-            [],
-            |row| row.get(0),
-        )?)
+        let mut settings = read_settings(&db)?;
+        settings.peer_probe_interval_seconds = Some(settings.peer_probe_interval());
+        Ok(settings)
     }
 
     pub(crate) fn save_settings(&self, value: &Settings) -> Result<(), StorageError> {
         if value.site_name.trim().is_empty()
             || !text(&value.site_name, 128)
             || !(1..=300).contains(&value.agent_interval_seconds)
+            || value.peer_probe_interval_seconds.is_some_and(|seconds| {
+                !(MIN_PEER_PROBE_INTERVAL_SECONDS..=MAX_PEER_PROBE_INTERVAL_SECONDS)
+                    .contains(&seconds)
+            })
         {
             return Err(StorageError::InvalidInput("invalid site settings"));
         }
         let mut db = self.connection()?;
         let tx = db.transaction()?;
+        let mut value = value.clone();
+        if value.peer_probe_interval_seconds.is_none() {
+            value.peer_probe_interval_seconds = Some(read_settings(&tx)?.peer_probe_interval());
+        }
         tx.execute(
             "UPDATE monitoring_settings SET data=?1 WHERE id=1",
-            [encode(value)?],
+            [encode(&value)?],
         )?;
         configuration_audit(&tx, "settings.update", "site")?;
         tx.commit()?;
@@ -985,12 +1003,16 @@ pub(crate) fn visible(db: &Connection, node: &str) -> Result<bool, StorageError>
     Ok(active && !options_or_none(db, node)?.is_some_and(|o| o.hidden))
 }
 
-/// A configured slow reporting interval must not manufacture offline flapping.
-pub(crate) fn effective_offline_ms(db: &Connection, configured: u64) -> Result<u64, StorageError> {
+pub(crate) fn read_settings(db: &Connection) -> Result<Settings, StorageError> {
     let raw: String = db.query_row("SELECT data FROM monitoring_settings WHERE id=1", [], |r| {
         r.get(0)
     })?;
-    let settings: Settings = decode(&raw)?;
+    decode(&raw)
+}
+
+/// A configured slow reporting interval must not manufacture offline flapping.
+pub(crate) fn effective_offline_ms(db: &Connection, configured: u64) -> Result<u64, StorageError> {
+    let settings = read_settings(db)?;
     Ok(configured.max(settings.agent_interval_seconds.saturating_mul(3000)))
 }
 

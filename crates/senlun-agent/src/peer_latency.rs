@@ -9,14 +9,14 @@ use std::{
 
 use reqwest::{Client, Url};
 use senlun_protocol::{
-    MAX_PEER_PROBE_BATCH, MAX_PEER_PROBE_TARGETS, PEER_PROBE_SCHEMA_VERSION, PeerProbeBatch,
-    PeerProbeKind, PeerProbePlan, PeerProbeSample, PeerProbeStatus, PeerProbeTarget, ProbeKind,
-    ProbeTask,
+    DEFAULT_PEER_PROBE_INTERVAL_SECONDS, MAX_PEER_PROBE_BATCH, MAX_PEER_PROBE_INTERVAL_SECONDS,
+    MAX_PEER_PROBE_TARGETS, MIN_PEER_PROBE_INTERVAL_SECONDS, PEER_PROBE_SCHEMA_VERSION,
+    PeerProbeBatch, PeerProbeKind, PeerProbePlan, PeerProbeSample, PeerProbeStatus,
+    PeerProbeTarget, ProbeKind, ProbeTask,
 };
 
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{sync::Semaphore, task::JoinSet, time::Instant};
 
-const ROUND_PAUSE: Duration = Duration::from_secs(30);
 const MAX_CONCURRENT_PEERS: usize = 4;
 const MAX_ROUND_PAGES: usize = MAX_PEER_PROBE_TARGETS.div_ceil(MAX_PEER_PROBE_BATCH);
 const MAX_PLAN_BYTES: usize = 8 * 1024;
@@ -26,13 +26,22 @@ pub(crate) async fn run(client: Client, target_client: Client, service_url: Url,
     let Ok(endpoint) = service_url.join("api/v1/agents/peer-latency") else {
         return;
     };
+    let mut interval = Duration::from_secs(DEFAULT_PEER_PROBE_INTERVAL_SECONDS);
     loop {
-        run_round(&client, &target_client, &endpoint, &token).await;
-        tokio::time::sleep(ROUND_PAUSE).await;
+        let started = Instant::now();
+        if let Some(updated) = run_round(&client, &target_client, &endpoint, &token).await {
+            interval = updated;
+        }
+        tokio::time::sleep_until(started + interval).await;
     }
 }
 
-async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, token: &str) {
+async fn run_round(
+    client: &Client,
+    target_client: &Client,
+    endpoint: &Url,
+    token: &str,
+) -> Option<Duration> {
     let target_client = target_client.clone();
     let (report_client, report_url, report_token) =
         (client.clone(), endpoint.clone(), token.to_owned());
@@ -57,7 +66,7 @@ async fn run_round(client: &Client, target_client: &Client, endpoint: &Url, toke
             }
         },
     )
-    .await;
+    .await
 }
 
 async fn fetch_plan(
@@ -83,12 +92,14 @@ async fn run_round_with<Fetch, Probe, Report>(
     mut fetch: impl FnMut(String) -> Fetch,
     probe: impl FnMut(PeerProbeTarget) -> Probe + Clone + Send + 'static,
     report: impl FnMut(PeerProbeBatch) -> Report + Clone + Send + 'static,
-) where
+) -> Option<Duration>
+where
     Fetch: Future<Output = Option<PeerProbePlan>>,
     Probe: Future<Output = PeerProbeSample> + Send + 'static,
     Report: Future<Output = ()> + Send + 'static,
 {
     let mut after = String::new();
+    let mut interval = None;
     let mut remaining = MAX_PEER_PROBE_TARGETS;
     let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PEERS));
     let mut pages = JoinSet::new();
@@ -99,7 +110,8 @@ async fn run_round_with<Fetch, Probe, Report>(
             break;
         };
         if plan.schema_version != PEER_PROBE_SCHEMA_VERSION
-            || plan.targets.is_empty()
+            || !(MIN_PEER_PROBE_INTERVAL_SECONDS..=MAX_PEER_PROBE_INTERVAL_SECONDS)
+                .contains(&plan.interval_seconds)
             || plan.targets.len() > remaining.min(MAX_PEER_PROBE_BATCH)
             || plan.next_after.as_ref().is_some_and(|cursor| {
                 cursor <= &after
@@ -109,6 +121,12 @@ async fn run_round_with<Fetch, Probe, Report>(
                         .is_none_or(|target| &target.node_id != cursor)
             })
         {
+            break;
+        }
+        if after.is_empty() {
+            interval = Some(Duration::from_secs(plan.interval_seconds));
+        }
+        if plan.targets.is_empty() {
             break;
         }
         remaining -= plan.targets.len();
@@ -135,6 +153,7 @@ async fn run_round_with<Fetch, Probe, Report>(
         after = cursor;
     }
     while pages.join_next().await.is_some() {}
+    interval
 }
 
 async fn probe_queue<F>(
@@ -205,7 +224,7 @@ async fn measure_address(
         name: "Node latency".into(),
         kind,
         target: address,
-        interval_seconds: ROUND_PAUSE.as_secs(),
+        interval_seconds: DEFAULT_PEER_PROBE_INTERVAL_SECONDS,
         timeout_seconds: PROBE_DEADLINE.as_secs(),
         enabled: true,
     };
@@ -263,6 +282,7 @@ mod tests {
                 ready(Some(PeerProbePlan {
                     schema_version: PEER_PROBE_SCHEMA_VERSION,
                     issued_at_unix_ms: 1,
+                    interval_seconds: if index == 1 { 75 } else { 60 },
                     targets: vec![target(index)],
                     next_after: (index < MAX_ROUND_PAGES).then(|| index.to_string()),
                 }))
@@ -308,10 +328,29 @@ mod tests {
             assert_eq!(reports, measurements);
             assert!(!round.is_finished());
             allow_reports.add_permits(MAX_ROUND_PAGES);
-            round.await.unwrap();
+            assert_eq!(round.await.unwrap(), Some(Duration::from_secs(75)));
         })
         .await
         .expect("peer rotation waited for a slow report");
+    }
+
+    #[tokio::test]
+    async fn empty_plans_still_set_the_round_interval() {
+        let interval = run_round_with(
+            |_| {
+                ready(Some(PeerProbePlan {
+                    schema_version: PEER_PROBE_SCHEMA_VERSION,
+                    issued_at_unix_ms: 1,
+                    interval_seconds: 120,
+                    targets: Vec::new(),
+                    next_after: None,
+                }))
+            },
+            |_| async { unreachable!("empty plans do not start probes") },
+            |_| async { unreachable!("empty plans do not send reports") },
+        )
+        .await;
+        assert_eq!(interval, Some(Duration::from_secs(120)));
     }
 
     async fn assert_queue_refills(two_pages: bool) {

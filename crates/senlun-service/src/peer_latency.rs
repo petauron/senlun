@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::{
     ApiError, AppState, bearer_token,
-    control::{authenticated_node, effective_offline_ms, integer, unsigned},
+    control::{authenticated_node, effective_offline_ms, integer, read_settings, unsigned},
     current_time,
     storage::{Storage, StorageError},
 };
@@ -260,6 +260,7 @@ impl Storage {
         }
         let db = self.connection()?;
         let source = authenticated_node(&db, token)?;
+        let interval_seconds = read_settings(&db)?.peer_probe_interval();
         let peers = directory(&db, now, offline)?;
         let mut targets = Vec::new();
         let mut next_after = None;
@@ -279,6 +280,7 @@ impl Storage {
         Ok(PeerProbePlan {
             schema_version: PEER_PROBE_SCHEMA_VERSION,
             issued_at_unix_ms: now,
+            interval_seconds,
             targets,
             next_after,
         })
@@ -529,7 +531,9 @@ mod tests {
         storage::{hash_token, unix_time_ms},
     };
     use senlun_protocol::{
-        EnrollmentRequest, EnrollmentResponse, PROTOCOL_VERSION, PeerProbeSample,
+        DEFAULT_PEER_PROBE_INTERVAL_SECONDS, EnrollmentRequest, EnrollmentResponse,
+        MAX_PEER_PROBE_INTERVAL_SECONDS, MIN_PEER_PROBE_INTERVAL_SECONDS, PROTOCOL_VERSION,
+        PeerProbeSample,
     };
 
     fn enroll(storage: &Storage, now: u64) -> EnrollmentResponse {
@@ -583,6 +587,41 @@ mod tests {
         storage
             .ingest(&hash_token(&node.agent_token), &sample(now, 0, 0), now)
             .unwrap();
+    }
+
+    #[test]
+    fn peer_interval_is_configurable_and_preserved_on_omitted_settings_updates() {
+        let (_dir, storage, source) = fixture();
+        let now = unix_time_ms().unwrap();
+        let interval = || {
+            storage
+                .peer_probe_plan(&source.agent_token, "", now, 60)
+                .unwrap()
+                .interval_seconds
+        };
+        assert_eq!(interval(), DEFAULT_PEER_PROBE_INTERVAL_SECONDS);
+
+        let mut settings = storage.settings().unwrap();
+        settings.peer_probe_interval_seconds = Some(120);
+        storage.save_settings(&settings).unwrap();
+        assert_eq!(interval(), 120);
+
+        let legacy = serde_json::from_value(serde_json::json!({"site_name": "Renamed"})).unwrap();
+        storage.save_settings(&legacy).unwrap();
+        assert_eq!(storage.settings().unwrap().site_name, "Renamed");
+        assert_eq!(interval(), 120);
+
+        for seconds in [
+            MIN_PEER_PROBE_INTERVAL_SECONDS - 1,
+            MAX_PEER_PROBE_INTERVAL_SECONDS + 1,
+        ] {
+            settings.peer_probe_interval_seconds = Some(seconds);
+            assert!(matches!(
+                storage.save_settings(&settings),
+                Err(StorageError::InvalidInput(_))
+            ));
+        }
+        assert_eq!(interval(), 120);
     }
 
     fn report_sample(

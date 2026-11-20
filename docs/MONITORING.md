@@ -100,9 +100,11 @@ up to 99 configured peers. Above that limit, assignments start after the
 source's node ID and wrap around the list. Offline peers keep their assignment
 and are skipped until they reconnect. Agents prefetch pages of up to 32 targets
 and share four concurrent probe slots, with three seconds allowed per address.
-They can fetch and measure the next page while reports are in flight. The
-30-second wait starts after the round completes. Carrier probes use their own
-schedule.
+They can fetch and measure the next page while reports are in flight. Set the
+node-to-node interval in **Site settings**. It defaults to 60 seconds and accepts
+5–300 seconds. Agents pick up the setting with the next round's plan. The
+interval is measured between round starts. A round that takes longer must
+finish before the next one starts. Carrier probes use their own schedule.
 
 The Service keeps the latest result per assigned peer in a temporary SQLite
 cache. Results count as fresh for five minutes and the cache repopulates after

@@ -68,6 +68,23 @@ test('public mode still hides hidden nodes and never exposes administrator write
   }
 })
 
+test('administrator can save the peer latency interval', async ({ page }) => {
+  await login(page, '/admin?section=site')
+  const original = await (await page.request.get('/api/admin/state')).json()
+  const interval = page.getByLabel('节点互测间隔（秒）')
+  await expect(interval).toHaveValue('60')
+  try {
+    await interval.fill('90')
+    await page.getByRole('button', { name: '保存设置' }).click()
+    await expect(page.getByRole('status').filter({ hasText: '已保存' })).toBeVisible()
+    const updated = await (await page.request.get('/api/admin/state')).json()
+    expect(updated.settings.peer_probe_interval_seconds).toBe(90)
+  }
+  finally {
+    await mutation(page.request, '/api/admin/settings', original.settings)
+  }
+})
+
 test('administrator can switch the Emerald header to the bundled map', async ({ page }) => {
   await login(page, '/admin?section=site')
   const original = await (await page.request.get('/api/admin/state')).json()
