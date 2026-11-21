@@ -450,22 +450,28 @@ pub(crate) async fn enrich_nodes(
     value: &mut Value,
 ) -> Result<(), ApiError> {
     let include_addresses = state.auth.authorize(headers, true, true).await.is_ok();
-    let nodes = state.database(|db| {
-        if !db.settings()?.ip_info_enabled {
-            return Ok(HashMap::new());
-        }
-        let connection = db.connection()?;
-        let mut statement = connection.prepare(
-            "SELECT n.id, coalesce(json_extract(o.data,'$.ipv4'),''), coalesce(json_extract(o.data,'$.ipv6'),'')
-             FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id WHERE n.disabled_at_ms IS NULL",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, [row.get::<_, String>(1)?, row.get::<_, String>(2)?]))
-        })?;
-        Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
-    }).await?;
+    let (include_scores, nodes) = state
+        .database(move |db| {
+            let enabled = db.settings()?.ip_info_enabled;
+            if !enabled && !include_addresses {
+                return Ok((false, HashMap::new()));
+            }
+            let connection = db.connection()?;
+            let mut statement = connection.prepare(
+                "SELECT n.id, coalesce(json_extract(o.data,'$.ipv4'),''), coalesce(json_extract(o.data,'$.ipv6'),'')
+                 FROM nodes n LEFT JOIN node_options o ON o.node_id=n.id WHERE n.disabled_at_ms IS NULL",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    [row.get::<_, String>(1)?, row.get::<_, String>(2)?],
+                ))
+            })?;
+            Ok((enabled, rows.collect::<Result<HashMap<_, _>, _>>()?))
+        })
+        .await?;
     let cache = state.ip_info.inner.lock().await;
-    enrich_scores(value, &nodes, &cache, include_addresses);
+    enrich_scores(value, &nodes, &cache, include_addresses, include_scores);
     Ok(())
 }
 
@@ -476,6 +482,7 @@ fn enrich_scores(
     nodes: &HashMap<String, [String; 2]>,
     cache: &Cache,
     include_addresses: bool,
+    include_scores: bool,
 ) {
     if let Some(id) = value["uuid"].as_str() {
         let Some(addresses) = nodes.get(id) else {
@@ -485,28 +492,32 @@ fn enrich_scores(
             value["ipv4"] = json!(addresses[0]);
             value["ipv6"] = json!(addresses[1]);
         }
-        let scores: Vec<Value> = addresses
-            .iter()
-            .zip([4, 6])
-            .filter_map(|(address, family)| {
-                let ip = address.parse::<IpAddr>().ok()?;
-                let entry = cache.entries.get(&format!("{ip}:false"));
-                let score =
-                    entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
-                Some(
-                    json!({"family":family,"score":score,"provider":"Net.Coffee",
-                    "updated_at_unix_ms":entry.map(|entry|entry.updated * 1000)}),
-                )
-            })
-            .collect();
-        value["ip_scores"] = json!(scores);
+        if include_scores {
+            let scores: Vec<Value> = addresses
+                .iter()
+                .zip([4, 6])
+                .filter_map(|(address, family)| {
+                    let ip = address.parse::<IpAddr>().ok()?;
+                    let entry = cache.entries.get(&format!("{ip}:false"));
+                    let score =
+                        entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
+                    Some(json!({
+                        "family": family,
+                        "score": score,
+                        "provider": "Net.Coffee",
+                        "updated_at_unix_ms": entry.map(|entry| entry.updated * 1000)
+                    }))
+                })
+                .collect();
+            value["ip_scores"] = json!(scores);
+        }
     } else if let Some(items) = value.as_object_mut() {
         for item in items.values_mut() {
-            enrich_scores(item, nodes, cache, include_addresses);
+            enrich_scores(item, nodes, cache, include_addresses, include_scores);
         }
     } else if let Some(items) = value.as_array_mut() {
         for item in items {
-            enrich_scores(item, nodes, cache, include_addresses);
+            enrich_scores(item, nodes, cache, include_addresses, include_scores);
         }
     }
 }

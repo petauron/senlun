@@ -24,7 +24,7 @@ The project consists of a Rust Service, a Rust Agent, a shared versioned protoco
 - Application orchestration
 - Proxy or VPN management
 - AI-based network scoring
-- Unlock testing or visitor fingerprinting
+- Visitor fingerprinting or arbitrary third-party unlock scripts
 
 ## Repository layout
 
