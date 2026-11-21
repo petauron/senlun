@@ -751,7 +751,7 @@ async fn probe_netflix(client: &Client) -> UnlockServiceStatus {
             return service_status("netflix", "unknown", None);
         };
         if fallback_region.is_none() {
-            fallback_region = check.region.clone();
+            fallback_region.clone_from(&check.region);
         }
         if check.available {
             let region = check.region.or(fallback_region);
