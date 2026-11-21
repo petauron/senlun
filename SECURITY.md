@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Senlun is currently alpha and has no supported release line yet. Security fixes are prepared on review branches and enter protected `main` only through required checks. Supported release lines will be listed here once releases begin.
+The latest `0.x` release line is supported. Security fixes are prepared on review branches, enter protected `main` only through required checks, and ship in the next `0.x` release.
 
 ## Reporting a vulnerability
 
