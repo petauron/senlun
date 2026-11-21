@@ -24,6 +24,7 @@ use uuid::Uuid;
 const POLL: Duration = Duration::from_secs(15);
 const MAX_CONTROL_RESPONSE: usize = 16 * 1024;
 const MAX_SMALL_BODY: usize = 32 * 1024;
+const MAX_REDDIT_BODY: usize = 512 * 1024;
 const MAX_HTML_BODY: usize = 2 * 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
@@ -288,7 +289,9 @@ async fn read_capped(mut response: reqwest::Response, limit: usize) -> Option<St
             }
         }
     }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+    let text = String::from_utf8(bytes)
+        .unwrap_or_else(|err| String::from_utf8_lossy(err.as_bytes()).into_owned());
+    Some(text)
 }
 
 fn location_header(response: &reqwest::Response) -> Option<String> {
@@ -364,7 +367,7 @@ fn extract_html_attr_region(body: &str, attr: &str) -> Option<String> {
         if let Some(prev) = start
             .checked_sub(1)
             .and_then(|idx| body.as_bytes().get(idx))
-            && (prev.is_ascii_alphanumeric() || *prev == b'_' || *prev == b'-')
+            && !prev.is_ascii_whitespace()
         {
             continue;
         }
@@ -591,7 +594,7 @@ async fn probe_reddit(family: u8) -> UnlockServiceStatus {
     };
 
     // Primary: shreddit/reddit-chat over TLS 1.3 reports both access and country="XX".
-    let chat_blocked = match client
+    let Ok(response) = client
         .get("https://www.reddit.com/svc/shreddit/reddit-chat")
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT, "*/*")
@@ -600,20 +603,18 @@ async fn probe_reddit(family: u8) -> UnlockServiceStatus {
         .header(ORIGIN, "https://www.reddit.com")
         .send()
         .await
-    {
-        Ok(response) => {
-            let status = response.status();
-            let body = read_capped(response, MAX_HTML_BODY)
-                .await
-                .unwrap_or_default();
-            if status.is_success() && !is_reddit_waf_block(&body) {
-                let region = extract_html_attr_region(&body, "country");
-                return service_status("reddit", "unlocked", region);
-            }
-            is_blocked_status(status) || is_reddit_waf_block(&body)
-        }
-        Err(_) => return service_status("reddit", "unknown", None),
+    else {
+        return service_status("reddit", "unknown", None);
     };
+    let chat_status = response.status();
+    let chat_body = read_capped(response, MAX_REDDIT_BODY)
+        .await
+        .unwrap_or_default();
+    if chat_status.is_success() && !is_reddit_waf_block(&chat_body) {
+        let region = extract_html_attr_region(&chat_body, "country");
+        return service_status("reddit", "unlocked", region);
+    }
+    let chat_blocked = is_blocked_status(chat_status) || is_reddit_waf_block(&chat_body);
 
     // Fallback: passive GET https://www.reddit.com/ distinguishes clean IPs (200)
     // from Fastly network-security blocked IPs (403) without solving challenges.
@@ -626,7 +627,7 @@ async fn probe_reddit(family: u8) -> UnlockServiceStatus {
         .await
     {
         let status = web.status();
-        let body = read_capped(web, MAX_SMALL_BODY).await.unwrap_or_default();
+        let body = read_capped(web, MAX_REDDIT_BODY).await.unwrap_or_default();
         if status.is_success() && !is_reddit_waf_block(&body) {
             let region = extract_html_attr_region(&body, "country");
             return service_status("reddit", "unlocked", region);
@@ -656,18 +657,28 @@ fn netflix_region_from_url(location: &str) -> Option<String> {
 struct NetflixTitleResult {
     status: StatusCode,
     available: bool,
+    soft_unavailable: bool,
     region: Option<String>,
 }
 
 fn extract_netflix_body_region(body: &str) -> Option<String> {
+    if let Some(idx) = body.find("\"requestCountry\"") {
+        let rest = &body[idx..];
+        if let Some(end) = rest.find('}')
+            && end <= 128
+            && let Some(code) = extract_json_region(&rest[..end], "id")
+        {
+            return Some(code);
+        }
+    }
     let marker = "\",\"countryName\":\"";
+    let bytes = body.as_bytes();
     for (idx, _) in body.match_indices(marker) {
-        let prefix = &body[..idx];
-        let Some(code_start) = prefix.rfind("\"id\":\"") else {
-            continue;
-        };
-        let candidate = &prefix[code_start + "\"id\":\"".len()..];
-        if let Some(code) = valid_region(candidate) {
+        if idx >= 8
+            && &bytes[idx - 8..idx - 2] == b"\"id\":\""
+            && let Ok(candidate) = std::str::from_utf8(&bytes[idx - 2..idx])
+            && let Some(code) = valid_region(candidate)
+        {
             return Some(code);
         }
     }
@@ -721,10 +732,11 @@ async fn netflix_title_check(client: &Client, title_id: &str) -> Option<NetflixT
         region = netflix_region_from_url(origin);
     }
     let mut available = false;
-    if code.is_success() {
-        let body = read_capped(response, MAX_HTML_BODY)
-            .await
-            .unwrap_or_default();
+    let mut soft_unavailable = false;
+    if code.is_success()
+        && let Some(body) = read_capped(response, MAX_HTML_BODY).await
+        && !body.is_empty()
+    {
         if region.is_none() {
             region = extract_netflix_body_region(&body);
         }
@@ -735,11 +747,13 @@ async fn netflix_title_check(client: &Client, title_id: &str) -> Option<NetflixT
         {
             region = Some("US".to_owned());
         }
-        available = !body.contains("Oh no!");
+        soft_unavailable = body.contains("Oh no!");
+        available = !soft_unavailable;
     }
     Some(NetflixTitleResult {
         status: code,
         available,
+        soft_unavailable,
         region,
     })
 }
@@ -757,7 +771,7 @@ async fn probe_netflix(client: &Client) -> UnlockServiceStatus {
             let region = check.region.or(fallback_region);
             return service_status("netflix", "unlocked", region);
         }
-        if check.status == StatusCode::FORBIDDEN {
+        if is_blocked_status(check.status) {
             return service_status("netflix", "blocked", None);
         }
     }
@@ -766,7 +780,10 @@ async fn probe_netflix(client: &Client) -> UnlockServiceStatus {
             let region = orig.region.or(fallback_region);
             return service_status("netflix", "originals_only", region);
         }
-        if matches!(orig.status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
+        if is_blocked_status(orig.status)
+            || orig.status == StatusCode::NOT_FOUND
+            || orig.soft_unavailable
+        {
             return service_status("netflix", "blocked", None);
         }
     }
@@ -973,23 +990,29 @@ async fn probe_disney_landing(client: &Client) -> DisneyProbeResult {
     DisneyProbeResult::Unknown(region)
 }
 
+fn into_disney_region(result: DisneyProbeResult) -> Option<String> {
+    match result {
+        DisneyProbeResult::Unlocked(code) => Some(code),
+        DisneyProbeResult::Blocked(region) | DisneyProbeResult::Unknown(region) => region,
+    }
+}
+
 async fn probe_disney_plus(client: &Client) -> UnlockServiceStatus {
     let (api_result, landing_result) =
         tokio::join!(probe_disney_bamgrid(client), probe_disney_landing(client));
     match (api_result, landing_result) {
         (api, DisneyProbeResult::Blocked(region)) => {
-            let api_region = match api {
-                DisneyProbeResult::Unlocked(code) => Some(code),
-                DisneyProbeResult::Blocked(r) | DisneyProbeResult::Unknown(r) => r,
-            };
-            let merged = region.or(api_region);
+            let merged = region.or_else(|| into_disney_region(api));
+            service_status("disney_plus", "blocked", merged)
+        }
+        (DisneyProbeResult::Blocked(region), landing) => {
+            let merged = region.or_else(|| into_disney_region(landing));
             service_status("disney_plus", "blocked", merged)
         }
         (DisneyProbeResult::Unlocked(code), _)
         | (DisneyProbeResult::Unknown(_), DisneyProbeResult::Unlocked(code)) => {
             service_status("disney_plus", "unlocked", Some(code))
         }
-        (DisneyProbeResult::Blocked(code), _) => service_status("disney_plus", "blocked", code),
         (DisneyProbeResult::Unknown(api_region), DisneyProbeResult::Unknown(landing_region)) => {
             let merged = api_region.or(landing_region);
             service_status("disney_plus", "unknown", merged)
@@ -1072,8 +1095,14 @@ fn is_tiktok_blocked_redirect(base: &str, location: &str) -> bool {
     path == "/about" || path.starts_with("/about/") || path.contains("unavailable")
 }
 
-async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
-    let mut current_url = "https://www.tiktok.com/".to_owned();
+enum TikTokFetch {
+    Blocked,
+    Body(String),
+    Unknown,
+}
+
+async fn fetch_tiktok_page(client: &Client, start_url: &str) -> TikTokFetch {
+    let mut current_url = start_url.to_owned();
     let Ok(mut response) = client
         .get(&current_url)
         .header(USER_AGENT, BROWSER_UA)
@@ -1081,7 +1110,7 @@ async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
         .send()
         .await
     else {
-        return service_status("tiktok", "unknown", None);
+        return TikTokFetch::Unknown;
     };
     for _ in 0..2 {
         if !response.status().is_redirection() {
@@ -1091,7 +1120,7 @@ async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
             break;
         };
         if is_tiktok_blocked_redirect(&current_url, &loc) {
-            return service_status("tiktok", "blocked", None);
+            return TikTokFetch::Blocked;
         }
         let Some(next_url) = same_origin_https_redirect(&current_url, &loc) else {
             break;
@@ -1104,39 +1133,45 @@ async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
             .send()
             .await
         else {
-            return service_status("tiktok", "unknown", None);
+            return TikTokFetch::Unknown;
         };
         response = next;
     }
-    let status = response.status();
-    if is_blocked_status(status) {
-        return service_status("tiktok", "blocked", None);
-    }
-    let mut body = read_capped(response, MAX_HTML_BODY)
-        .await
-        .unwrap_or_default();
-    if body.contains("Please wait...")
-        && let Ok(explore) = client
-            .get(TIKTOK_EXPLORE_URL)
-            .header(USER_AGENT, BROWSER_UA)
-            .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
-            .send()
-            .await
-    {
-        if explore.status().is_redirection()
-            && let Some(loc) = location_header(&explore)
-            && is_tiktok_blocked_redirect(TIKTOK_EXPLORE_URL, &loc)
+    if response.status().is_redirection() {
+        if let Some(loc) = location_header(&response)
+            && is_tiktok_blocked_redirect(&current_url, &loc)
         {
-            return service_status("tiktok", "blocked", None);
+            return TikTokFetch::Blocked;
         }
-        if is_blocked_status(explore.status()) {
-            return service_status("tiktok", "blocked", None);
-        }
-        body = read_capped(explore, MAX_HTML_BODY)
-            .await
-            .unwrap_or_default();
+        return TikTokFetch::Unknown;
     }
-    let region = extract_json_region(&body, "region");
+    if is_blocked_status(response.status()) {
+        return TikTokFetch::Blocked;
+    }
+    let Some(body) = read_capped(response, MAX_HTML_BODY).await else {
+        return TikTokFetch::Unknown;
+    };
+    TikTokFetch::Body(body)
+}
+
+async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
+    let mut body = match fetch_tiktok_page(client, "https://www.tiktok.com/").await {
+        TikTokFetch::Blocked => return service_status("tiktok", "blocked", None),
+        TikTokFetch::Body(text) => text,
+        TikTokFetch::Unknown => return service_status("tiktok", "unknown", None),
+    };
+    let mut region = extract_json_region(&body, "region");
+    if region.is_none() && body.contains("Please wait...") {
+        drop(body);
+        match fetch_tiktok_page(client, TIKTOK_EXPLORE_URL).await {
+            TikTokFetch::Blocked => return service_status("tiktok", "blocked", None),
+            TikTokFetch::Body(text) => {
+                region = extract_json_region(&text, "region");
+                body = text;
+            }
+            TikTokFetch::Unknown => return service_status("tiktok", "unknown", None),
+        }
+    }
     if matches!(region.as_deref(), Some("CN" | "HK" | "IN"))
         || body.contains("TikTok isn't available")
         || body.contains("not available in your")
@@ -1204,6 +1239,11 @@ mod tests {
         );
         let nf_body = r#"{"id":"HK","countryName":"Hong Kong"}"#;
         assert_eq!(extract_netflix_body_region(nf_body), Some("HK".to_owned()));
+        let nf_req = concat!(
+            r#"{"id":"ZZ","countryName":"Other","#,
+            r#""requestCountry":{"id":"US","countryName":"United States"}}"#
+        );
+        assert_eq!(extract_netflix_body_region(nf_req), Some("US".to_owned()));
         let tt_base = "https://www.tiktok.com/";
         let tt_about = "https://www.tiktok.com/about?lang=en";
         assert!(is_tiktok_blocked_redirect(tt_base, tt_about));
@@ -1219,7 +1259,10 @@ mod tests {
         assert!(!is_reddit_waf_block(
             r#"{"message":"Unauthorized","error":401}"#
         ));
-        let reddit_html = r#"<div data-country="ZZ" country="US" lang="en"></div>"#;
+        let reddit_html = concat!(
+            r#"<div data-country="ZZ" obj.country="CA" country="US""#,
+            r#" lang="en"></div>"#
+        );
         assert_eq!(
             extract_html_attr_region(reddit_html, "country"),
             Some("US".to_owned())
