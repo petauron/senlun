@@ -117,8 +117,7 @@ async fn run(client: Client, url: Url, token: String) {
                         }
                         bytes.extend_from_slice(&chunk);
                     }
-                    let task: Option<IpUnlockTask> =
-                        serde_json::from_slice(&bytes).ok().flatten();
+                    let task: Option<IpUnlockTask> = serde_json::from_slice(&bytes).ok().flatten();
                     if let Some(task) = task {
                         let now = now_ms();
                         if task.expires_at_unix_ms > now
@@ -207,14 +206,19 @@ async fn verify_egress(client: &Client, family: u8, expected: IpAddr) -> Result<
     };
     let response = client
         .get(url)
-        .header(USER_AGENT, concat!("senlun-agent/", env!("CARGO_PKG_VERSION")))
+        .header(
+            USER_AGENT,
+            concat!("senlun-agent/", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|_| "collection_failed")?;
     if !response.status().is_success() {
         return Err("collection_failed");
     }
-    let body = read_capped(response, 128).await.ok_or("collection_failed")?;
+    let body = read_capped(response, 128)
+        .await
+        .ok_or("collection_failed")?;
     let actual: IpAddr = body.trim().parse().map_err(|_| "collection_failed")?;
     if actual != expected {
         return Err("address_mismatch");
@@ -251,6 +255,35 @@ fn location_header(response: &reqwest::Response) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn same_origin_https_redirect(base: &str, location: &str) -> Option<String> {
+    let base_url = Url::parse(base).ok()?;
+    let target = base_url.join(location).ok()?;
+    if target.scheme() == "https"
+        && target.host_str() == base_url.host_str()
+        && target.port().is_none()
+        && target.username().is_empty()
+        && target.password().is_none()
+    {
+        Some(target.into())
+    } else {
+        None
+    }
+}
+
+fn allowlisted_https_redirect(base: &str, location: &str, host: &str) -> Option<String> {
+    let target = Url::parse(base).ok()?.join(location).ok()?;
+    if target.scheme() == "https"
+        && target.host_str() == Some(host)
+        && target.port().is_none()
+        && target.username().is_empty()
+        && target.password().is_none()
+    {
+        Some(target.into())
+    } else {
+        None
+    }
+}
+
 fn valid_region(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.len() == 2 && trimmed.bytes().all(|b| b.is_ascii_alphabetic()) {
@@ -262,67 +295,93 @@ fn valid_region(raw: &str) -> Option<String> {
 
 fn extract_json_region(body: &str, key: &str) -> Option<String> {
     let pattern = format!("\"{key}\"");
-    let start = body.find(&pattern)?;
-    let rest = body[start + pattern.len()..].trim_start();
-    let rest = rest.strip_prefix(':')?.trim_start();
-    let rest = rest.strip_prefix('"')?;
-    let end = rest.find('"')?;
-    valid_region(&rest[..end])
-}
-
-fn query_param_region(url: &str, param: &str) -> Option<String> {
-    let (_, query) = url.split_once('?')?;
-    for pair in query.split('&') {
-        if let Some((key, value)) = pair.split_once('=')
-            && key == param
-        {
-            return valid_region(value);
+    for (start, _) in body.match_indices(&pattern) {
+        let rest = body[start + pattern.len()..].trim_start();
+        let Some(rest) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        if let Some(code) = valid_region(&rest[..end]) {
+            return Some(code);
         }
     }
     None
 }
 
-fn region_from_google_location(location: &str) -> Option<String> {
-    let lower = location.to_ascii_lowercase();
+fn query_param_region(base: &str, location: &str, param: &str) -> Option<String> {
+    let parsed = Url::parse(base).ok()?.join(location).ok()?;
+    parsed
+        .query_pairs()
+        .find_map(|(key, value)| (key == param).then(|| valid_region(&value)).flatten())
+}
+
+fn is_google_cn_url(base: &str, location: &str) -> bool {
+    Url::parse(base)
+        .ok()
+        .and_then(|u| u.join(location).ok())
+        .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+        .is_some_and(|host| host == "google.cn" || host.ends_with(".google.cn"))
+}
+
+fn region_from_google_location(base: &str, location: &str) -> Option<String> {
+    let host = Url::parse(base)
+        .ok()?
+        .join(location)
+        .ok()?
+        .host_str()?
+        .to_ascii_lowercase();
     for (suffix, code) in [
-        (".google.cn", "CN"),
-        (".google.com.hk", "HK"),
-        (".google.co.jp", "JP"),
-        (".google.com.sg", "SG"),
-        (".google.com.tw", "TW"),
-        (".google.co.kr", "KR"),
-        (".google.co.uk", "GB"),
-        (".google.de", "DE"),
-        (".google.fr", "FR"),
-        (".google.ca", "CA"),
-        (".google.com.au", "AU"),
-        (".google.nl", "NL"),
+        ("google.cn", "CN"),
+        ("google.com.hk", "HK"),
+        ("google.co.jp", "JP"),
+        ("google.com.sg", "SG"),
+        ("google.com.tw", "TW"),
+        ("google.co.kr", "KR"),
+        ("google.co.uk", "GB"),
+        ("google.de", "DE"),
+        ("google.fr", "FR"),
+        ("google.ca", "CA"),
+        ("google.com.au", "AU"),
+        ("google.nl", "NL"),
     ] {
-        if lower.contains(suffix) {
+        if host == suffix || host.ends_with(&format!(".{suffix}")) {
             return Some(code.to_owned());
         }
     }
     None
 }
 
-async fn probe_google_and_youtube(client: &Client) -> (GoogleUnlockStatus, UnlockServiceStatus) {
-    let (yt_region, yt_cn, yt_status) = probe_youtube(client).await;
-    let (g_cn, g_captcha, g_region, g_ok) = probe_google_home(client).await;
+struct GoogleSearchProbe {
+    china: bool,
+    captcha: bool,
+    region: Option<String>,
+    ok: bool,
+}
 
-    let google = if yt_cn || g_cn {
+async fn probe_google_and_youtube(client: &Client) -> (GoogleUnlockStatus, UnlockServiceStatus) {
+    let ((yt_region, yt_cn, yt_status), google_probe) =
+        tokio::join!(probe_youtube(client), probe_google_search(client));
+
+    let google = if yt_cn || google_probe.china {
         GoogleUnlockStatus {
             status: "china".to_owned(),
             region: Some("CN".to_owned()),
         }
-    } else if g_captcha {
+    } else if google_probe.captcha {
         GoogleUnlockStatus {
             status: "captcha".to_owned(),
-            region: yt_region.clone().or(g_region),
+            region: yt_region.clone().or(google_probe.region),
         }
-    } else if yt_region.is_some() || g_region.is_some() || g_ok {
+    } else if yt_region.is_some() || google_probe.region.is_some() || google_probe.ok {
         GoogleUnlockStatus {
             status: "normal".to_owned(),
-            region: yt_region.clone().or(g_region),
+            region: yt_region.clone().or(google_probe.region),
         }
     } else {
         GoogleUnlockStatus {
@@ -345,8 +404,9 @@ async fn probe_google_and_youtube(client: &Client) -> (GoogleUnlockStatus, Unloc
 }
 
 async fn probe_youtube(client: &Client) -> (Option<String>, bool, &'static str) {
+    let base = "https://www.youtube.com/premium?hl=en";
     let Ok(mut response) = client
-        .get("https://www.youtube.com/premium")
+        .get(base)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
         .send()
@@ -357,21 +417,21 @@ async fn probe_youtube(client: &Client) -> (Option<String>, bool, &'static str) 
     if response.status().is_redirection()
         && let Some(loc) = location_header(&response)
     {
-        let lower_loc = loc.to_ascii_lowercase();
-        if lower_loc.contains("google.cn") {
+        if is_google_cn_url(base, &loc) {
             return (Some("CN".to_owned()), true, "china");
         }
-        if lower_loc.starts_with("https://consent.youtube.com/")
-            && let Some(region) = query_param_region(&loc, "gl")
-        {
-            if region == "CN" {
-                return (Some("CN".to_owned()), true, "china");
+        if allowlisted_https_redirect(base, &loc, "consent.youtube.com").is_some() {
+            if let Some(region) = query_param_region(base, &loc, "gl") {
+                if region == "CN" {
+                    return (Some("CN".to_owned()), true, "china");
+                }
+                return (Some(region), false, "unknown");
             }
-            return (Some(region), false, "unlocked");
+            return (None, false, "unknown");
         }
-        if loc.starts_with("https://www.youtube.com/")
+        if let Some(next_url) = same_origin_https_redirect(base, &loc)
             && let Ok(next) = client
-                .get(&loc)
+                .get(&next_url)
                 .header(USER_AGENT, BROWSER_UA)
                 .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
                 .send()
@@ -381,7 +441,9 @@ async fn probe_youtube(client: &Client) -> (Option<String>, bool, &'static str) 
         }
     }
     let status = response.status();
-    let body = read_capped(response, MAX_HTML_BODY).await.unwrap_or_default();
+    let body = read_capped(response, MAX_HTML_BODY)
+        .await
+        .unwrap_or_default();
     let region = extract_json_region(&body, "INNERTUBE_CONTEXT_GL")
         .or_else(|| extract_json_region(&body, "countryCode"));
     let is_cn = region.as_deref() == Some("CN") || body.contains("www.google.cn");
@@ -391,7 +453,7 @@ async fn probe_youtube(client: &Client) -> (Option<String>, bool, &'static str) 
     if body.contains("YouTube Premium is not available in your country") {
         return (region, false, "blocked");
     }
-    if region.is_some() || status.is_success() {
+    if region.is_some() && status.is_success() {
         return (region, false, "unlocked");
     }
     if is_blocked_status(status) {
@@ -400,28 +462,42 @@ async fn probe_youtube(client: &Client) -> (Option<String>, bool, &'static str) 
     (region, false, "unknown")
 }
 
-async fn probe_google_home(client: &Client) -> (bool, bool, Option<String>, bool) {
+async fn probe_google_search(client: &Client) -> GoogleSearchProbe {
+    let base = "https://www.google.com/search?q=1&hl=en";
     let Ok(response) = client
-        .get("https://www.google.com/")
+        .get(base)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
         .send()
         .await
     else {
-        return (false, false, None, false);
+        return GoogleSearchProbe {
+            china: false,
+            captcha: false,
+            region: None,
+            ok: false,
+        };
     };
     let status = response.status();
     let loc = location_header(&response).unwrap_or_default();
+    let consent_region = if allowlisted_https_redirect(base, &loc, "consent.google.com").is_some() {
+        query_param_region(base, &loc, "gl")
+    } else {
+        None
+    };
+    let loc_cn = is_google_cn_url(base, &loc) || consent_region.as_deref() == Some("CN");
     let lower_loc = loc.to_ascii_lowercase();
-    let is_cn = lower_loc.contains("://www.google.cn")
-        || lower_loc.contains("://google.cn")
-        || lower_loc.contains(".google.cn/");
     let is_captcha = status == StatusCode::TOO_MANY_REQUESTS
         || lower_loc.contains("/sorry/")
         || lower_loc.contains("sorry/index");
-    let region = region_from_google_location(&loc);
-    let ok = status.is_success() || (status.is_redirection() && !is_cn && !is_captcha);
-    (is_cn, is_captcha, region, ok)
+    let region = consent_region.or_else(|| region_from_google_location(base, &loc));
+    let ok = status.is_success() || (status.is_redirection() && !loc_cn && !is_captcha);
+    GoogleSearchProbe {
+        china: loc_cn,
+        captcha: is_captcha,
+        region,
+        ok,
+    }
 }
 
 fn is_reddit_waf_block(body: &str) -> bool {
@@ -444,7 +520,9 @@ async fn probe_reddit(client: &Client) -> UnlockServiceStatus {
         return service_status("reddit", "unknown", None);
     };
     let api_code = response.status();
-    let api_body = read_capped(response, MAX_SMALL_BODY).await.unwrap_or_default();
+    let api_body = read_capped(response, MAX_SMALL_BODY)
+        .await
+        .unwrap_or_default();
     if api_code == StatusCode::FORBIDDEN || is_reddit_waf_block(&api_body) {
         return service_status("reddit", "blocked", None);
     }
@@ -453,7 +531,7 @@ async fn probe_reddit(client: &Client) -> UnlockServiceStatus {
         return service_status("reddit", "unknown", None);
     }
 
-    // Layer 2: verify whether anonymous web browsing is also open or app/login-only.
+    // Layer 2: verify whether anonymous web browsing returns 2xx without WAF block.
     if let Ok(web) = client
         .get("https://www.reddit.com/")
         .header(USER_AGENT, BROWSER_UA)
@@ -463,9 +541,10 @@ async fn probe_reddit(client: &Client) -> UnlockServiceStatus {
         .await
     {
         let web_code = web.status();
-        let web_body = read_capped(web, MAX_SMALL_BODY).await.unwrap_or_default();
-        let web_ok = web_code.is_success() || web_code.is_redirection();
-        if web_ok && !is_reddit_waf_block(&web_body) {
+        let web_body = read_capped(web, MAX_SMALL_BODY)
+            .await
+            .unwrap_or_default();
+        if web_code.is_success() && !is_reddit_waf_block(&web_body) {
             return service_status("reddit", "unlocked", None);
         }
     }
@@ -473,10 +552,11 @@ async fn probe_reddit(client: &Client) -> UnlockServiceStatus {
 }
 
 fn netflix_region_from_url(location: &str) -> Option<String> {
-    let path = location
-        .strip_prefix("https://www.netflix.com/")
-        .or_else(|| location.strip_prefix('/'))?;
-    let segment = path.split('/').next()?;
+    let parsed = Url::parse("https://www.netflix.com/")
+        .ok()?
+        .join(location)
+        .ok()?;
+    let segment = parsed.path().trim_start_matches('/').split('/').next()?;
     let candidate = segment.split('-').next()?;
     valid_region(candidate)
 }
@@ -485,87 +565,109 @@ async fn netflix_title_check(
     client: &Client,
     title_id: &str,
 ) -> Option<(StatusCode, Option<String>)> {
-    let url = format!("https://www.netflix.com/title/{title_id}");
+    let mut current_url = format!("https://www.netflix.com/title/{title_id}");
+    let mut region = None;
     let mut response = client
-        .get(&url)
+        .get(&current_url)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
         .send()
         .await
         .ok()?;
-    let mut region = None;
-    if response.status().is_redirection()
-        && let Some(loc) = location_header(&response)
-    {
-        region = netflix_region_from_url(&loc);
-        let next_url = if loc.starts_with("https://www.netflix.com/") {
-            Some(loc)
-        } else if loc.starts_with('/') {
-            Some(format!("https://www.netflix.com{loc}"))
-        } else {
-            None
-        };
-        if let Some(target) = next_url
-            && let Ok(followed) = client
-                .get(&target)
-                .header(USER_AGENT, BROWSER_UA)
-                .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
-                .send()
-                .await
-        {
-            response = followed;
+    for _ in 0..2 {
+        if !response.status().is_redirection() {
+            break;
         }
+        let Some(loc) = location_header(&response) else {
+            break;
+        };
+        if region.is_none() {
+            region = netflix_region_from_url(&loc);
+        }
+        let Some(next_url) = same_origin_https_redirect(&current_url, &loc) else {
+            break;
+        };
+        current_url = next_url;
+        let Ok(followed) = client
+            .get(&current_url)
+            .header(USER_AGENT, BROWSER_UA)
+            .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
+            .send()
+            .await
+        else {
+            break;
+        };
+        response = followed;
     }
     let code = response.status();
+    let originating = response
+        .headers()
+        .get("x-originating-url")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
     if region.is_none()
-        && let Some(origin) = response
-            .headers()
-            .get("x-originating-url")
-            .and_then(|value| value.to_str().ok())
+        && let Some(origin) = &originating
     {
         region = netflix_region_from_url(origin);
     }
-    if code.is_success() && region.is_none() {
+    if code.is_success()
+        && region.is_none()
+        && originating
+            .as_deref()
+            .is_some_and(|origin| origin.contains("/title/"))
+    {
         region = Some("US".to_owned());
     }
     Some((code, region))
 }
 
 async fn probe_netflix(client: &Client) -> UnlockServiceStatus {
-    let Some((status, region)) = netflix_title_check(client, "81280792").await else {
-        return service_status("netflix", "unknown", None);
-    };
-    if status.is_success() {
-        return service_status("netflix", "unlocked", region);
+    for licensed in ["81280792", "70143836"] {
+        let Some((status, region)) = netflix_title_check(client, licensed).await else {
+            return service_status("netflix", "unknown", None);
+        };
+        if status.is_success() {
+            return service_status("netflix", "unlocked", region);
+        }
+        if status == StatusCode::FORBIDDEN {
+            return service_status("netflix", "blocked", None);
+        }
     }
-    if status == StatusCode::FORBIDDEN {
-        return service_status("netflix", "blocked", None);
-    }
-    if status == StatusCode::NOT_FOUND
-        && let Some((orig_status, orig_region)) = netflix_title_check(client, "80018499").await
-    {
+    if let Some((orig_status, orig_region)) = netflix_title_check(client, "80018499").await {
         if orig_status.is_success() {
             return service_status("netflix", "originals_only", orig_region);
         }
-        if orig_status == StatusCode::FORBIDDEN {
+        if matches!(orig_status, StatusCode::FORBIDDEN | StatusCode::NOT_FOUND) {
             return service_status("netflix", "blocked", None);
         }
     }
     service_status("netflix", "unknown", None)
 }
 
-fn disney_region_from_location(location: &str) -> Option<String> {
-    let path = location
-        .strip_prefix("https://www.disneyplus.com/")
-        .or_else(|| location.strip_prefix('/'))?;
-    let segment = path.split(['/', '?']).next()?;
-    let (_, region) = segment.rsplit_once('-')?;
-    valid_region(region)
+fn disney_region_from_location(base: &str, location: &str) -> Option<String> {
+    let parsed = Url::parse(base).ok()?.join(location).ok()?;
+    let segment = parsed.path().trim_start_matches('/').split('/').next()?;
+    let (prefix, region) = segment.rsplit_once('-')?;
+    let valid_lang = match prefix.split_once('-') {
+        None => prefix.len() == 2 && prefix.bytes().all(|b| b.is_ascii_alphabetic()),
+        Some((lang, script)) => {
+            lang.len() == 2
+                && lang.bytes().all(|b| b.is_ascii_alphabetic())
+                && script.len() == 4
+                && script.bytes().all(|b| b.is_ascii_alphabetic())
+        }
+    };
+    if valid_lang {
+        valid_region(region)
+    } else {
+        None
+    }
 }
 
 async fn probe_disney_plus(client: &Client) -> UnlockServiceStatus {
-    let Ok(response) = client
-        .get("https://www.disneyplus.com/")
+    let base = "https://www.disneyplus.com/";
+    let Ok(mut response) = client
+        .get(base)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
         .send()
@@ -573,29 +675,43 @@ async fn probe_disney_plus(client: &Client) -> UnlockServiceStatus {
     else {
         return service_status("disney_plus", "unknown", None);
     };
-    let status = response.status();
-    if is_blocked_status(status) {
-        return service_status("disney_plus", "blocked", None);
-    }
-    if status.is_redirection()
+    let mut redirect_region = None;
+    if response.status().is_redirection()
         && let Some(loc) = location_header(&response)
     {
         if loc.to_ascii_lowercase().contains("unavailable") {
             return service_status("disney_plus", "blocked", None);
         }
-        if let Some(region) = disney_region_from_location(&loc) {
-            return service_status("disney_plus", "unlocked", Some(region));
+        redirect_region = disney_region_from_location(base, &loc);
+        if let Some(next_url) = same_origin_https_redirect(base, &loc)
+            && let Ok(next) = client
+                .get(&next_url)
+                .header(USER_AGENT, BROWSER_UA)
+                .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
+                .send()
+                .await
+        {
+            response = next;
         }
     }
-    let body = read_capped(response, MAX_HTML_BODY / 2).await.unwrap_or_default();
-    if body.contains("\"inSupportedLocation\":false") {
-        return service_status("disney_plus", "blocked", None);
+    let status = response.status();
+    if is_blocked_status(status) {
+        return service_status("disney_plus", "blocked", redirect_region);
     }
-    let region = extract_json_region(&body, "countryCode");
-    if status.is_success() || region.is_some() {
+    let body = read_capped(response, MAX_HTML_BODY / 2)
+        .await
+        .unwrap_or_default();
+    if body.contains("\"inSupportedLocation\":false")
+        || body.contains("\"inSupportedLocation\": false")
+        || body.contains("Sorry, Disney+ is not available in your region")
+    {
+        return service_status("disney_plus", "blocked", redirect_region);
+    }
+    let region = redirect_region.or_else(|| extract_json_region(&body, "countryCode"));
+    if status.is_success() && region.is_some() {
         return service_status("disney_plus", "unlocked", region);
     }
-    service_status("disney_plus", "unknown", None)
+    service_status("disney_plus", "unknown", region)
 }
 
 async fn probe_chatgpt(client: &Client) -> UnlockServiceStatus {
@@ -611,11 +727,15 @@ async fn probe_chatgpt(client: &Client) -> UnlockServiceStatus {
         }),
         _ => None,
     };
-    if loc.as_deref().is_some_and(|code| CHATGPT_UNSUPPORTED_REGIONS.contains(&code)) {
+    if loc
+        .as_deref()
+        .is_some_and(|code| CHATGPT_UNSUPPORTED_REGIONS.contains(&code))
+    {
         return service_status("chatgpt", "blocked", loc);
     }
-    let Ok(response) = client
-        .get("https://ios.chat.openai.com/public-api/mobile/server_status/v1")
+    let base = "https://ios.chat.openai.com/public-api/mobile/server_status/v1";
+    let Ok(mut response) = client
+        .get(base)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT, "application/json")
         .send()
@@ -623,9 +743,30 @@ async fn probe_chatgpt(client: &Client) -> UnlockServiceStatus {
     else {
         return service_status("chatgpt", "unknown", loc);
     };
+    if response.status().is_redirection()
+        && let Some(loc_hdr) = location_header(&response)
+        && let Some(next_url) = allowlisted_https_redirect(base, &loc_hdr, "chatgpt.com")
+        && let Ok(next) = client
+            .get(&next_url)
+            .header(USER_AGENT, BROWSER_UA)
+            .header(ACCEPT, "application/json")
+            .send()
+            .await
+    {
+        response = next;
+    }
     let status = response.status();
-    let body = read_capped(response, MAX_SMALL_BODY).await.unwrap_or_default();
-    if is_blocked_status(status) || body.contains("unsupported_country") {
+    let cf_challenge = response.headers().contains_key("cf-mitigated");
+    let body = read_capped(response, MAX_SMALL_BODY)
+        .await
+        .unwrap_or_default();
+    if body.contains("unsupported_country") {
+        return service_status("chatgpt", "blocked", loc);
+    }
+    if cf_challenge {
+        return service_status("chatgpt", "unknown", loc);
+    }
+    if is_blocked_status(status) {
         return service_status("chatgpt", "blocked", loc);
     }
     if status.is_success() {
@@ -635,8 +776,9 @@ async fn probe_chatgpt(client: &Client) -> UnlockServiceStatus {
 }
 
 async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
+    let base = "https://www.tiktok.com/";
     let Ok(mut response) = client
-        .get("https://www.tiktok.com/")
+        .get(base)
         .header(USER_AGENT, BROWSER_UA)
         .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
         .send()
@@ -646,32 +788,25 @@ async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
     };
     if response.status().is_redirection()
         && let Some(loc) = location_header(&response)
+        && let Some(next_url) = same_origin_https_redirect(base, &loc)
+        && let Ok(next) = client
+            .get(&next_url)
+            .header(USER_AGENT, BROWSER_UA)
+            .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
+            .send()
+            .await
     {
-        let next_url = if loc.starts_with("https://www.tiktok.com/") {
-            Some(loc)
-        } else if loc.starts_with('/') {
-            Some(format!("https://www.tiktok.com{loc}"))
-        } else {
-            None
-        };
-        if let Some(target) = next_url
-            && let Ok(next) = client
-                .get(&target)
-                .header(USER_AGENT, BROWSER_UA)
-                .header(ACCEPT_LANGUAGE, ACCEPT_LANG)
-                .send()
-                .await
-        {
-            response = next;
-        }
+        response = next;
     }
     let status = response.status();
     if is_blocked_status(status) {
         return service_status("tiktok", "blocked", None);
     }
-    let body = read_capped(response, MAX_HTML_BODY / 2).await.unwrap_or_default();
+    let body = read_capped(response, MAX_HTML_BODY)
+        .await
+        .unwrap_or_default();
     let region = extract_json_region(&body, "region");
-    if matches!(region.as_deref(), Some("CN" | "HK"))
+    if matches!(region.as_deref(), Some("CN" | "HK" | "IN"))
         || body.contains("TikTok isn't available")
         || body.contains("not available in your")
     {
@@ -697,29 +832,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn extracts_region_and_distinguishes_hk_from_cn() {
+    fn parses_regions_and_redirects_safely() {
+        let base = "https://www.google.com/search?q=1";
         assert_eq!(
-            region_from_google_location("https://www.google.com.hk/?gws_rd=ssl"),
+            region_from_google_location(base, "https://www.google.com.hk/?gws_rd=ssl"),
             Some("HK".to_owned())
         );
+        assert!(is_google_cn_url(base, "https://www.google.cn/"));
+        assert!(!is_google_cn_url(
+            base,
+            "https://www.google.com/?continue=https://www.google.cn/"
+        ));
+        let sample = r#"{"region":null,"region":"","region":"JP"}"#;
+        assert_eq!(extract_json_region(sample, "region"), Some("JP".to_owned()));
+        let consent = "https://consent.youtube.com/m?continue=x&gl=DE#frag";
         assert_eq!(
-            region_from_google_location("https://www.google.cn/"),
-            Some("CN".to_owned())
-        );
-        assert_eq!(
-            extract_json_region(r#"{"INNERTUBE_CONTEXT_GL": "HK"}"#, "INNERTUBE_CONTEXT_GL"),
-            Some("HK".to_owned())
-        );
-        assert_eq!(
-            query_param_region(
-                "https://consent.youtube.com/m?continue=https://www.youtube.com/premium&gl=DE",
-                "gl"
-            ),
+            query_param_region(base, consent, "gl"),
             Some("DE".to_owned())
         );
         assert_eq!(
-            disney_region_from_location("https://www.disneyplus.com/zh-hant-hk"),
+            disney_region_from_location("https://www.disneyplus.com/", "/zh-hant-hk"),
             Some("HK".to_owned())
+        );
+        assert_eq!(
+            disney_region_from_location("https://www.disneyplus.com/", "/sign-in"),
+            None
+        );
+        assert_eq!(
+            same_origin_https_redirect("https://www.netflix.com/title/1", "//evil.example/x"),
+            None
         );
         assert_eq!(
             netflix_region_from_url("https://www.netflix.com/hk-en/title/81280792"),
@@ -733,6 +874,8 @@ mod tests {
             "<html>You've been blocked by network security.</html>"
         ));
         assert!(is_reddit_waf_block("Whoa there, pardner!"));
-        assert!(!is_reddit_waf_block(r#"{"message":"Unauthorized","error":401}"#));
+        assert!(!is_reddit_waf_block(
+            r#"{"message":"Unauthorized","error":401}"#
+        ));
     }
 }

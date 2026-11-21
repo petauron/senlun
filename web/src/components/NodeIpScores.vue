@@ -13,7 +13,9 @@ import { getSharedApi } from '@/utils/api'
 import { getGoogleUnlockDisplay, getOrderedUnlockServices } from '@/utils/ipUnlock'
 import { getIpScoreGrade, nodeBadgeClass } from '@/utils/nodeBadges'
 
-const props = defineProps<{ node: NodeData }>()
+const props = withDefaults(defineProps<{ node: NodeData, showChinaBadge?: boolean }>(), {
+  showChinaBadge: true,
+})
 const app = useAppStore()
 const open = ref(false)
 const busy = ref(false)
@@ -48,9 +50,9 @@ const unlockHint = computed(() => {
     return '节点离线，暂时无法检测解锁'
   if (!address.value)
     return '当前网络版本暂无可查询的地址'
-  if (props.node.ip_unlock_capability === 'upgrade_required')
+  if (props.node.ip_unlock_capability === 'upgrade_required' || props.node.ip_unlock_capability === undefined)
     return '请先更新该节点的监控探针以支持解锁检测'
-  if (props.node.ip_unlock_capability === 'unavailable')
+  if (props.node.ip_unlock_capability !== 'ready')
     return '该节点暂不具备解锁检测条件'
   return '通过节点 Agent 轻量探测流媒体解锁与 Google 送中状态'
 })
@@ -94,20 +96,26 @@ function scheduleUnlockPoll() {
     message.value = '解锁状态刷新已暂停，请重新打开查看。'
     return
   }
+  const activeFamily = unlockActive.value.family
   timer = setTimeout(async () => {
     const uuid = props.node.uuid
     try {
       const result = await getSharedApi().get<UnlockState>(`admin/nodes/${encodeURIComponent(uuid)}/ip-unlock`)
-      if (!disposed && props.node.uuid === uuid)
-        applyUnlock(uuid, result)
-      const finished = result.ip_unlock_checks?.find(check => check.family === family.value)
-      if (!disposed && finished?.state === 'succeeded')
+      if (disposed || props.node.uuid !== uuid)
+        return
+      applyUnlock(uuid, result)
+      const finished = result.ip_unlock_checks?.find(check => check.family === activeFamily)
+      if (finished?.state === 'succeeded') {
         message.value = '解锁与 Google 定位状态已更新。'
-      else if (!disposed && finished?.state === 'failed')
-        message.value = finished.error === 'address_mismatch' ? '节点实际出口地址与登记地址不一致，未写入结果。' : '解锁检测未完成，请稍后重试。'
+      }
+      else if (finished?.state === 'failed') {
+        message.value = finished.error === 'address_mismatch'
+          ? '节点实际出口地址与登记地址不一致，未写入结果。'
+          : '解锁检测未完成，请稍后重试。'
+      }
     }
     catch {
-      if (!disposed)
+      if (!disposed && props.node.uuid === uuid)
         message.value = '解锁状态暂时无法刷新，已有结果保留。'
     }
     finally {
@@ -186,7 +194,7 @@ async function detectUnlock() {
     const result = await getSharedApi().post<UnlockState>(`admin/nodes/${encodeURIComponent(uuid)}/ip-unlock/check`, { family: selectedFamily })
     if (!disposed && props.node.uuid === uuid) {
       applyUnlock(uuid, result)
-      message.value = '已发起轻量解锁探测，约 3–5 秒返回结果。'
+      message.value = '已发起轻量解锁探测，探针领取后返回结果（通常 15–30 秒）。'
     }
   }
   catch {
@@ -211,7 +219,7 @@ async function detectUnlock() {
         <span class="font-bold tabular-nums"><span class="score-prefix">IP</span> {{ displayScore }}</span>
         <span class="font-medium">{{ grade.label }}</span>
         <span
-          v-if="googleInfo.isChina"
+          v-if="showChinaBadge && googleInfo.isChina"
           class="ip-cn-flag rounded-full border border-red-500/35 bg-[#fce4ec] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[#c62828] dark:border-[#f85149]/35 dark:bg-[#2d1416] dark:text-[#f85149]"
         >送中</span>
       </button>
@@ -236,7 +244,7 @@ async function detectUnlock() {
             <div class="font-semibold">
               Google：{{ googleInfo.label }}
             </div>
-            <div class="truncate text-[11px] opacity-80">
+            <div class="truncate text-[11px]">
               {{ googleInfo.hint }}
             </div>
           </div>
@@ -284,7 +292,7 @@ async function detectUnlock() {
           <Icon icon="lucide:refresh-cw" class="mr-1.5 size-4" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
           {{ busy ? '更新中…' : '更新评分' }}
         </Button>
-        <Button variant="secondary" class="w-full rounded-lg" :title="unlockHint" :disabled="unlockBusy || !unlockReady" @click="detectUnlock">
+        <Button variant="secondary" class="w-full rounded-lg" :title="unlockHint" :aria-busy="unlockBusy" :disabled="unlockBusy || !unlockReady" @click="detectUnlock">
           <Icon
             :icon="unlockBusy ? 'lucide:refresh-cw' : 'tabler:world-www'"
             class="mr-1.5 size-4"

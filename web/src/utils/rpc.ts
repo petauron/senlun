@@ -71,7 +71,7 @@ export interface GoogleUnlockStatus {
 }
 
 export interface UnlockServiceStatus {
-  id: 'youtube' | 'netflix' | 'disney_plus' | 'chatgpt' | 'reddit' | 'tiktok' | string
+  id: 'youtube' | 'netflix' | 'disney_plus' | 'chatgpt' | 'reddit' | 'tiktok' | (string & {})
   status: 'unlocked' | 'originals_only' | 'app_only' | 'china' | 'blocked' | 'unknown'
   region?: string | null
   access_type?: 'native' | 'dns' | null

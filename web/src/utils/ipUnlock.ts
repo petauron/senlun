@@ -62,7 +62,9 @@ export function getGoogleUnlockDisplay(report: IpUnlockReport | undefined) {
   }
   if (report.google.status === 'captcha') {
     return {
-      label: region ? `验证受限 (${region})` : '验证受限',
+      label: region
+        ? `验证受限 (${region})`
+        : '验证受限',
       shortLabel: 'Google 验证',
       hint: 'Google 搜索触发人机验证',
       tone: unlockAmber,
@@ -72,9 +74,15 @@ export function getGoogleUnlockDisplay(report: IpUnlockReport | undefined) {
   }
   if (report.google.status === 'normal') {
     return {
-      label: region ? `未送中 (${region})` : '未送中',
-      shortLabel: region ? `Google ${region}` : 'Google 正常',
-      hint: region === 'HK' ? '自然跳转 .com.hk，非 CN' : 'Google / YouTube 定位正常',
+      label: region
+        ? `未送中 (${region})`
+        : '未送中',
+      shortLabel: region
+        ? `Google ${region}`
+        : 'Google 正常',
+      hint: region === 'HK'
+        ? '自然跳转 .com.hk，非 CN'
+        : 'Google / YouTube 定位正常',
       tone: unlockGreen,
       dot: 'bg-emerald-600 dark:bg-[#04b84c]',
       isChina: false,
@@ -102,13 +110,19 @@ export function getUnlockServiceDisplay(service: UnlockServiceStatus | undefined
   switch (service.status) {
     case 'unlocked':
       return {
-        label: region ? `解锁 ${region}` : '解锁',
+        label: region
+          ? `解锁 ${region}`
+          : '解锁',
         tone: unlockGreen,
-        title: region ? `已解锁 (${region})` : '已解锁',
+        title: region
+          ? `已解锁 (${region})`
+          : '已解锁',
       }
     case 'originals_only':
       return {
-        label: region ? `仅自制 ${region}` : '仅自制剧',
+        label: region
+          ? `仅自制 ${region}`
+          : '仅自制剧',
         tone: unlockAmber,
         title: '仅解锁自制剧内容',
       }
@@ -126,9 +140,13 @@ export function getUnlockServiceDisplay(service: UnlockServiceStatus | undefined
       }
     case 'blocked':
       return {
-        label: region ? `屏蔽 ${region}` : '屏蔽',
+        label: region
+          ? `屏蔽 ${region}`
+          : '屏蔽',
         tone: unlockRed,
-        title: region ? `当前地区受限 (${region})` : '无法访问或地区屏蔽',
+        title: region
+          ? `当前地区受限 (${region})`
+          : '无法访问或地区屏蔽',
       }
     default:
       return {
@@ -140,7 +158,10 @@ export function getUnlockServiceDisplay(service: UnlockServiceStatus | undefined
 }
 
 export function getOrderedUnlockServices(report: IpUnlockReport | undefined) {
-  const byId = new Map((report && !report.address_changed ? report.services : []).map(item => [item.id, item]))
+  const activeServices = report && !report.address_changed
+    ? report.services
+    : []
+  const byId = new Map(activeServices.map(item => [item.id, item]))
   return UNLOCK_SERVICE_ORDER.map((id) => {
     const entry = byId.get(id)
     return {

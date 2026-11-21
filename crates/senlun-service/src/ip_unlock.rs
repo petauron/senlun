@@ -134,7 +134,9 @@ fn validate_report(report: &UnlockReport, now: u64) -> Result<IpAddr, StorageErr
             .filter(|entry| entry.id == service_id)
             .collect();
         if matches.len() != 1 {
-            return Err(StorageError::InvalidInput("all unlock services are required"));
+            return Err(StorageError::InvalidInput(
+                "all unlock services are required",
+            ));
         }
         let entry = matches[0];
         if ![
@@ -211,8 +213,10 @@ pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value,
             } else {
                 &options.ipv6
             };
-            let matches =
-                registered.parse::<IpAddr>().ok() == report.address.parse::<IpAddr>().ok();
+            let matches = registered
+                .parse::<IpAddr>()
+                .ok()
+                .is_some_and(|ip| Some(ip) == report.address.parse::<IpAddr>().ok());
             json!({
                 "family": report.family,
                 "checked_at_unix_ms": report.checked_at_unix_ms,
@@ -340,13 +344,15 @@ impl Storage {
         }
         let mut db = self.connection()?;
         let tx = db.transaction()?;
+        let offline_after_ms =
+            crate::control::effective_offline_ms(&tx, offline.max(60).saturating_mul(1000))?;
         let ready: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM ip_unlock_collectors c \
              JOIN nodes n ON n.id=c.node_id \
              JOIN metrics.node_state s ON s.node_id=n.id \
              WHERE n.id=?1 AND n.disabled_at_ms IS NULL AND c.available=1 \
              AND c.agent_version=n.agent_version AND s.last_seen_at_ms>?2)",
-            params![node, integer(now.saturating_sub(offline.max(60) * 1000))],
+            params![node, integer(now.saturating_sub(offline_after_ms))],
             |r| r.get(0),
         )?;
         if !ready {
@@ -406,7 +412,7 @@ impl Storage {
                 Uuid::new_v4().to_string(),
                 address.to_string(),
                 integer(now),
-                integer(now + 180_000)
+                integer(now.saturating_add(180_000))
             ],
         )?;
         crate::control::configuration_audit(&tx, "node.ip_unlock.start", node)?;
@@ -453,7 +459,7 @@ impl Storage {
                         id: r.get(0)?,
                         family: r.get(1)?,
                         address: r.get(2)?,
-                        expires_at_unix_ms: now + 120_000,
+                        expires_at_unix_ms: now.saturating_add(120_000),
                     })
                 },
             )
@@ -511,10 +517,10 @@ impl Storage {
         )?;
         let options: Value = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidInput("invalid node options"))?;
-        if options[if family == 4 { "ipv4" } else { "ipv6" }]
+        if !options[if family == 4 { "ipv4" } else { "ipv6" }]
             .as_str()
             .and_then(|v| v.parse::<IpAddr>().ok())
-            != address.parse::<IpAddr>().ok()
+            .is_some_and(|ip| Some(ip) == address.parse::<IpAddr>().ok())
         {
             "address_changed".clone_into(&mut error);
         }
@@ -548,5 +554,216 @@ impl Storage {
         crate::control::configuration_audit(&tx, "node.ip_unlock.finish", &node)?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::NodeOptions;
+    use crate::storage::{SCHEMA_VERSION, hash_token};
+    use senlun_protocol::{EnrollmentRequest, GoogleUnlockStatus, PROTOCOL_VERSION};
+    use std::path::{Path, PathBuf};
+
+    fn migration_backups(directory: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.is_dir()
+                    && path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.starts_with("senlun.db.backup-"))
+            })
+            .collect();
+        paths.sort();
+        paths
+    }
+
+    fn schema_nine_fixture(directory: &Path) -> PathBuf {
+        let path = directory.join("senlun.db");
+        let storage = Storage::open(&path, 64 * 1024 * 1024).unwrap();
+        drop(storage);
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch(
+            "DROP TABLE ip_unlock_checks;
+             DROP TABLE ip_unlock_collectors;
+             PRAGMA user_version=9;",
+        )
+        .unwrap();
+        path
+    }
+
+    fn sample_report(address: &str, checked_at_unix_ms: u64) -> UnlockReport {
+        let services = SERVICES
+            .iter()
+            .map(|id| UnlockServiceStatus {
+                id: (*id).to_owned(),
+                status: if *id == "reddit" {
+                    "app_only".to_owned()
+                } else {
+                    "unlocked".to_owned()
+                },
+                region: if *id == "reddit" {
+                    None
+                } else {
+                    Some("HK".to_owned())
+                },
+                access_type: None,
+            })
+            .collect();
+        UnlockReport {
+            family: 4,
+            address: address.to_owned(),
+            checked_at_unix_ms,
+            google: GoogleUnlockStatus {
+                status: "normal".to_owned(),
+                region: Some("HK".to_owned()),
+            },
+            services,
+        }
+    }
+
+    #[test]
+    fn migrates_v9_to_v10_with_backup_and_fails_closed_on_collision() {
+        let fail_dir = tempfile::tempdir().unwrap();
+        let fail_path = schema_nine_fixture(fail_dir.path());
+        let db = Connection::open(&fail_path).unwrap();
+        db.execute_batch("CREATE TABLE ip_unlock_collectors (collision INTEGER);")
+            .unwrap();
+        drop(db);
+        assert!(Storage::open(&fail_path, 64 * 1024 * 1024).is_err());
+        let db = Connection::open(&fail_path).unwrap();
+        assert_eq!(
+            db.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            9
+        );
+        assert_eq!(migration_backups(fail_dir.path()).len(), 1);
+
+        let ok_dir = tempfile::tempdir().unwrap();
+        let ok_path = schema_nine_fixture(ok_dir.path());
+        let storage = Storage::open(&ok_path, 64 * 1024 * 1024).unwrap();
+        let version: i64 = storage
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(storage);
+
+        let backups = migration_backups(ok_dir.path());
+        assert_eq!(backups.len(), 1);
+        let bytes = std::fs::read(backups[0].join("manifest.json")).unwrap();
+        let manifest: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(manifest["control_schema"], 9);
+
+        let reopened = Storage::open(&ok_path, 64 * 1024 * 1024).unwrap();
+        drop(reopened);
+        assert_eq!(migration_backups(ok_dir.path()).len(), 1);
+    }
+
+    fn setup_node(storage: &Storage, now: u64) -> (String, String, NodeOptions) {
+        let secret = storage.create_enrollment(600, now).unwrap();
+        let enrolled = storage
+            .enroll(
+                &EnrollmentRequest {
+                    protocol_version: PROTOCOL_VERSION,
+                    node_name: "Unlock QA".to_owned(),
+                    agent_version: "0.1.0-alpha.70".to_owned(),
+                    region: "HK".to_owned(),
+                    group: String::new(),
+                },
+                &hash_token(&secret.token),
+                100,
+                now,
+            )
+            .unwrap();
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO metrics.node_state(node_id,last_seen_at_ms) VALUES(?1,?2)",
+                params![enrolled.node_id, integer(now)],
+            )
+            .unwrap();
+        let mut options = NodeOptions {
+            id: enrolled.node_id.clone(),
+            name: "Unlock QA".to_owned(),
+            ipv4: "1.1.1.1".to_owned(),
+            currency: "CNY".to_owned(),
+            traffic_limit_type: "sum".to_owned(),
+            traffic_reset_day: 1,
+            ..NodeOptions::default()
+        };
+        storage
+            .save_node_options(&enrolled.node_id, &mut options)
+            .unwrap();
+        (enrolled.node_id, enrolled.agent_token, options)
+    }
+
+    #[test]
+    fn unlock_lifecycle_preserves_report_and_invalidates_on_ip_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(&dir.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+        let now = 1_800_000_000_000_u64;
+        let (node_id, agent_token, mut options) = setup_node(&storage, now);
+
+        let claim = IpUnlockClaim {
+            schema_version: IP_UNLOCK_SCHEMA_VERSION,
+            agent_version: "0.1.0-alpha.70".to_owned(),
+            available: true,
+        };
+        assert!(
+            storage
+                .claim_unlock_check(&agent_token, &claim, now)
+                .unwrap()
+                .is_none()
+        );
+
+        storage.start_unlock_check(&node_id, 4, now, 90).unwrap();
+        let task = storage
+            .claim_unlock_check(&agent_token, &claim, now + 1000)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.family, 4);
+        assert_eq!(task.address, "1.1.1.1");
+
+        // Reject private IPs and incomplete service sets before persistence.
+        let private_report = sample_report("127.0.0.1", now + 2000);
+        assert!(validate_report(&private_report, now + 2000).is_err());
+        let mut short = sample_report("1.1.1.1", now + 2000);
+        short.services.pop();
+        assert!(validate_report(&short, now + 2000).is_err());
+
+        storage
+            .finish_unlock_check(
+                &agent_token,
+                IpUnlockOutcome {
+                    id: task.id,
+                    report: Some(sample_report("1.1.1.1", now + 2000)),
+                    error: None,
+                },
+                now + 3000,
+            )
+            .unwrap();
+
+        // Ordinary node metadata saves preserve stored ip_unlocks and ignore caller values.
+        options.name = "Unlock QA Renamed".to_owned();
+        options.ip_unlocks.clear();
+        storage.save_node_options(&node_id, &mut options).unwrap();
+        let status = storage.unlock_status(&node_id, now + 4000).unwrap();
+        assert_eq!(status["ip_unlocks"][0]["google"]["region"], "HK");
+        assert!(status["ip_unlocks"][0].get("address").is_none());
+        assert_eq!(status["ip_unlocks"][0]["address_changed"], false);
+
+        // Changing registered IP invalidates displayed unlock results without leaking old IP.
+        options.ipv4 = "8.8.8.8".to_owned();
+        storage.save_node_options(&node_id, &mut options).unwrap();
+        let invalidated = storage.unlock_status(&node_id, now + 5000).unwrap();
+        assert_eq!(invalidated["ip_unlocks"][0]["address_changed"], true);
+        assert_eq!(invalidated["ip_unlocks"][0]["google"]["status"], "unknown");
+        assert_eq!(invalidated["ip_unlocks"][0]["services"], json!([]));
     }
 }

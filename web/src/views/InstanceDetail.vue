@@ -287,7 +287,7 @@ const trafficProgressStyle = computed(() => ({
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
         </Badge>
-        <NodeIpScores :node="data" />
+        <NodeIpScores :node="data" :show-china-badge="false" />
         <NodeUnlockSummary :node="data" mode="badge" />
       </div>
       <div class="max-w-md px-4">

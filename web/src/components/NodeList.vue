@@ -52,7 +52,7 @@ const columns: ColumnConfig[] = [
   {
     key: 'quality',
     label: 'IP 质量',
-    width: '162px',
+    width: '196px',
     sortable: false,
   },
   {
