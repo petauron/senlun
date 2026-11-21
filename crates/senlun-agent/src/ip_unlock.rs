@@ -541,9 +541,7 @@ async fn probe_reddit(client: &Client) -> UnlockServiceStatus {
         .await
     {
         let web_code = web.status();
-        let web_body = read_capped(web, MAX_SMALL_BODY)
-            .await
-            .unwrap_or_default();
+        let web_body = read_capped(web, MAX_SMALL_BODY).await.unwrap_or_default();
         if web_code.is_success() && !is_reddit_waf_block(&web_body) {
             return service_status("reddit", "unlocked", None);
         }
