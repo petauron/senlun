@@ -7,7 +7,7 @@ Senlun is a focused, self-hosted server health monitor built for low and predict
 
 The project consists of a Rust Service, a Rust Agent, a shared versioned protocol, and a static Web interface derived directly from Komari Theme Emerald. Its scope intentionally excludes general server administration.
 
-> **Status:** alpha. The basic monitoring path is implemented; pre-1.0 protocol and storage changes may still be breaking.
+> **Status:** 0.x release (graduated from alpha). Core monitoring, authentication, bounded probes, and administration are implemented; pre-1.0 releases use tested forward-only migrations.
 
 ## Goals
 
