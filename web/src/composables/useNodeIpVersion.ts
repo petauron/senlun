@@ -12,6 +12,7 @@ export function useNodeIpVersion(node: () => NodeData) {
       : 6
     return Boolean(value[version])
       || value.ip_scores?.some(entry => entry.family === family)
+      || value.ip_unlocks?.some(report => report.family === family)
       || value.return_routes?.some(report => report.family === family)
       || selectHomeProbes(value.probes ?? [], value.uuid, app.publicSettings?.theme_settings, version).some(probe => probe !== null)
   }))

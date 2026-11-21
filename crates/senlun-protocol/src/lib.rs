@@ -62,6 +62,63 @@ pub struct ReturnRouteOutcome {
     pub error: Option<String>,
 }
 
+/// Fixed one-shot IP streaming/AI unlock and Google region check; never an executable or command.
+pub const IP_UNLOCK_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpUnlockClaim {
+    pub schema_version: u16,
+    pub agent_version: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpUnlockTask {
+    pub id: String,
+    pub family: u8,
+    pub address: String,
+    pub expires_at_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoogleUnlockStatus {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UnlockServiceStatus {
+    pub id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpUnlockReport {
+    pub family: u8,
+    pub address: String,
+    pub checked_at_unix_ms: u64,
+    pub google: GoogleUnlockStatus,
+    pub services: Vec<UnlockServiceStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpUnlockOutcome {
+    pub id: String,
+    pub report: Option<IpUnlockReport>,
+    pub error: Option<String>,
+}
+
 /// Administrator-selected monitoring configuration, fetched by the Agent.
 /// This is deliberately a closed set of probes, never a command channel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

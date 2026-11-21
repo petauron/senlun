@@ -65,7 +65,39 @@ export interface ReturnRouteCheck {
   finished_at_unix_ms: number
 }
 
+export interface GoogleUnlockStatus {
+  status: 'normal' | 'china' | 'captcha' | 'unknown'
+  region?: string | null
+}
+
+export interface UnlockServiceStatus {
+  id: 'youtube' | 'netflix' | 'disney_plus' | 'chatgpt' | 'reddit' | 'tiktok' | string
+  status: 'unlocked' | 'originals_only' | 'app_only' | 'china' | 'blocked' | 'unknown'
+  region?: string | null
+  access_type?: 'native' | 'dns' | null
+}
+
+export interface IpUnlockReport {
+  family: 4 | 6
+  checked_at_unix_ms: number
+  stale: boolean
+  address_changed: boolean
+  google: GoogleUnlockStatus
+  services: UnlockServiceStatus[]
+}
+
+export interface IpUnlockCheck {
+  family: 4 | 6
+  state: 'pending' | 'running' | 'succeeded' | 'failed'
+  error: string
+  created_at_unix_ms: number
+  finished_at_unix_ms: number
+}
+
 export interface Client {
+  ip_unlock_checks?: IpUnlockCheck[]
+  ip_unlock_capability?: 'ready' | 'unavailable' | 'upgrade_required'
+  ip_unlocks?: IpUnlockReport[]
   return_route_checks?: ReturnRouteCheck[]
   return_route_capability?: 'ready' | 'unavailable' | 'upgrade_required'
   return_routes?: ReturnRoute[]
