@@ -43,7 +43,7 @@ jobs:
         run: npm ci
       - name: Verify release recovery safeguards
         working-directory: .
-        run: node --test scripts/release-source.test.mjs scripts/version-pr-checks.test.mjs scripts/brand-names.test.mjs
+        run: node --test scripts/release-source.test.mjs scripts/brand-names.test.mjs
       - name: Verify offline configuration migration
         working-directory: .
         run: python3 -m unittest discover -s deploy -p 'test_brand_*.py'

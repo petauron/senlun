@@ -536,34 +536,26 @@ jobs:
         run: sh scripts/publish-agent-draft.sh
 
   release-pr:
-    name: Prepare next version PR and start its CI
+    name: Prepare next release pull request
     needs: [prepare, publish, publish-agent]
     if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.pending_draft != 'true' && (needs.publish.result == 'success' || (needs.prepare.outputs.release_created != 'true' && needs.publish.result == 'skipped')) && (needs.publish-agent.result == 'success' || (needs.prepare.outputs.agent_created != 'true' && needs.publish-agent.result == 'skipped'))
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
-      issues: write
-      pull-requests: write
-      actions: write
+      contents: read
     steps:
-      - name: Check out checked workflow source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Mint short-lived release app token
+        id: release_app_token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - name: Maintain version PR without publishing
         id: release_pr
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
-          token: ${{ github.token }}
+          token: ${{ steps.release_app_token.outputs.token }}
           target-branch: main
           skip-github-release: true
-      # GITHUB_TOKEN-created PR workflows can require manual approval.
-      # Preserve any real PR checks; dispatch only missing/approval-blocked runs.
-      - name: Start missing checks for the version PR
-        if: steps.release_pr.outputs.prs_created == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_PR: ${{ steps.release_pr.outputs.pr }}
-        run: node scripts/version-pr-checks.mjs
