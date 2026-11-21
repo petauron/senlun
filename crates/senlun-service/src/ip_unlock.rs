@@ -215,8 +215,7 @@ pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value,
             };
             let matches = registered
                 .parse::<IpAddr>()
-                .ok()
-                .is_some_and(|ip| Some(ip) == report.address.parse::<IpAddr>().ok());
+                .is_ok_and(|ip| Some(ip) == report.address.parse::<IpAddr>().ok());
             json!({
                 "family": report.family,
                 "checked_at_unix_ms": report.checked_at_unix_ms,
@@ -517,10 +516,10 @@ impl Storage {
         )?;
         let options: Value = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidInput("invalid node options"))?;
-        if !options[if family == 4 { "ipv4" } else { "ipv6" }]
+        if options[if family == 4 { "ipv4" } else { "ipv6" }]
             .as_str()
             .and_then(|v| v.parse::<IpAddr>().ok())
-            .is_some_and(|ip| Some(ip) == address.parse::<IpAddr>().ok())
+            .is_none_or(|ip| Some(ip) != address.parse::<IpAddr>().ok())
         {
             "address_changed".clone_into(&mut error);
         }
