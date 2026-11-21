@@ -1,3 +1,5 @@
+//! Outbound-only Senlun host metrics and fixed-probe agent.
+
 mod extended_metrics;
 mod ip_unlock;
 mod probes;
