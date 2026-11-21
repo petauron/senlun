@@ -34,8 +34,7 @@ const BROWSER_UA: &str = concat!(
     "(KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 );
 const ACCEPT_LANG: &str = "en-US,en;q=0.9";
-const BROWSER_ACCEPT_HTML: &str =
-    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+const BROWSER_ACCEPT_HTML: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 // Public unauthenticated web-browser client key (`disney&browser&1.0.0`) used by
 // Disney+'s anonymous device bootstrap endpoint; contains no user credentials.
 const DISNEY_PUBLIC_CLIENT_KEY: &str =
@@ -362,7 +361,9 @@ fn extract_json_region(body: &str, key: &str) -> Option<String> {
 fn extract_html_attr_region(body: &str, attr: &str) -> Option<String> {
     let pattern = format!("{attr}=\"");
     for (start, _) in body.match_indices(&pattern) {
-        if let Some(prev) = start.checked_sub(1).and_then(|idx| body.as_bytes().get(idx))
+        if let Some(prev) = start
+            .checked_sub(1)
+            .and_then(|idx| body.as_bytes().get(idx))
             && (prev.is_ascii_alphanumeric() || *prev == b'_' || *prev == b'-')
         {
             continue;
