@@ -1,7 +1,7 @@
 {
   "name": "@petauron/senlun-web",
   "type": "module",
-  "version": "0.1.0-alpha.70",
+  "version": "0.1.0",
   "private": true,
   "packageManager": "npm@11.17.0",
   "author": {
@@ -37,7 +37,7 @@
     "reka-ui": "^2.11.0",
     "tailwind-merge": "^3.7.0",
     "vue": "^3.5.28",
-    "vue-echarts": "^8.0.1",
+    "vue-echarts": "^8.3.2",
     "vue-router": "^5.0.2",
     "vue-sonner": "^2.0.9"
   },

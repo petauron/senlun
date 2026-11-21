@@ -179,6 +179,8 @@ pub(crate) struct NodeOptions {
     pub tags: String,
     #[serde(default)]
     pub return_routes: Vec<crate::return_routes::RouteReport>,
+    #[serde(default)]
+    pub ip_unlocks: Vec<crate::ip_unlock::UnlockReport>,
     pub public_remark: String,
     pub ipv4: String,
     pub ipv6: String,
@@ -496,11 +498,14 @@ impl Storage {
         let tx = db.transaction()?;
         verify_nodes(&tx, &[id.to_owned()])?;
         let previous = options_or_none(&tx, id)?;
-        // Route reports are read-only metadata here; only an authenticated,
+        // Route and unlock reports are read-only metadata here; only an authenticated,
         // matching one-shot result may replace them. Preserve them on unrelated editor saves.
         options.return_routes = previous
             .as_ref()
             .map_or_else(Vec::new, |old| old.return_routes.clone());
+        options.ip_unlocks = previous
+            .as_ref()
+            .map_or_else(Vec::new, |old| old.ip_unlocks.clone());
         let old_source = previous
             .as_ref()
             .map_or(TrafficSource::Local, |old| old.traffic_source);
@@ -1405,8 +1410,11 @@ pub(crate) fn decorate_client(
         crate::storage::unix_time_ms()?,
     )?);
     if let Some(o) = options {
-        crate::return_routes::decorate(&o, value, crate::storage::unix_time_ms()?);
-        crate::return_routes::decorate_checks(db, node, value, crate::storage::unix_time_ms()?)?;
+        let now = crate::storage::unix_time_ms()?;
+        crate::return_routes::decorate(&o, value, now);
+        crate::return_routes::decorate_checks(db, node, value, now)?;
+        crate::ip_unlock::decorate(&o, value, now);
+        crate::ip_unlock::decorate_checks(db, node, value, now)?;
         value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);
         if !o.region.is_empty() {

@@ -7,7 +7,7 @@ Senlun is a focused, self-hosted server health monitor built for low and predict
 
 The project consists of a Rust Service, a Rust Agent, a shared versioned protocol, and a static Web interface derived directly from Komari Theme Emerald. Its scope intentionally excludes general server administration.
 
-> **Status:** alpha. The basic monitoring path is implemented; pre-1.0 protocol and storage changes may still be breaking.
+> **Status:** 0.x release (graduated from alpha). Core monitoring, authentication, bounded probes, and administration are implemented; pre-1.0 releases use tested forward-only migrations.
 
 ## Goals
 
@@ -24,7 +24,7 @@ The project consists of a Rust Service, a Rust Agent, a shared versioned protoco
 - Application orchestration
 - Proxy or VPN management
 - AI-based network scoring
-- Unlock testing or visitor fingerprinting
+- Visitor fingerprinting or arbitrary third-party unlock scripts
 
 ## Repository layout
 
@@ -47,13 +47,12 @@ Senlun now provides an end-to-end monitoring path:
 - online/offline state, node cards, list view, detail view, and load history;
 - the Komari Emerald interface, built into the Service binary.
 
-Alpha.3 adds administrator setup/login, private reads,
+Published `0.x` releases also include administrator setup/login, private reads,
 TOTP and optional GitHub OAuth, an Emerald management area, bounded network probes,
-alerts, asset fields, monthly traffic accounting and optional extended metrics.
-These additions are **not included in the published Alpha.2 artifacts**. See
-[authentication setup](docs/AUTH.md) and [monitoring administration](docs/MONITORING.md).
-Development builds also support administrator-installed Komari-style theme bundles and
-a bounded read-only monitoring API compatibility layer; see [theme support](docs/THEMES.md).
+alerts, asset fields, monthly traffic accounting, optional extended metrics,
+administrator-installed Komari-style theme bundles, and a bounded read-only
+monitoring API compatibility layer. See [authentication setup](docs/AUTH.md),
+[monitoring administration](docs/MONITORING.md), and [theme support](docs/THEMES.md).
 
 ### Run the Service
 

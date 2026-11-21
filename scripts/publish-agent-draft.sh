@@ -77,4 +77,4 @@ if [ "$agent_draft" = false ]; then
 fi
 cp "$work/agent-sums" "$work/SHA256SUMS"
 gh release upload "$AGENT_TAG" "$work"/senlun-*.tar.gz "$work"/senlun-*.spdx.json "$work/SHA256SUMS" --clobber
-gh release edit "$AGENT_TAG" --draft=false
+gh release edit "$AGENT_TAG" --draft=false --latest=false

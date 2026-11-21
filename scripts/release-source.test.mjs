@@ -23,6 +23,8 @@ const env = {
 test('resume only the original immutable draft source', () => {
   assert.deepEqual(validateDraft(draft, tag), { tag, sha: sourceSha });
   assert.deepEqual(validateDraft(draft, tag, sourceSha), { tag, sha: sourceSha });
+  const stableTag = 'v0.1.0';
+  assert.deepEqual(validateDraft({ ...draft, tagName: stableTag }, stableTag, sourceSha), { tag: stableTag, sha: sourceSha });
 });
 
 test('reject published, mutable, mismatched or non-bot releases', () => {
@@ -105,4 +107,6 @@ test('release workflow retains draft permissions, identity gates and one publica
   assert.ok(workflow.jobs['release-pr'].if.includes("pending_draft != 'true'"));
   assert.ok(!/actions\/(?:upload|download)-artifact@/.test(text));
   assert.equal(workflow.env.DOCKER_BUILD_RECORD_UPLOAD, 'false');
+  const agentPublish = readFileSync('scripts/publish-agent-draft.sh', 'utf8');
+  assert.ok(agentPublish.includes('gh release edit "$AGENT_TAG" --draft=false --latest=false'));
 });

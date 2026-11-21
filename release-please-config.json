@@ -10,9 +10,7 @@
       "include-v-in-tag": true,
       "bump-minor-pre-major": true,
       "draft": true,
-      "prerelease": true,
-      "prerelease-type": "alpha",
-      "versioning": "prerelease",
+      "versioning": "default",
       "extra-files": [
         {
           "type": "toml",
@@ -50,10 +48,9 @@
       "exclude-paths": ["crates/senlun-service", "crates/senlun-agent/tests"],
       "include-component-in-tag": true,
       "include-v-in-tag": true,
+      "bump-minor-pre-major": true,
       "draft": true,
-      "prerelease": true,
-      "prerelease-type": "alpha",
-      "versioning": "prerelease",
+      "versioning": "default",
       "extra-files": [
         {
           "type": "toml",
