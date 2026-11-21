@@ -1,4 +1,5 @@
 mod extended_metrics;
+mod peer_latency;
 mod probes;
 mod region;
 mod return_routes;

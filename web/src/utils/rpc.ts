@@ -65,7 +65,18 @@ export interface ReturnRouteCheck {
   finished_at_unix_ms: number
 }
 
+export interface PeerLatency {
+  node_id: string
+  name: string
+  kind: 'tcp' | 'icmp' | null
+  family: 4 | 6 | null
+  status: 'ready' | 'pending' | 'offline' | 'stale' | 'unconfigured' | 'timeout' | 'unavailable' | 'failed'
+  latency_ms: number | null
+  expires_at_unix_ms: number | null
+}
+
 export interface Client {
+  peer_latency?: PeerLatency | null
   return_route_checks?: ReturnRouteCheck[]
   return_route_capability?: 'ready' | 'unavailable' | 'upgrade_required'
   return_routes?: ReturnRoute[]

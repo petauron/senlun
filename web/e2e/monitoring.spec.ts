@@ -19,6 +19,7 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
   await expect(card).toContainText('e2e-node')
   await expect(card.locator(':scope > div:first-child > div:first-child')).toHaveText('e2e-node')
   await expect(card.getByLabel(/^最近 .+的平均延迟与探测结果，每格约 \d+ 分钟$/)).toBeVisible()
+  await expect(card.getByText('节点互测', { exact: true })).toHaveCount(1)
   await expect(card.locator('.grid.grid-cols-2 > div').nth(3).locator('.truncate').first()).toHaveCSS('white-space', 'nowrap')
   const flag = card.getByRole('img', { name: 'SG', exact: true })
   await expect(flag).toHaveAttribute('src', '/assets/flags/sg.svg')
@@ -72,6 +73,7 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
   await expect(page.getByText('在线', { exact: true })).toBeVisible()
   await expect(page.getByText('CPU', { exact: true }).first()).toBeVisible()
   await expect(page.getByRole('tab', { name: '4 小时', exact: true })).toBeVisible()
+  await expect(page.getByText('节点互测', { exact: true })).toBeVisible()
   await expect(page.getByText(/查看最近 .* 个采样点的数据表/)).toBeVisible({ timeout: 20_000 })
 
   const accessibility = await new AxeBuilder({ page }).analyze()

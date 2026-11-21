@@ -24,6 +24,7 @@ import { getBillingCycleText, getExpireText, getExpireTextClass } from '@/utils/
 
 const LoadChart = defineAsyncComponent(() => import('@/components/LoadChart.vue'))
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
+const PeerLatencyPanel = defineAsyncComponent(() => import('@/components/PeerLatencyPanel.vue'))
 
 const route = useRoute()
 const router = useRouter()
@@ -441,21 +442,32 @@ const trafficProgressStyle = computed(() => ({
             {{ externalTraffic.snapshot ? '同步已过期，以下是上次成功快照' : '尚无可用的服务商流量快照' }}
           </p>
           <div v-if="externalTraffic.snapshot" class="grid grid-cols-2 gap-3 text-sm">
-            <div class="rounded-sm bg-slate-500/5 p-2">计费已用<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }}</span></div>
-            <div class="rounded-sm bg-slate-500/5 p-2">额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span></div>
-            <div class="rounded-sm bg-slate-500/5 p-2">上行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.up_bytes) }}</span></div>
-            <div class="rounded-sm bg-slate-500/5 p-2">下行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.down_bytes) }}</span></div>
+            <div class="rounded-sm bg-slate-500/5 p-2">
+              计费已用<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.used_bytes) }}</span>
+            </div>
+            <div class="rounded-sm bg-slate-500/5 p-2">
+              额度<br><span class="font-medium">{{ externalTraffic.snapshot.limit_bytes === null ? '未提供' : formatTrafficQuota(externalTraffic.snapshot.limit_bytes) }}</span>
+            </div>
+            <div class="rounded-sm bg-slate-500/5 p-2">
+              上行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.up_bytes) }}</span>
+            </div>
+            <div class="rounded-sm bg-slate-500/5 p-2">
+              下行<br><span class="font-medium">{{ formatBytes(externalTraffic.snapshot.down_bytes) }}</span>
+            </div>
           </div>
           <p v-if="externalTraffic.snapshot" class="mt-3 text-xs text-muted-foreground">
             获取于 {{ new Date(externalTraffic.snapshot.fetched_at_unix_ms).toLocaleString() }}<span v-if="externalTraffic.snapshot.reset_at"> · 重置记录 {{ externalTraffic.snapshot.reset_at }}</span>
           </p>
-          <p class="mt-2 text-xs text-muted-foreground">独立来源，不与本地流量相加或自动校准。</p>
+          <p class="mt-2 text-xs text-muted-foreground">
+            独立来源，不与本地流量相加或自动校准。
+          </p>
         </CardX>
       </div>
 
       <LoadChart :uuid="data.uuid" class="px-4" />
       <div class="px-4">
         <ProbeHistory :uuid="data.uuid" />
+        <PeerLatencyPanel :node-id="data.uuid" class="mt-4" />
       </div>
     </template>
   </div>

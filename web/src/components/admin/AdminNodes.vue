@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ManagedNode } from '@/utils/admin'
+import type { ManagedNode, PeerProbeSettings } from '@/utils/admin'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -20,7 +20,7 @@ const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }
 const route = useRoute()
 const router = useRouter()
 const selected = computed(() => props.nodes.find(n => n.id === route.query.node) ?? props.nodes[0])
-const draft = ref<ManagedNode | null>(null)
+const draft = ref<(ManagedNode & { peer_probe: PeerProbeSettings }) | null>(null)
 const expires = ref('')
 const quotaGiB = ref(0)
 const ttlHours = ref(24)
@@ -57,7 +57,12 @@ const actionHints = {
 
 watch(selected, (node) => {
   draft.value = node
-    ? nodeMetadata(node)
+    ? {
+        ...nodeMetadata(node),
+        peer_probe: {
+          ...(node.peer_probe ?? { kind: 'tcp', family: 'auto', disabled: false }),
+        },
+      }
     : null
   newTagText.value = ''
   tagError.value = ''
@@ -183,22 +188,35 @@ async function execute(): Promise<void> {
           <label class="grid gap-2 text-sm">公网 IPv4（可选）<Input v-model="draft.ipv4" maxlength="15" aria-describedby="node-ip-privacy" /></label>
           <label class="grid gap-2 text-sm">公网 IPv6（可选）<Input v-model="draft.ipv6" maxlength="45" aria-describedby="node-ip-privacy" /></label>
           <p id="node-ip-privacy" class="text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">
-            仅管理员可读取地址。启用站点的 IP 信息查询后用于 LuminaPlus；不接受内网、保留地址或域名，留空可移除。
+            登记地址用于节点互测，启用 IP 信息查询后也用于 LuminaPlus。探测 Agent 仅接收分配的地址，互测面板不显示地址。
           </p>
+          <label class="grid gap-2 text-sm">节点互测协议
+            <SelectControl v-model="draft.peer_probe.kind" aria-label="节点互测协议" :disabled="busy || draft.peer_probe.disabled" :options="[{ value: 'tcp', label: 'TCP 443' }, { value: 'icmp', label: 'ICMP Ping' }]" />
+          </label>
+          <label class="grid gap-2 text-sm">节点互测地址族
+            <SelectControl v-model="draft.peer_probe.family" aria-label="节点互测地址族" :disabled="busy || draft.peer_probe.disabled" :options="[{ value: 'auto', label: '自动（优先 IPv4）' }, { value: 'ipv4', label: 'IPv4' }, { value: 'ipv6', label: 'IPv6' }]" />
+          </label>
+          <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="draft.peer_probe.disabled" type="checkbox" class="size-4 accent-primary">停用此节点的入向互测</label>
           <label class="grid gap-2 text-sm">分组<Input v-model="draft.group" maxlength="128" /></label>
           <label class="grid gap-2 text-sm">排序权重<Input v-model="draft.weight" type="number" min="-2147483648" max="2147483647" step="1" required /></label>
           <div class="grid gap-2 text-sm sm:col-span-2 lg:col-span-3">
             <label for="node-tags">小面板标签</label>
             <Input id="node-tags" v-model="draft.tags" placeholder="马来西亚<gray>;V4<green>;V6<green>;带宽1G<violet>" maxlength="512" aria-describedby="node-tags-help" />
-            <p id="node-tags-help" class="text-muted-foreground">可添加地区、线路、协议和带宽等信息；用分号分隔，颜色格式为 标签文字&lt;颜色英文名&gt;。也可以用下方按钮添加。</p>
+            <p id="node-tags-help" class="text-muted-foreground">
+              可添加地区、线路、协议和带宽等信息；用分号分隔，颜色格式为 标签文字&lt;颜色英文名&gt;。也可以用下方按钮添加。
+            </p>
             <div class="flex flex-wrap items-end gap-2">
               <label class="grid min-w-36 flex-1 gap-1">标签文字<Input v-model="newTagText" maxlength="40" placeholder="例如：带宽1G" @keydown.enter.prevent="addTag" /></label>
               <label class="grid gap-1">颜色
-                <SelectControl aria-label="颜色" v-model="newTagColor" :disabled="busy" :options="tagColors" />
+                <SelectControl v-model="newTagColor" aria-label="颜色" :disabled="busy" :options="tagColors" />
               </label>
-              <Button type="button" variant="outline" class="min-h-11" @click="addTag">添加标签</Button>
+              <Button type="button" variant="outline" class="min-h-11" @click="addTag">
+                添加标签
+              </Button>
             </div>
-            <p v-if="tagError" role="alert" class="text-destructive">{{ tagError }}</p>
+            <p v-if="tagError" role="alert" class="text-destructive">
+              {{ tagError }}
+            </p>
             <div v-if="tagPreview.length" class="flex flex-wrap gap-1.5 rounded-md border border-border/60 p-2" aria-label="标签预览">
               <NodeTagBadge v-for="(tag, index) in tagPreview" :key="index" :text="tag.text" :color="tag.color" />
             </div>
@@ -224,15 +242,23 @@ async function execute(): Promise<void> {
             流量周期
           </legend>
           <label class="grid gap-2 text-sm sm:col-span-3">卡片、列表及额度告警的数据来源
-            <SelectControl aria-label="流量数据来源" :model-value="draft.traffic_source ?? 'local'" @update:model-value="draft.traffic_source = $event" :disabled="busy" :options="[{ value: 'local', label: '本地网卡周期流量' }, { value: 'provider', label: '服务商记录流量' }]" />
+            <SelectControl aria-label="流量数据来源" :model-value="draft.traffic_source ?? 'local'" :disabled="busy" :options="[{ value: 'local', label: '本地网卡周期流量' }, { value: 'provider', label: '服务商记录流量' }]" @update:model-value="draft.traffic_source = $event" />
           </label>
-          <p class="text-sm text-muted-foreground sm:col-span-3">保存后同时应用于此节点的流量显示与额度告警。服务商未配置、过期或失败时不会切回本地；下列额度、计数方式及重置日只用于本地统计。切换会结束旧来源的阈值评估，不发送恢复通知。</p>
-          <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">当前流量状态：{{ trafficSelectionDetails(selected.selected_traffic) }}</p>
+          <p class="text-sm text-muted-foreground sm:col-span-3">
+            保存后同时应用于此节点的流量显示与额度告警。服务商未配置、过期或失败时不会切回本地；下列额度、计数方式及重置日只用于本地统计。切换会结束旧来源的阈值评估，不发送恢复通知。
+          </p>
+          <p v-if="selected" role="status" class="text-sm text-muted-foreground sm:col-span-3">
+            当前流量状态：{{ trafficSelectionDetails(selected.selected_traffic) }}
+          </p>
           <label class="grid gap-2 text-sm">每周期额度（GiB；0 为不限）<Input v-model="quotaGiB" type="number" min="0" :max="Number.MAX_SAFE_INTEGER / 1024 ** 3" step="any" required /></label>
-          <label class="grid gap-2 text-sm">流量计数方式<SelectControl aria-label="流量计数方式" v-model="draft.traffic_limit_type" :disabled="busy" :options="[{ value: 'sum', label: '上传 + 下载' }, { value: 'max', label: '上传、下载中较大值' }, { value: 'min', label: '上传、下载中较小值' }, { value: 'up', label: '仅上传' }, { value: 'down', label: '仅下载' }]" /></label>
+          <label class="grid gap-2 text-sm">流量计数方式<SelectControl v-model="draft.traffic_limit_type" aria-label="流量计数方式" :disabled="busy" :options="[{ value: 'sum', label: '上传 + 下载' }, { value: 'max', label: '上传、下载中较大值' }, { value: 'min', label: '上传、下载中较小值' }, { value: 'up', label: '仅上传' }, { value: 'down', label: '仅下载' }]" /></label>
           <label class="grid gap-2 text-sm">每月重置日（1–31，UTC）<Input v-model="draft.traffic_reset_day" type="number" min="1" max="31" step="1" required /></label>
-          <p class="text-sm text-muted-foreground sm:col-span-3">按 UTC 00:00 重置；当月没有所选日期时，在该月最后一天重置。新日期立即生效，现有计数保留至下一个新日期。流量是近似统计，账单以服务商为准。</p>
-          <p v-if="selected?.traffic_next_reset_unix_ms != null" class="text-sm text-muted-foreground sm:col-span-3">下次重置：{{ utcTime(selected.traffic_next_reset_unix_ms) }}</p>
+          <p class="text-sm text-muted-foreground sm:col-span-3">
+            按 UTC 00:00 重置；当月没有所选日期时，在该月最后一天重置。新日期立即生效，现有计数保留至下一个新日期。流量是近似统计，账单以服务商为准。
+          </p>
+          <p v-if="selected?.traffic_next_reset_unix_ms != null" class="text-sm text-muted-foreground sm:col-span-3">
+            下次重置：{{ utcTime(selected.traffic_next_reset_unix_ms) }}
+          </p>
         </fieldset>
         <div class="flex flex-wrap gap-2">
           <Button class="min-h-11" type="submit" :disabled="busy">
