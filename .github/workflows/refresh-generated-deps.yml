@@ -1,0 +1,134 @@
+name: Refresh generated dependency files
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository pull request number whose generated license/marker/icon files should be refreshed
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: refresh-generated-deps-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh generated files on PR branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Resolve same-repository pull request head
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Invalid PR number: $PR_NUMBER" >&2
+            exit 1
+          fi
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")"
+          state="$(printf '%s' "$pr_json" | jq -er '.state')"
+          head_repo="$(printf '%s' "$pr_json" | jq -er '.head.repo.full_name')"
+          head_ref="$(printf '%s' "$pr_json" | jq -er '.head.ref')"
+          head_sha="$(printf '%s' "$pr_json" | jq -er '.head.sha')"
+          if [[ "$state" != "open" ]]; then
+            echo "PR #$PR_NUMBER is not open (state=$state)" >&2
+            exit 1
+          fi
+          if [[ "$head_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "Refusing cross-repository PR #$PR_NUMBER ($head_repo)" >&2
+            exit 1
+          fi
+          if [[ "$head_ref" == "main" || "$head_ref" == "master" ]]; then
+            echo "Refusing default branch ref: $head_ref" >&2
+            exit 1
+          fi
+          {
+            echo "head_ref=$head_ref"
+            echo "head_sha=$head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out exact pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - name: Cache Rust dependency sources
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ubuntu-24.04
+          cache-bin: false
+          cache-targets: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Regenerate Rust redistribution licenses and notices
+        env:
+          CARGO_ABOUT_VERSION: 0.9.2
+          CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
+        run: |
+          set -euo pipefail
+          tool_directory="$(mktemp -d)"
+          trap 'rm -rf "$tool_directory"' EXIT
+          archive="$tool_directory/cargo-about.tar.gz"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$archive" \
+            "https://github.com/EmbarkStudios/cargo-about/releases/download/$CARGO_ABOUT_VERSION/cargo-about-$CARGO_ABOUT_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          printf '%s  %s\n' "$CARGO_ABOUT_SHA256" "$archive" | sha256sum --check
+          tar --extract --gzip --file "$archive" --directory "$tool_directory" --strip-components=1
+          rustup component add rust-docs
+          cargo fetch --locked
+          CARGO_ABOUT="$tool_directory/cargo-about" node scripts/rust-licenses.mjs
+
+      - name: Refresh Agent dependency closure marker
+        env:
+          RELEASE_PLEASE_TEST_ROOT: ${{ runner.temp }}/release-please-regression
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RELEASE_PLEASE_TEST_ROOT" --ignore-scripts --no-audit --no-fund --package-lock=false release-please@17.6.0
+          node scripts/agent-dependencies.mjs --write
+
+      - name: Refresh generated Web icon source
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run generate-icons
+
+      - name: Commit and push updated generated files
+        env:
+          HEAD_REF: ${{ steps.pr.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          paths=(
+            RUST_THIRD_PARTY_LICENSES.html
+            RUST_STDLIB_LICENSES.html
+            crates/senlun-agent/dependencies.sha256
+            web/src/generated/icons.ts
+          )
+          if git diff --quiet -- "${paths[@]}"; then
+            echo "All generated dependency files are already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- "${paths[@]}"
+          git commit -m "chore(deps): refresh generated license, agent marker, and icon files"
+          git push origin "HEAD:refs/heads/$HEAD_REF"
