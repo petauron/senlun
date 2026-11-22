@@ -113,6 +113,8 @@ test('release workflow retains draft permissions, identity gates and one publica
   assert.ok(notify, 'notify-catalog wakeup job should be defined');
   assert.equal(notify['continue-on-error'], true);
   assert.equal(notify.permissions.contents, 'read');
+  assert.ok(notify.if.includes('!cancelled()'), 'notify-catalog must include !cancelled() because mutually exclusive needs jobs are skipped');
+  assert.ok(notify.if.includes("github.event_name == 'push'"));
   assert.ok(notify.if.includes("github.repository == 'petauron/senlun'"));
   assert.ok(notify.if.includes("github.ref == 'refs/heads/main'"));
   const tokenStep = notify.steps.find((step) => step.uses?.startsWith('actions/create-github-app-token@'));

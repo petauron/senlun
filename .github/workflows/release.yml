@@ -563,10 +563,14 @@ jobs:
   notify-catalog:
     name: Wake up official catalog reconciler
     needs: [prepare, publish, publish-agent, recover-agent]
+    # Explicit !cancelled() is required because prepare and recover-agent are mutually
+    # exclusive, so one needed job is always skipped on every release path.
     if: >-
+      !cancelled() &&
       github.repository == 'petauron/senlun' &&
       github.ref == 'refs/heads/main' &&
-      ((needs.publish.result == 'success' &&
+      ((github.event_name == 'push' &&
+        needs.publish.result == 'success' &&
         (needs.publish-agent.result == 'success' ||
          (needs.prepare.outputs.agent_created != 'true' && needs.publish-agent.result == 'skipped'))) ||
        needs.recover-agent.result == 'success')
