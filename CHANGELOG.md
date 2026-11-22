@@ -4,6 +4,27 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.1.1](https://github.com/petauron/senlun/compare/v0.1.0...v0.1.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent:** improve IP unlock and Google China-redirect probes ([#272](https://github.com/petauron/senlun/issues/272)) ([933bfeb](https://github.com/petauron/senlun/commit/933bfebc99e86e3233d312402afc8ebe4cebd76e))
+* **deps-dev:** bump @tsconfig/node24 from 24.0.5 to 24.0.6 in /web ([#255](https://github.com/petauron/senlun/issues/255)) ([5e8e74d](https://github.com/petauron/senlun/commit/5e8e74da9f509939260aad9b8223bb8f573a82d1))
+* **deps:** bump vue-echarts from 8.2.0 to 8.3.2 in /web ([#260](https://github.com/petauron/senlun/issues/260)) ([0ec0b9c](https://github.com/petauron/senlun/commit/0ec0b9c14a0080df9ed1ba9868d413baecd5921e))
+
+## [0.1.0](https://github.com/petauron/senlun/compare/v0.1.0-alpha.70...v0.1.0) (2026-11-21)
+
+
+### Features
+
+* add on-demand IP unlock and Google region checks ([#265](https://github.com/petauron/senlun/issues/265)) ([40b8c7d](https://github.com/petauron/senlun/commit/40b8c7db1bcec8fed3a261c77f245d37076d4a8c))
+
+
+### Miscellaneous Chores
+
+* **release:** graduate Senlun from alpha to 0.1.0 ([#268](https://github.com/petauron/senlun/issues/268)) ([a2dec0d](https://github.com/petauron/senlun/commit/a2dec0d023178996fcc6789152ce9e0df69de16d)), closes [#267](https://github.com/petauron/senlun/issues/267)
+
 ## [0.1.0-alpha.70](https://github.com/petauron/senlun/compare/v0.1.0-alpha.69...v0.1.0-alpha.70) (2026-11-16)
 
 

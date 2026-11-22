@@ -11,3 +11,10 @@ web/node_modules
 .DS_Store
 
 web/dist
+
+tasks/
+archive/
+workspaces/
+docs/
+deploy/center/tls/
+deploy/center/generated/

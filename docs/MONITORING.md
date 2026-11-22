@@ -291,3 +291,33 @@ The shared card/list/detail badge shows the score and its quality label:
 green **纯净** for 80–100, amber **一般** for 40–79 and red **高危** for 0–39.
 Missing and stale results use neutral gray, never a fabricated zero. The colors
 do not grade route speed or guarantee the absence of abuse history.
+
+### On-demand IP unlock and Google region checks
+
+Administrators can trigger a bounded, one-shot unlock and Google region check
+from the **IP 质量** dialog for the selected IPv4 or IPv6 family. Agents pull a
+fixed task (`POST /api/v1/agents/ip-unlock/claim`) containing only task ID,
+address family, registered address and lease expiration—no URLs, scripts or
+commands cross the API.
+
+The Agent executes fixed HTTPS probes using an isolated, credential-free client
+bound to the requested IP family (`0.0.0.0` or `::`) with proxy settings and
+automatic retries disabled, after confirming the host's public egress matches
+the registered address:
+
+- **Google region (送中 detection)**: checks YouTube Premium's Google-reported
+  country (`INNERTUBE_CONTEXT_GL` / `countryCode`) and `google.com` redirect
+  headers. Hong Kong nodes naturally redirecting to `google.com.hk` remain
+  normal (`HK`); only `CN` / `google.cn` localization is flagged as `china`
+  (送中), and `429` / `/sorry/` responses are reported as `captcha`.
+- **Streaming and AI services**: checks YouTube, Netflix (distinguishing full
+  access from originals-only), Disney+, ChatGPT, TikTok, and Reddit. Reddit
+  probes `oauth.reddit.com/api/v1/me` with a compliant descriptive `User-Agent`
+  before checking anonymous web access, reporting `app_only` when the API is
+  reachable (`401`) while anonymous web HTML is blocked by Fastly WAF.
+
+Service control schema v10 adds bounded `ip_unlock_collectors` and
+`ip_unlock_checks` tables via a forward-only migration with paired pre-migration
+backup; metrics remain v2. Per-family reports are persisted alongside node
+options and invalidated when the registered IP changes. Older Agents report
+`upgrade_required` until updated and continue normal monitoring unchanged.

@@ -7,6 +7,7 @@ import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
 import NodeReturnRoutes from '@/components/NodeReturnRoutes.vue'
+import NodeUnlockSummary from '@/components/NodeUnlockSummary.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -287,12 +288,14 @@ const trafficProgressStyle = computed(() => ({
         <Badge :variant="data.online ? 'default' : 'destructive'" class="text-xs !rounded">
           {{ data.online ? '在线' : '离线' }}
         </Badge>
-        <NodeIpScores :node="data" />
+        <NodeIpScores :node="data" :show-china-badge="false" />
+        <NodeUnlockSummary :node="data" mode="badge" />
       </div>
       <div class="max-w-md px-4">
         <NodeNetworkControls :node="data" />
         <NodeReturnRoutes :node="data" />
       </div>
+      <NodeUnlockSummary :node="data" mode="panel" />
 
       <div class="px-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <CardX

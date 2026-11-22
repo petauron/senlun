@@ -107,7 +107,7 @@ export default [
       "refresh-cw": {
         "body": "<g fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\"><path d=\"M3 12a9 9 0 0 1 9-9a9.75 9.75 0 0 1 6.74 2.74L21 8\"/><path d=\"M21 3v5h-5m5 4a9 9 0 0 1-9 9a9.75 9.75 0 0 1-6.74-2.74L3 16\"/><path d=\"M8 16H3v5\"/></g>"
       },
-      "triangle-alert": {
+      "triangle-exclamation-point": {
         "body": "<path fill=\"none\" stroke=\"currentColor\" stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"m21.73 18l-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3M12 9v4m0 4h.01\"/>"
       },
       "x": {
@@ -117,6 +117,9 @@ export default [
     "aliases": {
       "loader-2": {
         "parent": "loader-circle"
+      },
+      "triangle-alert": {
+        "parent": "triangle-exclamation-point"
       }
     }
   },

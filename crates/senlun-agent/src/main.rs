@@ -1,4 +1,7 @@
+//! Outbound-only Senlun host metrics and fixed-probe agent.
+
 mod extended_metrics;
+mod ip_unlock;
 mod peer_latency;
 mod probes;
 mod region;
@@ -276,6 +279,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         config.interval,
     )?;
     let _routes = return_routes::RouteRunner::start(
+        client.clone(),
+        config.service_url.clone(),
+        credentials.agent_token.clone(),
+    );
+    let _unlocks = ip_unlock::UnlockRunner::start(
         client.clone(),
         config.service_url.clone(),
         credentials.agent_token.clone(),

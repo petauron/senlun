@@ -23,6 +23,8 @@ const env = {
 test('resume only the original immutable draft source', () => {
   assert.deepEqual(validateDraft(draft, tag), { tag, sha: sourceSha });
   assert.deepEqual(validateDraft(draft, tag, sourceSha), { tag, sha: sourceSha });
+  const stableTag = 'v0.1.0';
+  assert.deepEqual(validateDraft({ ...draft, tagName: stableTag }, stableTag, sourceSha), { tag: stableTag, sha: sourceSha });
 });
 
 test('reject published, mutable, mismatched or non-bot releases', () => {
@@ -105,4 +107,22 @@ test('release workflow retains draft permissions, identity gates and one publica
   assert.ok(workflow.jobs['release-pr'].if.includes("pending_draft != 'true'"));
   assert.ok(!/actions\/(?:upload|download)-artifact@/.test(text));
   assert.equal(workflow.env.DOCKER_BUILD_RECORD_UPLOAD, 'false');
+  const agentPublish = readFileSync('scripts/publish-agent-draft.sh', 'utf8');
+  assert.ok(agentPublish.includes('gh release edit "$AGENT_TAG" --draft=false --latest=false'));
+  const notify = workflow.jobs['notify-catalog'];
+  assert.ok(notify, 'notify-catalog wakeup job should be defined');
+  assert.equal(notify['continue-on-error'], true);
+  assert.equal(notify.permissions.contents, 'read');
+  assert.ok(notify.if.includes('!cancelled()'), 'notify-catalog must include !cancelled() because mutually exclusive needs jobs are skipped');
+  assert.ok(notify.if.includes("github.event_name == 'push'"));
+  assert.ok(notify.if.includes("github.repository == 'petauron/senlun'"));
+  assert.ok(notify.if.includes("github.ref == 'refs/heads/main'"));
+  const tokenStep = notify.steps.find((step) => step.uses?.startsWith('actions/create-github-app-token@'));
+  assert.equal(tokenStep.with.owner, 'petauron');
+  assert.equal(tokenStep.with.repositories, 'catalog');
+  assert.equal(tokenStep.with['permission-contents'], 'write');
+  assert.equal(tokenStep.with['permission-pull-requests'], undefined);
+  const dispatchStep = notify.steps.find((step) => step.run?.includes('repos/petauron/catalog/dispatches'));
+  assert.ok(dispatchStep.run.includes('event_type=catalog-reconcile'));
+  assert.ok(!dispatchStep.run.includes('client_payload'));
 });

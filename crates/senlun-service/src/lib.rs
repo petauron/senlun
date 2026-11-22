@@ -36,6 +36,7 @@ mod control_tests;
 mod external_traffic;
 mod ingest;
 mod ip_info;
+mod ip_unlock;
 mod komari;
 mod luminaplus;
 mod management;
@@ -448,6 +449,7 @@ pub fn router(state: AppState) -> Router {
         .merge(management::routes())
         .merge(external_traffic::routes())
         .merge(ip_info::routes())
+        .merge(ip_unlock::routes())
         .merge(return_routes::routes())
         .merge(peer_latency::routes())
         .route("/api/rpc2", post(rpc_handler))
