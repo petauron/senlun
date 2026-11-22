@@ -85,6 +85,37 @@ is diagnostic. Probe storage has a hard 100000-row per-node cap in addition to
 retention. Missing samples are not counted as received failures: node-offline
 alerts cover an absent Agent separately.
 
+## Node-to-node latency
+
+Agents rotate through visible, online peers using only the public IPv4/IPv6
+addresses registered in the node editor. The default is a TCP connection to
+port 443. Automatic mode tries registered IPv4 first and falls back to
+registered IPv6 if IPv4 fails. Set a target to ICMP, choose an explicit
+address family, or disable incoming measurements in the editor. ICMP requires
+the Agent account to be allowed to use the system ping command. No additional
+listening service is needed.
+
+Each direction is an independent measurement. The Service assigns each source
+up to 99 configured peers. Above that limit, assignments start after the
+source's node ID and wrap around the list. Offline peers keep their assignment
+and are skipped until they reconnect. Agents prefetch pages of up to 32 targets
+and share four concurrent probe slots, with three seconds allowed per address.
+They can fetch and measure the next page while reports are in flight. Set the
+node-to-node interval in **Site settings**. It defaults to 60 seconds and accepts
+5–300 seconds. Agents pick up the setting with the next round's plan. The
+interval is measured between round starts. A round that takes longer must
+finish before the next one starts. Carrier probes use their own schedule.
+
+The Service keeps the latest result per assigned peer in a temporary SQLite
+cache. Results count as fresh for five minutes and the cache repopulates after
+Service restart. Dashboard reads expose names, protocol, measured address
+family and results. Agents get target addresses for their assigned peers.
+
+A node card shows its lowest current successful result. Node details list peer
+results in latency order and mark offline, unconfigured, pending, failed and
+expired results. Agent-to-Service configuration and reporting for existing
+carrier probes keep their existing format.
+
 ## Alerts and notifications
 
 Rules monitor offline state, CPU/memory/disk utilization, traffic-limit percentage

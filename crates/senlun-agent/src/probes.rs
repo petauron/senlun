@@ -33,6 +33,7 @@ const MAX_PENDING_RESULTS_PER_TASK: usize = 4;
 pub struct ProbeRunner {
     pub interval: watch::Receiver<Duration>,
     worker: JoinHandle<()>,
+    peer_worker: JoinHandle<()>,
 }
 
 impl ProbeRunner {
@@ -44,6 +45,12 @@ impl ProbeRunner {
     ) -> Result<Self, reqwest::Error> {
         let target_client = target_client()?;
         let (sender, interval) = watch::channel(initial_interval);
+        let peer_worker = tokio::spawn(crate::peer_latency::run(
+            service_client.clone(),
+            target_client.clone(),
+            service_url.clone(),
+            token.clone(),
+        ));
         let worker = tokio::spawn(run_worker(
             service_client,
             target_client,
@@ -51,13 +58,18 @@ impl ProbeRunner {
             token,
             sender,
         ));
-        Ok(Self { interval, worker })
+        Ok(Self {
+            interval,
+            worker,
+            peer_worker,
+        })
     }
 }
 
 impl Drop for ProbeRunner {
     fn drop(&mut self) {
         self.worker.abort();
+        self.peer_worker.abort();
     }
 }
 
@@ -568,7 +580,7 @@ fn target_client() -> Result<Client, reqwest::Error> {
         .build()
 }
 
-async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
+pub(crate) async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
     let started = Instant::now();
     let deadline = Duration::from_secs(task.timeout_seconds);
     let outcome = if task.kind == ProbeKind::Tcp {

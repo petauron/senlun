@@ -27,6 +27,7 @@ const settings = ref<SiteSettings>({
   site_name: 'Senlun',
   private_site: true,
   agent_interval_seconds: 3,
+  peer_probe_interval_seconds: 60,
   earth_view_mode: 'maps',
 })
 const loading = ref(false)
@@ -154,6 +155,7 @@ async function logout(): Promise<void> {
           <fieldset :disabled="busy" class="space-y-4">
             <label class="grid gap-2 text-sm">站点名称<Input v-model="settings.site_name" required maxlength="128" /></label>
             <label class="grid gap-2 text-sm">Agent 上报间隔（秒）<Input v-model="settings.agent_interval_seconds" type="number" min="1" max="300" step="1" required /></label>
+            <label class="grid gap-2 text-sm">节点互测间隔（秒）<Input v-model="settings.peer_probe_interval_seconds" type="number" min="5" max="300" step="1" required /></label>
             <label class="grid gap-2 text-sm">首页头部展示模式
               <SelectControl aria-label="首页头部展示模式" v-model="settings.earth_view_mode" :disabled="busy" :options="[{ value: 'maps', label: '平面地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
             </label>

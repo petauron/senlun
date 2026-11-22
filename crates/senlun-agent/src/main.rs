@@ -2,6 +2,7 @@
 
 mod extended_metrics;
 mod ip_unlock;
+mod peer_latency;
 mod probes;
 mod region;
 mod return_routes;
