@@ -1447,9 +1447,9 @@ pub(crate) fn decorate_client(
     )?);
     if let Some(o) = options {
         let now = crate::storage::unix_time_ms()?;
-        crate::return_routes::decorate(&o, value, now);
+        crate::return_routes::decorate(&o, value);
         crate::return_routes::decorate_checks(db, node, value, now)?;
-        crate::ip_unlock::decorate(&o, value, now);
+        crate::ip_unlock::decorate(&o, value);
         crate::ip_unlock::decorate_checks(db, node, value, now)?;
         value["traffic_source"] = json!(o.traffic_source);
         value["name"] = json!(o.name);

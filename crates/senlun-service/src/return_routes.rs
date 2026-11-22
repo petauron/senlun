@@ -22,7 +22,6 @@ use std::net::IpAddr;
 use uuid::Uuid;
 
 pub(crate) const COLLECTOR_REVISION: &str = "db52fc60523320fc4a34b5c369f28be38df21d13";
-const MAX_AGE_MS: u64 = 7 * 86_400_000;
 
 pub(crate) use senlun_protocol::ReturnRouteReport as RouteReport;
 
@@ -173,20 +172,39 @@ impl Storage {
         let saved: crate::control::NodeOptions = serde_json::from_value(options)
             .map_err(|_| StorageError::InvalidInput("invalid saved node options"))?;
         let mut response = json!({});
-        decorate(&saved, &mut response, now);
+        decorate(&saved, &mut response);
         Ok(response["return_routes"].take())
     }
 }
 
-pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value, now: u64) {
-    let reports: Vec<Value> = options.return_routes.iter().map(|report| {
-        let registered = if report.family == 4 {&options.ipv4} else {&options.ipv6};
-        let matches = registered.parse::<IpAddr>().ok() == report.address.parse::<IpAddr>().ok();
-        json!({"family":report.family,"region":"SH","protocol":"tcp","source":"TcpQuality",
-            "checked_at_unix_ms":report.checked_at_unix_ms,
-            "stale":now.saturating_sub(report.checked_at_unix_ms) > MAX_AGE_MS,
-            "address_changed":!matches,"carriers":if matches {json!(report.carriers)}else{json!([])}})
-    }).collect();
+pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value) {
+    let reports: Vec<Value> = options
+        .return_routes
+        .iter()
+        .map(|report| {
+            let registered = if report.family == 4 {
+                &options.ipv4
+            } else {
+                &options.ipv6
+            };
+            let matches = registered
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| Some(ip) == report.address.parse::<IpAddr>().ok());
+            json!({
+                "family": report.family,
+                "region": "SH",
+                "protocol": "tcp",
+                "source": "TcpQuality",
+                "checked_at_unix_ms": report.checked_at_unix_ms,
+                "address_changed": !matches,
+                "carriers": if matches {
+                    json!(report.carriers)
+                } else {
+                    json!([])
+                },
+            })
+        })
+        .collect();
     value["return_routes"] = json!(reports);
 }
 
@@ -248,7 +266,7 @@ impl Storage {
         let raw: String = db.query_row("SELECT data FROM node_options o JOIN nodes n ON n.id=o.node_id WHERE node_id=?1 AND n.disabled_at_ms IS NULL",[node],|r|r.get(0)).optional()?.ok_or(StorageError::NotFound)?;
         let options: crate::control::NodeOptions = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidInput("invalid node options"))?;
-        decorate(&options, &mut value, now);
+        decorate(&options, &mut value);
         decorate_checks(&db, node, &mut value, now)?;
         Ok(value)
     }
@@ -400,5 +418,67 @@ impl Storage {
         crate::control::configuration_audit(&tx, "node.return_routes.finish", &node)?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::control::NodeOptions;
+    use senlun_protocol::CarrierRoute;
+
+    fn sample_report(address: &str, checked_at_unix_ms: u64) -> RouteReport {
+        RouteReport {
+            family: 4,
+            address: address.to_owned(),
+            region: "SH".to_owned(),
+            protocol: "tcp".to_owned(),
+            source: "TcpQuality".to_owned(),
+            revision: COLLECTOR_REVISION.to_owned(),
+            checked_at_unix_ms,
+            carriers: vec![
+                CarrierRoute {
+                    carrier: "telecom".to_owned(),
+                    target: "telecom.example.test".to_owned(),
+                    status: "ok".to_owned(),
+                    label: "CN2GIA".to_owned(),
+                },
+                CarrierRoute {
+                    carrier: "unicom".to_owned(),
+                    target: "unicom.example.test".to_owned(),
+                    status: "ok".to_owned(),
+                    label: "4837".to_owned(),
+                },
+                CarrierRoute {
+                    carrier: "mobile".to_owned(),
+                    target: "mobile.example.test".to_owned(),
+                    status: "ok".to_owned(),
+                    label: "CMI".to_owned(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn decorate_keeps_saved_routes_without_display_expiry_and_invalidates_on_ip_change() {
+        let checked_at = 1_700_000_000_000_u64;
+        let mut options = NodeOptions {
+            ipv4: "198.51.100.10".to_owned(),
+            return_routes: vec![sample_report("198.51.100.10", checked_at)],
+            ..NodeOptions::default()
+        };
+        let mut value = json!({});
+        decorate(&options, &mut value);
+        let entry = &value["return_routes"][0];
+        assert_eq!(entry["checked_at_unix_ms"], checked_at);
+        assert!(entry.get("stale").is_none());
+        assert_eq!(entry["address_changed"], false);
+        assert_eq!(entry["carriers"][0]["label"], "CN2GIA");
+
+        options.ipv4 = "203.0.113.20".to_owned();
+        let mut invalidated = json!({});
+        decorate(&options, &mut invalidated);
+        assert_eq!(invalidated["return_routes"][0]["address_changed"], true);
+        assert_eq!(invalidated["return_routes"][0]["carriers"], json!([]));
     }
 }

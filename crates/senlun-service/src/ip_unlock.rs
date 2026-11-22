@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 use std::net::IpAddr;
 use uuid::Uuid;
 
-const MAX_AGE_MS: u64 = 7 * 86_400_000;
 const SERVICES: [&str; 6] = [
     "youtube",
     "netflix",
@@ -107,6 +106,14 @@ fn valid_access_type(access_type: Option<&str>) -> bool {
     access_type.is_none_or(|kind| matches!(kind, "native" | "dns"))
 }
 
+fn required_services(family: u8) -> &'static [&'static str] {
+    if family == 6 {
+        &SERVICES[..5]
+    } else {
+        &SERVICES
+    }
+}
+
 fn validate_report(report: &UnlockReport, now: u64) -> Result<IpAddr, StorageError> {
     let address = report
         .address
@@ -117,42 +124,55 @@ fn validate_report(report: &UnlockReport, now: u64) -> Result<IpAddr, StorageErr
         6 => address.is_ipv6(),
         _ => false,
     };
+    let required = required_services(report.family);
+    let count_valid = report.services.len() == required.len()
+        || (report.family == 6 && report.services.len() == SERVICES.len());
     if !family_valid
         || !crate::ip_info::public_ip(address)
         || report.checked_at_unix_ms == 0
         || report.checked_at_unix_ms > now.saturating_add(60_000)
         || !["normal", "china", "captcha", "unknown"].contains(&report.google.status.as_str())
         || !valid_region_opt(report.google.region.as_deref())
-        || report.services.len() != SERVICES.len()
+        || !count_valid
     {
         return Err(StorageError::InvalidInput("invalid IP unlock report"));
     }
-    for service_id in SERVICES {
-        let matches: Vec<&UnlockServiceStatus> = report
-            .services
-            .iter()
-            .filter(|entry| entry.id == service_id)
-            .collect();
-        if matches.len() != 1 {
-            return Err(StorageError::InvalidInput(
-                "all unlock services are required",
-            ));
-        }
-        let entry = matches[0];
-        if ![
-            "unlocked",
-            "originals_only",
-            "app_only",
-            "china",
-            "blocked",
-            "unknown",
-        ]
-        .contains(&entry.status.as_str())
+    for entry in &report.services {
+        if !SERVICES.contains(&entry.id.as_str())
+            || ![
+                "unlocked",
+                "originals_only",
+                "app_only",
+                "china",
+                "blocked",
+                "unknown",
+            ]
+            .contains(&entry.status.as_str())
             || !valid_region_opt(entry.region.as_deref())
             || !valid_access_type(entry.access_type.as_deref())
         {
             return Err(StorageError::InvalidInput("invalid unlock service entry"));
         }
+    }
+    for service_id in required {
+        let count = report
+            .services
+            .iter()
+            .filter(|entry| entry.id == *service_id)
+            .count();
+        if count != 1 {
+            return Err(StorageError::InvalidInput(
+                "all unlock services are required",
+            ));
+        }
+    }
+    let tiktok_count = report
+        .services
+        .iter()
+        .filter(|entry| entry.id == "tiktok")
+        .count();
+    if report.family == 6 && tiktok_count > 1 {
+        return Err(StorageError::InvalidInput("invalid unlock service entry"));
     }
     Ok(address)
 }
@@ -161,10 +181,13 @@ impl Storage {
     fn save_ip_unlock_tx(
         tx: &Transaction<'_>,
         id: &str,
-        report: UnlockReport,
+        mut report: UnlockReport,
         now: u64,
     ) -> Result<(), StorageError> {
         let address = validate_report(&report, now)?;
+        if report.family == 6 {
+            report.services.retain(|entry| entry.id != "tiktok");
+        }
         let raw: Option<String> = tx
             .query_row(
                 "SELECT o.data FROM node_options o JOIN nodes n ON n.id=o.node_id \
@@ -203,7 +226,7 @@ impl Storage {
     }
 }
 
-pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value, now: u64) {
+pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value) {
     let reports: Vec<Value> = options
         .ip_unlocks
         .iter()
@@ -216,21 +239,25 @@ pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value,
             let matches = registered
                 .parse::<IpAddr>()
                 .is_ok_and(|ip| Some(ip) == report.address.parse::<IpAddr>().ok());
+            let services: Vec<&UnlockServiceStatus> = if matches {
+                report
+                    .services
+                    .iter()
+                    .filter(|entry| report.family != 6 || entry.id != "tiktok")
+                    .collect()
+            } else {
+                Vec::new()
+            };
             json!({
                 "family": report.family,
                 "checked_at_unix_ms": report.checked_at_unix_ms,
-                "stale": now.saturating_sub(report.checked_at_unix_ms) > MAX_AGE_MS,
                 "address_changed": !matches,
                 "google": if matches {
                     json!(report.google)
                 } else {
                     json!({"status": "unknown"})
                 },
-                "services": if matches {
-                    json!(report.services)
-                } else {
-                    json!([])
-                },
+                "services": json!(services),
             })
         })
         .collect();
@@ -326,7 +353,7 @@ impl Storage {
             .ok_or(StorageError::NotFound)?;
         let options: crate::control::NodeOptions = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidInput("invalid node options"))?;
-        decorate(&options, &mut value, now);
+        decorate(&options, &mut value);
         decorate_checks(&db, node, &mut value, now)?;
         Ok(value)
     }
@@ -752,9 +779,13 @@ mod tests {
         options.name = "Unlock QA Renamed".to_owned();
         options.ip_unlocks.clear();
         storage.save_node_options(&node_id, &mut options).unwrap();
-        let status = storage.unlock_status(&node_id, now + 4000).unwrap();
+        let status = storage
+            .unlock_status(&node_id, now + 30 * 86_400_000)
+            .unwrap();
         assert_eq!(status["ip_unlocks"][0]["google"]["region"], "HK");
+        assert_eq!(status["ip_unlocks"][0]["checked_at_unix_ms"], now + 2000);
         assert!(status["ip_unlocks"][0].get("address").is_none());
+        assert!(status["ip_unlocks"][0].get("stale").is_none());
         assert_eq!(status["ip_unlocks"][0]["address_changed"], false);
 
         // Changing registered IP invalidates displayed unlock results without leaking old IP.
@@ -764,5 +795,39 @@ mod tests {
         assert_eq!(invalidated["ip_unlocks"][0]["address_changed"], true);
         assert_eq!(invalidated["ip_unlocks"][0]["google"]["status"], "unknown");
         assert_eq!(invalidated["ip_unlocks"][0]["services"], json!([]));
+    }
+
+    #[test]
+    fn ipv6_reports_omit_tiktok_and_filter_legacy_tiktok_entries() {
+        let now = 1_800_000_000_000_u64;
+        let ipv6 = "2606:4700:4700::1111";
+
+        let mut v6_report = sample_report(ipv6, now);
+        v6_report.family = 6;
+        v6_report.services.retain(|entry| entry.id != "tiktok");
+        assert!(validate_report(&v6_report, now).is_ok());
+
+        // Legacy v0.1.1 agents still submit a tiktok entry on IPv6; accept and strip on display.
+        let mut legacy_v6 = sample_report(ipv6, now);
+        legacy_v6.family = 6;
+        assert!(validate_report(&legacy_v6, now).is_ok());
+
+        let options = NodeOptions {
+            ipv6: ipv6.to_owned(),
+            ip_unlocks: vec![legacy_v6],
+            ..NodeOptions::default()
+        };
+        let mut decorated = json!({});
+        decorate(&options, &mut decorated);
+        let services = decorated["ip_unlocks"][0]["services"].as_array().unwrap();
+        assert_eq!(services.len(), 5);
+        assert!(services.iter().all(|entry| entry["id"] != "tiktok"));
+
+        // IPv4 still requires TikTok alongside the other five services.
+        let mut v4_missing_tiktok = sample_report("1.1.1.1", now);
+        v4_missing_tiktok
+            .services
+            .retain(|entry| entry.id != "tiktok");
+        assert!(validate_report(&v4_missing_tiktok, now).is_err());
     }
 }

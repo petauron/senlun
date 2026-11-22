@@ -13,17 +13,14 @@ const { family } = useNodeIpVersion(() => props.node)
 const report = computed(() => props.node.ip_unlocks?.find(item => item.family === family.value))
 const active = computed(() => Boolean(report.value && !report.value.address_changed))
 const googleInfo = computed(() => getGoogleUnlockDisplay(report.value))
-const detailHint = computed(() => report.value?.stale
-  ? `${googleInfo.value.hint} · 结果已过期`
-  : googleInfo.value.hint)
-const services = computed(() => getOrderedUnlockServices(report.value))
+const services = computed(() => getOrderedUnlockServices(report.value, family.value))
 </script>
 
 <template>
   <span
     v-if="mode === 'badge' && active"
     :class="[nodeBadgeClass, googleInfo.tone]"
-    :title="googleInfo.hint"
+    :title="googleInfo.hint || googleInfo.label"
   >
     Google {{ googleInfo.label }}
   </span>
@@ -37,9 +34,12 @@ const services = computed(() => getOrderedUnlockServices(report.value))
       <div class="space-y-2.5">
         <div class="flex flex-wrap items-center justify-between gap-2 text-xs">
           <span class="font-semibold text-foreground">流媒体与 AI 解锁 · IPv{{ family }}</span>
-          <span class="text-[11px] text-muted-foreground">{{ detailHint }}</span>
+          <span v-if="googleInfo.hint" class="text-[11px] text-muted-foreground">{{ googleInfo.hint }}</span>
         </div>
-        <div class="grid grid-cols-2 gap-1.5 sm:grid-cols-3 lg:grid-cols-6">
+        <div
+          class="grid grid-cols-2 gap-1.5 sm:grid-cols-3"
+          :class="services.length === 5 ? 'lg:grid-cols-5' : 'lg:grid-cols-6'"
+        >
           <div
             v-for="item in services"
             :key="item.id"
