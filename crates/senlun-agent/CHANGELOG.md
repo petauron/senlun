@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/petauron/senlun/compare/senlun-agent-v0.1.0...senlun-agent-v0.1.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **agent:** improve IP unlock and Google China-redirect probes ([#272](https://github.com/petauron/senlun/issues/272)) ([933bfeb](https://github.com/petauron/senlun/commit/933bfebc99e86e3233d312402afc8ebe4cebd76e))
+
 ## [0.1.0](https://github.com/petauron/senlun/compare/senlun-agent-v0.1.0-alpha.70...senlun-agent-v0.1.0) (2026-11-21)
 
 
