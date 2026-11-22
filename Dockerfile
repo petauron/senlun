@@ -9,7 +9,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c AS rust-builder
+FROM rust:1.100-bookworm@sha256:ade39a710ef85f3506cffcfec3e8a24ba090badef1dff2fb798f71d878833fea AS rust-builder
 WORKDIR /src
 ARG SENLUN_BUILD_GIT_HASH=unknown
 ENV SENLUN_BUILD_GIT_HASH=${SENLUN_BUILD_GIT_HASH} \
