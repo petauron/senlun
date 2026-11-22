@@ -4,6 +4,26 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.2.0](https://github.com/petauron/senlun/compare/v0.1.1...v0.2.0) (2026-11-22)
+
+
+### Features
+
+* add directional node-to-node latency monitoring ([#262](https://github.com/petauron/senlun/issues/262)) ([a7147d6](https://github.com/petauron/senlun/commit/a7147d6669223539efa428399ae0dd513add104d))
+
+
+### Bug Fixes
+
+* **deps-dev:** bump @iconify/json from 2.2.558 to 2.2.559 in /web in the web-minor-patch group ([#285](https://github.com/petauron/senlun/issues/285)) ([cfc0506](https://github.com/petauron/senlun/commit/cfc0506589293eea23f190128f06082c94db9539))
+* **deps:** bump @iconify/vue from 4.3.0 to 5.0.5 in /web ([#259](https://github.com/petauron/senlun/issues/259)) ([6152beb](https://github.com/petauron/senlun/commit/6152bebb0fc1e98a4edaa6574f98f432b2922143))
+* **deps:** bump actions/dependency-review-action ([#277](https://github.com/petauron/senlun/issues/277)) ([1f0005b](https://github.com/petauron/senlun/commit/1f0005b2914234b2ea5c79eda7349952458d6e0e))
+* **deps:** bump pinia from 3.0.4 to 4.1.0 in /web ([#280](https://github.com/petauron/senlun/issues/280)) ([37a820c](https://github.com/petauron/senlun/commit/37a820cc55b9a910b2c9582806f994d0a46d7b47))
+* **deps:** bump rust from 1.99-bookworm to 1.100-bookworm ([#251](https://github.com/petauron/senlun/issues/251)) ([0526c8f](https://github.com/petauron/senlun/commit/0526c8fabf3a826af24984936ac00ed26a9a7afc))
+* **deps:** bump the cargo-minor-patch group with 4 updates ([#278](https://github.com/petauron/senlun/issues/278)) ([0ba22d6](https://github.com/petauron/senlun/commit/0ba22d67f35b343e245d14d4c901190bfd3011b4))
+* **deps:** bump the web-minor-patch group in /web with 11 updates ([#279](https://github.com/petauron/senlun/issues/279)) ([c05121f](https://github.com/petauron/senlun/commit/c05121fde83388fd1edd84d8ad84b79e6857536a))
+* **deps:** update url to 2.5.9 for RUSTSEC-2026-0592 ([#289](https://github.com/petauron/senlun/issues/289)) ([1c9e19d](https://github.com/petauron/senlun/commit/1c9e19d177e79ccac6b62ac680a65a937a87d5f0))
+* remove display expiry, skip IPv6 TikTok unlock probe, and trim normal Google hint ([#287](https://github.com/petauron/senlun/issues/287)) ([496a67e](https://github.com/petauron/senlun/commit/496a67ee7e1dbe16a02984353720890b4eb96650))
+
 ## [0.1.1](https://github.com/petauron/senlun/compare/v0.1.0...v0.1.1) (2026-11-22)
 
 
