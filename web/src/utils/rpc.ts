@@ -52,7 +52,6 @@ export interface ReturnRoute {
   protocol: string
   source: string
   checked_at_unix_ms: number
-  stale: boolean
   address_changed: boolean
   carriers: { carrier: string, target: string, status: string, label: string }[]
 }
@@ -90,7 +89,6 @@ export interface UnlockServiceStatus {
 export interface IpUnlockReport {
   family: 4 | 6
   checked_at_unix_ms: number
-  stale: boolean
   address_changed: boolean
   google: GoogleUnlockStatus
   services: UnlockServiceStatus[]

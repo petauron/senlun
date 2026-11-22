@@ -20,7 +20,6 @@ use serde_json::{Value, json};
 use std::net::IpAddr;
 use uuid::Uuid;
 
-const MAX_AGE_MS: u64 = 7 * 86_400_000;
 const SERVICES: [&str; 6] = [
     "youtube",
     "netflix",
@@ -203,7 +202,7 @@ impl Storage {
     }
 }
 
-pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value, now: u64) {
+pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value) {
     let reports: Vec<Value> = options
         .ip_unlocks
         .iter()
@@ -219,7 +218,6 @@ pub(crate) fn decorate(options: &crate::control::NodeOptions, value: &mut Value,
             json!({
                 "family": report.family,
                 "checked_at_unix_ms": report.checked_at_unix_ms,
-                "stale": now.saturating_sub(report.checked_at_unix_ms) > MAX_AGE_MS,
                 "address_changed": !matches,
                 "google": if matches {
                     json!(report.google)
@@ -326,7 +324,7 @@ impl Storage {
             .ok_or(StorageError::NotFound)?;
         let options: crate::control::NodeOptions = serde_json::from_str(&raw)
             .map_err(|_| StorageError::InvalidInput("invalid node options"))?;
-        decorate(&options, &mut value, now);
+        decorate(&options, &mut value);
         decorate_checks(&db, node, &mut value, now)?;
         Ok(value)
     }
@@ -752,9 +750,11 @@ mod tests {
         options.name = "Unlock QA Renamed".to_owned();
         options.ip_unlocks.clear();
         storage.save_node_options(&node_id, &mut options).unwrap();
-        let status = storage.unlock_status(&node_id, now + 4000).unwrap();
+        let status = storage.unlock_status(&node_id, now + 30 * 86_400_000).unwrap();
         assert_eq!(status["ip_unlocks"][0]["google"]["region"], "HK");
+        assert_eq!(status["ip_unlocks"][0]["checked_at_unix_ms"], now + 2000);
         assert!(status["ip_unlocks"][0].get("address").is_none());
+        assert!(status["ip_unlocks"][0].get("stale").is_none());
         assert_eq!(status["ip_unlocks"][0]["address_changed"], false);
 
         // Changing registered IP invalidates displayed unlock results without leaking old IP.

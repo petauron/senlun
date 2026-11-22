@@ -30,16 +30,14 @@ const carriers = [
 ]
 const rows = computed(() => carriers.map((carrier) => {
   const route = report.value?.carriers.find(value => value.carrier === carrier.id)
-  const known = Boolean(report.value && !report.value.stale && !report.value.address_changed && route?.status === 'ok')
+  const known = Boolean(report.value && !report.value.address_changed && route?.status === 'ok')
   const label = !report.value
     ? '待检测'
     : report.value.address_changed
       ? '需复测'
-      : report.value.stale
-        ? '待更新'
-        : route?.status === 'ok'
-          ? route.label.replaceAll('->', '→')
-          : '未知'
+      : route?.status === 'ok'
+        ? route.label.replaceAll('->', '→')
+        : '未知'
   const grade = known
     ? getReturnRouteGrade(label)
     : null
@@ -97,9 +95,6 @@ const summary = computed(() => {
       </div>
       <p v-if="report?.address_changed" class="text-xs text-muted-foreground">
         地址已变更，请重新检测当前网络。
-      </p>
-      <p v-else-if="report?.stale" class="text-xs text-muted-foreground">
-        上次结果已过期，请更新检测结果。
       </p>
       <details class="rounded-xl bg-muted/50 p-3 text-xs text-muted-foreground">
         <summary class="cursor-pointer font-medium text-foreground">

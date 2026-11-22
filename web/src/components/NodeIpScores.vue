@@ -69,8 +69,6 @@ const unlockStatusLabel = computed(() => {
       ? '上次探测失败'
       : '探测未完成'
   }
-  if (unlockReport.value?.stale)
-    return '结果已过期'
   return ''
 })
 

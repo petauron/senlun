@@ -198,9 +198,10 @@ regressions and regenerated Web/license assets have been validated.
 The built-in node card, list and detail keep their existing tags and periodic
 latency probes. Shanghai TCP return routes are separate operator-collected
 snapshots, not labels inferred from a latency measurement. IPv4 and IPv6 are
-stored separately, with target, source and collection time. A report is marked
-stale after seven days. Changing the registered IP invalidates its displayed
-carrier result; it never transfers a verdict to the new address.
+stored separately, with target, source and collection time. Saved reports remain
+visible with their collection time without display expiry until refreshed.
+Changing the registered IP invalidates its displayed carrier result; it never
+transfers a verdict to the new address.
 
 Select **Detect** in the node's **Network quality** header to request a fresh
 Shanghai three-carrier TCP report for the selected IPv4/IPv6 address. The
@@ -319,5 +320,6 @@ the registered address:
 Service control schema v10 adds bounded `ip_unlock_collectors` and
 `ip_unlock_checks` tables via a forward-only migration with paired pre-migration
 backup; metrics remain v2. Per-family reports are persisted alongside node
-options and invalidated when the registered IP changes. Older Agents report
-`upgrade_required` until updated and continue normal monitoring unchanged.
+options without display expiry and invalidated when the registered IP changes.
+Older Agents report `upgrade_required` until updated and continue normal
+monitoring unchanged.
