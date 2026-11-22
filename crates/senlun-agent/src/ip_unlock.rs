@@ -222,14 +222,18 @@ async fn collect(task: &IpUnlockTask) -> Result<IpUnlockReport, &'static str> {
             probe_disney_plus(&client),
             probe_chatgpt(&client),
             probe_reddit(task.family),
-            probe_tiktok(&client),
+            probe_tiktok_for_family(&client, task.family),
         );
+        let mut services = vec![youtube, netflix, disney_plus, chatgpt, reddit];
+        if let Some(tiktok) = tiktok {
+            services.push(tiktok);
+        }
         Ok(IpUnlockReport {
             family: task.family,
             address: expected.to_string(),
             checked_at_unix_ms: now_ms(),
             google,
-            services: vec![youtube, netflix, disney_plus, chatgpt, reddit, tiktok],
+            services,
         })
     })
     .await
@@ -1154,6 +1158,17 @@ async fn fetch_tiktok_page(client: &Client, start_url: &str) -> TikTokFetch {
     TikTokFetch::Body(body)
 }
 
+fn should_probe_tiktok(family: u8) -> bool {
+    family == 4
+}
+
+async fn probe_tiktok_for_family(client: &Client, family: u8) -> Option<UnlockServiceStatus> {
+    if !should_probe_tiktok(family) {
+        return None;
+    }
+    Some(probe_tiktok(client).await)
+}
+
 async fn probe_tiktok(client: &Client) -> UnlockServiceStatus {
     let mut body = match fetch_tiktok_page(client, "https://www.tiktok.com/").await {
         TikTokFetch::Blocked => return service_status("tiktok", "blocked", None),
@@ -1248,6 +1263,8 @@ mod tests {
         let tt_about = "https://www.tiktok.com/about?lang=en";
         assert!(is_tiktok_blocked_redirect(tt_base, tt_about));
         assert!(!is_tiktok_blocked_redirect(tt_base, TIKTOK_EXPLORE_URL));
+        assert!(should_probe_tiktok(4));
+        assert!(!should_probe_tiktok(6));
     }
 
     #[test]

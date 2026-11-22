@@ -9,6 +9,14 @@ export const UNLOCK_SERVICE_ORDER = [
   'tiktok',
 ] as const
 
+export const IPV6_UNLOCK_SERVICE_ORDER = [
+  'youtube',
+  'netflix',
+  'disney_plus',
+  'chatgpt',
+  'reddit',
+] as const
+
 const SERVICE_NAMES: Record<string, string> = {
   youtube: 'YouTube',
   netflix: 'Netflix',
@@ -80,9 +88,7 @@ export function getGoogleUnlockDisplay(report: IpUnlockReport | undefined) {
       shortLabel: region
         ? `Google ${region}`
         : 'Google 正常',
-      hint: region === 'HK'
-        ? '自然跳转 .com.hk，非 CN'
-        : 'Google / YouTube 定位正常',
+      hint: '',
       tone: unlockGreen,
       dot: 'bg-emerald-600 dark:bg-[#04b84c]',
       isChina: false,
@@ -157,12 +163,16 @@ export function getUnlockServiceDisplay(service: UnlockServiceStatus | undefined
   }
 }
 
-export function getOrderedUnlockServices(report: IpUnlockReport | undefined) {
+export function getOrderedUnlockServices(report: IpUnlockReport | undefined, family?: 4 | 6) {
+  const activeFamily = family ?? report?.family ?? 4
+  const order = activeFamily === 6
+    ? IPV6_UNLOCK_SERVICE_ORDER
+    : UNLOCK_SERVICE_ORDER
   const activeServices = report && !report.address_changed
     ? report.services
     : []
   const byId = new Map(activeServices.map(item => [item.id, item]))
-  return UNLOCK_SERVICE_ORDER.map((id) => {
+  return order.map((id) => {
     const entry = byId.get(id)
     return {
       id,

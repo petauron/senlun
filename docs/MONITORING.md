@@ -312,10 +312,12 @@ the registered address:
   normal (`HK`); only `CN` / `google.cn` localization is flagged as `china`
   (送中), and `429` / `/sorry/` responses are reported as `captcha`.
 - **Streaming and AI services**: checks YouTube, Netflix (distinguishing full
-  access from originals-only), Disney+, ChatGPT, TikTok, and Reddit. Reddit
-  probes `oauth.reddit.com/api/v1/me` with a compliant descriptive `User-Agent`
-  before checking anonymous web access, reporting `app_only` when the API is
-  reachable (`401`) while anonymous web HTML is blocked by Fastly WAF.
+  access from originals-only), Disney+, ChatGPT, Reddit, and (on IPv4 only,
+  since TikTok's public web endpoints do not publish IPv6 `AAAA` records)
+  TikTok. Reddit probes `oauth.reddit.com/api/v1/me` with a compliant
+  descriptive `User-Agent` before checking anonymous web access, reporting
+  `app_only` when the API is reachable (`401`) while anonymous web HTML is
+  blocked by Fastly WAF.
 
 Service control schema v10 adds bounded `ip_unlock_collectors` and
 `ip_unlock_checks` tables via a forward-only migration with paired pre-migration

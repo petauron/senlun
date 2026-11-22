@@ -42,7 +42,7 @@ const unlockCurrent = computed(() => props.node.ip_unlock_checks?.find(check => 
 const unlockBusy = computed(() => submittingUnlock.value || !!unlockActive.value)
 const unlockReady = computed(() => props.node.online && !!address.value && props.node.ip_unlock_capability === 'ready')
 const googleInfo = computed(() => getGoogleUnlockDisplay(unlockReport.value))
-const unlockServices = computed(() => getOrderedUnlockServices(unlockReport.value))
+const unlockServices = computed(() => getOrderedUnlockServices(unlockReport.value, family.value))
 const visible = computed(() => Boolean(props.node.ip_scores?.length || props.node.ip_unlocks?.length || props.node.ipv4 || props.node.ipv6))
 
 const unlockHint = computed(() => {
@@ -242,7 +242,7 @@ async function detectUnlock() {
             <div class="font-semibold">
               Google：{{ googleInfo.label }}
             </div>
-            <div class="truncate text-[11px]">
+            <div v-if="googleInfo.hint" class="truncate text-[11px]">
               {{ googleInfo.hint }}
             </div>
           </div>
