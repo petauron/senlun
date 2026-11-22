@@ -559,3 +559,39 @@ jobs:
           token: ${{ steps.release_app_token.outputs.token }}
           target-branch: main
           skip-github-release: true
+
+  notify-catalog:
+    name: Wake up official catalog reconciler
+    needs: [prepare, publish, publish-agent, recover-agent]
+    # Explicit !cancelled() is required because prepare and recover-agent are mutually
+    # exclusive, so one needed job is always skipped on every release path.
+    if: >-
+      !cancelled() &&
+      github.repository == 'petauron/senlun' &&
+      github.ref == 'refs/heads/main' &&
+      ((github.event_name == 'push' &&
+        needs.publish.result == 'success' &&
+        (needs.publish-agent.result == 'success' ||
+         (needs.prepare.outputs.agent_created != 'true' && needs.publish-agent.result == 'skipped'))) ||
+       needs.recover-agent.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Mint short-lived catalog wakeup token
+        id: catalog_token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: petauron
+          repositories: catalog
+          permission-contents: write
+      - name: Dispatch zero-payload catalog reconcile signal
+        env:
+          GH_TOKEN: ${{ steps.catalog_token.outputs.token }}
+        run: |
+          gh api --method POST repos/petauron/catalog/dispatches \
+            -f event_type=catalog-reconcile

@@ -12,7 +12,7 @@ permissions:
 concurrency:
   # PR and Release Please dispatch use different refs for the same branch.
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -20,8 +20,87 @@ env:
   SENLUN_BUILD_GIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  changes:
+    name: Classify changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      run_ci: ${{ steps.scope.outputs.run_ci }}
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Determine CI scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -eu
+          is_docs_only() {
+            files="$1"
+            [ -n "$files" ] || return 1
+            old_ifs=$IFS
+            nl=$(printf '\nx'); nl=${nl%x}; IFS=$nl
+            for path in $files; do
+              [ -n "$path" ] || continue
+              case "$path" in
+                LICENSE*|NOTICE*|*THIRD_PARTY*|*LICENSES*) IFS=$old_ifs; return 1 ;;
+                *.md|docs/*|.github/ISSUE_TEMPLATE/*|.github/PULL_REQUEST_TEMPLATE.md) ;;
+                *) IFS=$old_ifs; return 1 ;;
+              esac
+            done
+            IFS=$old_ifs
+            return 0
+          }
+          run_ci=true
+          if [ "$EVENT_NAME" = "pull_request" ] && [ -n "$BASE_SHA" ] && [ -n "$HEAD_SHA" ]; then
+            changed=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+            if is_docs_only "$changed"; then
+              run_ci=false
+            fi
+          elif [ "$EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ] && [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] && git cat-file -e "${BEFORE_SHA}^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BEFORE_SHA" "$GITHUB_SHA")
+            must_run_main=false
+            old_ifs=$IFS
+            nl=$(printf '\nx'); nl=${nl%x}; IFS=$nl
+            for path in $changed; do
+              case "$path" in
+                .release-please-manifest.json|version.txt|crates/senlun-agent/version.txt) must_run_main=true ;;
+              esac
+            done
+            IFS=$old_ifs
+            if [ "$must_run_main" = "false" ]; then
+              if is_docs_only "$changed"; then
+                run_ci=false
+              else
+                main_tree=$(git rev-parse "${GITHUB_SHA}^{tree}")
+                pr_head=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --jq '[.[] | select(.merged_at != null and .merge_commit_sha == "'"$GITHUB_SHA"'" and .base.ref == "main" and .head.repo.full_name == "'"$GITHUB_REPOSITORY"'")] | if length == 1 then .[0].head.sha else empty end' 2>/dev/null || true)
+                if [ -n "$pr_head" ]; then
+                  pr_tree=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$pr_head" --jq '.tree.sha // empty' 2>/dev/null || true)
+                  pr_ci=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$pr_head&per_page=100" --jq '.workflow_runs | sort_by(.run_number) | last | if . != null and .head_sha == "'"$pr_head"'" and .head_repository.full_name == "'"$GITHUB_REPOSITORY"'" and .status == "completed" and .conclusion == "success" then "ok" else empty end' 2>/dev/null || true)
+                  if [ "$pr_tree" = "$main_tree" ] && [ "$pr_ci" = "ok" ]; then
+                    run_ci=false
+                  fi
+                fi
+              fi
+            fi
+          fi
+          echo "run_ci=$run_ci" >> "$GITHUB_OUTPUT"
+
   web:
     name: Web static checks
+    needs: changes
+    if: needs.changes.outputs.run_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
@@ -60,6 +139,8 @@ jobs:
 
   rust-checks:
     name: Rust checks and tests
+    needs: changes
+    if: needs.changes.outputs.run_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -102,6 +183,8 @@ jobs:
 
   security:
     name: Dependency security
+    needs: changes
+    if: needs.changes.outputs.run_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -164,6 +247,8 @@ jobs:
 
   e2e:
     name: Real Service and Agent browser tests
+    needs: changes
+    if: needs.changes.outputs.run_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -197,6 +282,8 @@ jobs:
 
   container:
     name: Debian 12 binaries and non-root container smoke test
+    needs: changes
+    if: needs.changes.outputs.run_ci == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -264,23 +351,30 @@ jobs:
   # Keep this job ID stable: protected main can require the single `rust` check,
   # while the gate now includes Web, Rust, security, browser, and container jobs.
   rust:
-    needs: [web, rust-checks, security, e2e, container]
+    needs: [changes, web, rust-checks, security, e2e, container]
     # A cancelled duplicate must not leave a failed required check on its PR.
     # Ordinary failed/skipped dependencies still execute the fail-closed gate.
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:
-      - name: Require every CI job
+      - name: Require every applicable CI job
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RUN_CI: ${{ needs.changes.outputs.run_ci }}
           WEB_RESULT: ${{ needs.web.result }}
           RUST_RESULT: ${{ needs.rust-checks.result }}
           SECURITY_RESULT: ${{ needs.security.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
           CONTAINER_RESULT: ${{ needs.container.result }}
         run: |
-          test "$WEB_RESULT" = success
-          test "$RUST_RESULT" = success
-          test "$SECURITY_RESULT" = success
-          test "$E2E_RESULT" = success
-          test "$CONTAINER_RESULT" = success
+          test "$CHANGES_RESULT" = success
+          expected=success
+          if [ "$RUN_CI" = "false" ]; then
+            expected=skipped
+          fi
+          test "$WEB_RESULT" = "$expected"
+          test "$RUST_RESULT" = "$expected"
+          test "$SECURITY_RESULT" = "$expected"
+          test "$E2E_RESULT" = "$expected"
+          test "$CONTAINER_RESULT" = "$expected"
