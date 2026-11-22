@@ -22,9 +22,9 @@ function sorted(value) {
 const targets = ['x86_64-unknown-linux-musl', 'aarch64-unknown-linux-musl'];
 const graph = {}, packageNames = new Set(['senlun-agent', 'senlun-protocol']), selected = new Set();
 for (const target of targets) {
-  const output = execFileSync('cargo', ['tree', '--locked', '-p', 'senlun-agent', '--target', target,
+  const output = execFileSync('cargo', ['tree', '--color', 'never', '--locked', '-p', 'senlun-agent', '--target', target,
     '--edges', 'normal,build', '--prefix', 'none', '--format', '{p}|{f}'],
-  { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024, env: { ...process.env, CARGO_TERM_COLOR: 'never' } });
   const lines = output.trim().split('\n').map(line => {
     const match = /^([^ ]+) v([^ |]+)/.exec(line);
     assert.ok(match, `Unexpected Cargo tree line: ${line}`);
