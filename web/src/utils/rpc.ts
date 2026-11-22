@@ -65,6 +65,16 @@ export interface ReturnRouteCheck {
   finished_at_unix_ms: number
 }
 
+export interface PeerLatency {
+  node_id: string
+  name: string
+  kind: 'tcp' | 'icmp' | null
+  family: 4 | 6 | null
+  status: 'ready' | 'pending' | 'offline' | 'stale' | 'unconfigured' | 'timeout' | 'unavailable' | 'failed'
+  latency_ms: number | null
+  expires_at_unix_ms: number | null
+}
+
 export interface GoogleUnlockStatus {
   status: 'normal' | 'china' | 'captcha' | 'unknown'
   region?: string | null
@@ -95,6 +105,7 @@ export interface IpUnlockCheck {
 }
 
 export interface Client {
+  peer_latency?: PeerLatency | null
   ip_unlock_checks?: IpUnlockCheck[]
   ip_unlock_capability?: 'ready' | 'unavailable' | 'upgrade_required'
   ip_unlocks?: IpUnlockReport[]

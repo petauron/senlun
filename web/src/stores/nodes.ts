@@ -8,6 +8,7 @@ export type TrafficLimitType = 'up' | 'down' | 'min' | 'max' | 'sum'
 
 /** 节点完整信息（合并 Client 和 Status） */
 export interface NodeData {
+  peer_latency?: Client['peer_latency']
   ip_unlock_checks?: Client['ip_unlock_checks']
   ip_unlock_capability?: Client['ip_unlock_capability']
   ip_unlocks?: Client['ip_unlocks']
@@ -143,6 +144,7 @@ const useNodesStore = defineStore('nodes', () => {
     return {
       uuid: client.uuid,
       probes: client.probes,
+      peer_latency: client.peer_latency,
       name: client.name,
       cpu_name: client.cpu_name,
       virtualization: client.virtualization,

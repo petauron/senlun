@@ -1288,6 +1288,7 @@ fn slow_reporting_extends_the_offline_window_consistently() {
             site_name: "Senlun".into(),
             private_site: true,
             agent_interval_seconds: 300,
+            peer_probe_interval_seconds: None,
             ip_info_enabled: false,
             daily_exchange_rates: false,
             earth_view_mode: crate::control::EarthViewMode::Earth,
