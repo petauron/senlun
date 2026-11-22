@@ -1,3 +1,7 @@
+<script lang="ts">
+import { createSharedComposable, useTimestamp } from '@vueuse/core'
+</script>
+
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
 import { computed, defineAsyncComponent, ref } from 'vue'
@@ -8,7 +12,18 @@ import { useNodeIpVersion } from '@/composables/useNodeIpVersion'
 import { failureRateLabelForKinds } from '@/utils/probeLabels'
 
 const props = defineProps<{ node: NodeData, compact?: boolean }>()
+
+const usePeerClock = createSharedComposable(() => useTimestamp({ interval: 1000 }))
+
 const open = ref(false)
+const now = usePeerClock()
+const bestPeer = computed(() => {
+  const sample = props.node.peer_latency
+  return props.node.online && sample?.status === 'ready' && sample.latency_ms !== null
+    && sample.expires_at_unix_ms !== null && sample.expires_at_unix_ms > now.value
+    ? sample
+    : null
+})
 const { version: probeIPVersion } = useNodeIpVersion(() => props.node)
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
 const { pickSurfaceClass } = useBackgroundSurface()
@@ -24,6 +39,15 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
       <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" :ip-version="probeIPVersion" />
     </div>
     <NodeProbeSummary v-else :probes="node.probes" :node-uuid="node.uuid" :ip-version="probeIPVersion" :node-name="node.name" interactive @open="open = true" />
+    <div v-if="!compact" class="mt-2 grid grid-cols-[minmax(64px,0.75fr)_minmax(0,2fr)] items-center gap-2 text-[11px]">
+      <span class="font-medium text-foreground/75">节点互测</span>
+      <span v-if="bestPeer" class="flex min-w-0 items-center gap-1.5">
+        <span class="truncate" :title="bestPeer.name">{{ bestPeer.name }}</span>
+        <span class="shrink-0 text-muted-foreground">{{ bestPeer.kind?.toUpperCase() }}</span>
+        <span class="ml-auto shrink-0 tabular-nums">{{ bestPeer.latency_ms }} ms</span>
+      </span>
+      <span v-else class="text-muted-foreground">暂无有效结果</span>
+    </div>
     <Dialog v-model:open="open">
       <DialogContent
         class="max-w-6xl gap-0 overflow-hidden border-emerald-600/10 p-0 shadow-[0_0_2rem] shadow-emerald-800/10 transition-all"
@@ -31,8 +55,12 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
         @click.stop
       >
         <DialogHeader class="relative isolate flex h-13 flex-row items-center overflow-hidden px-4">
-          <DialogTitle class="relative z-10 min-w-0 flex-1 truncate pr-8">{{ node.name }} 延迟 / {{ rateLabel }}</DialogTitle>
-          <DialogDescription class="sr-only">TCP 界面的“丢包”表示连接探测失败率，并非 ICMP 数据包丢失；HTTP 显示请求失败率。详情按所选时间范围统计。</DialogDescription>
+          <DialogTitle class="relative z-10 min-w-0 flex-1 truncate pr-8">
+            {{ node.name }} 延迟 / {{ rateLabel }}
+          </DialogTitle>
+          <DialogDescription class="sr-only">
+            TCP 界面的“丢包”表示连接探测失败率，并非 ICMP 数据包丢失；HTTP 显示请求失败率。详情按所选时间范围统计。
+          </DialogDescription>
           <div aria-hidden="true" class="pointer-events-none absolute inset-0 bg-slate-50 dark:bg-slate-900/50">
             <div class="absolute top-0 left-1/2 -ml-152 h-100 w-325 dark:mask-[linear-gradient(white,transparent)]">
               <div class="absolute inset-0 bg-linear-to-r from-emerald-500 to-lime-300 mask-[radial-gradient(farthest-side_at_top,white,transparent)] opacity-40 dark:from-emerald-500/30 dark:to-lime-300/30 dark:opacity-100">

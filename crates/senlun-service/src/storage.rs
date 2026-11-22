@@ -199,6 +199,7 @@ impl Storage {
             transaction.commit()?;
         }
         rollups::initialize_hot(&connection)?;
+        crate::peer_latency::initialize(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             path: path.to_path_buf(),
@@ -425,6 +426,7 @@ impl Storage {
         }
         insert_audit_transaction(&transaction, now_ms, "node.revoke", node_id)?;
         transaction.commit()?;
+        crate::peer_latency::invalidate_node(&connection, node_id);
         Ok(())
     }
 
@@ -438,6 +440,7 @@ impl Storage {
         }
         insert_audit_transaction(&transaction, now_ms, "node.delete", node_id)?;
         transaction.commit()?;
+        crate::peer_latency::invalidate_node(&connection, node_id);
         // Control-plane deletion is durable first. Startup retries interrupted
         // metric cleanup, since WAL commits are not atomic across both files.
         metrics::delete_node(&mut connection, node_id)?;
@@ -492,6 +495,9 @@ impl Storage {
             (SELECT id FROM probe_minutes WHERE bucket_ms<=?1-60000 ORDER BY bucket_ms LIMIT 10000)",[cutoff])?;
         rollups::flush(&transaction, now_ms, false)?;
         transaction.commit()?;
+        if let Err(error) = crate::peer_latency::prune(&connection, now_ms) {
+            tracing::warn!(%error, "could not prune peer latency cache");
+        }
         Ok(removed
             .saturating_add(probe_removed)
             .saturating_add(hot_snapshots)
@@ -605,6 +611,7 @@ impl Storage {
         let statuses = query_latest_statuses(&connection, offline_after_seconds)?;
         let probe_tasks = crate::control::dashboard_probe_tasks(&connection)?;
         let now = unix_time_ms()?;
+        let peers = crate::peer_latency::directory(&connection, now, offline_after_seconds)?;
         let mut client_values = serde_json::Map::new();
         let mut status_values = serde_json::Map::new();
         for client in clients {
@@ -621,6 +628,12 @@ impl Storage {
                 &probe_tasks,
                 now,
                 probe_config
+            )?);
+            value["peer_latency"] = json!(crate::peer_latency::best(
+                &connection,
+                &peers,
+                &client.id,
+                now
             )?);
             client_values.insert(client.id.clone(), value);
         }
