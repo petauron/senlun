@@ -1,8 +1,7 @@
 version: 2
 # Routine version PRs are grouped monthly and limited to patch/minor updates so
-# dependency churn does not fan out into dozens of weekly full-CI runs. Major
-# upgrades and generated-asset refreshes are handled deliberately; Dependabot
-# security updates remain enabled.
+# dependency churn does not fan out into weekly full-CI runs. Major upgrades
+# are evaluated manually; Dependabot security updates remain enabled.
 updates:
   - package-ecosystem: cargo
     directory: "/"
@@ -10,6 +9,10 @@ updates:
       interval: monthly
       timezone: Asia/Singapore
     open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       cargo-minor-patch:
         patterns:
@@ -24,6 +27,10 @@ updates:
       interval: monthly
       timezone: Asia/Singapore
     open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       actions-minor-patch:
         patterns:
@@ -39,7 +46,7 @@ updates:
       timezone: Asia/Singapore
     open-pull-requests-limit: 2
     ignore:
-      - dependency-name: "@vueuse/core"
+      - dependency-name: "*"
         update-types:
           - version-update:semver-major
     groups:
@@ -56,6 +63,10 @@ updates:
       interval: monthly
       timezone: Asia/Singapore
     open-pull-requests-limit: 1
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       docker-minor-patch:
         patterns:
