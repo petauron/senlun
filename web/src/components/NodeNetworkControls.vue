@@ -49,8 +49,14 @@ const status = computed(() => {
   }
   if (report.value?.address_changed)
     return '地址已变更 · 需重新检测'
-  if (report.value)
-    return `更新于 ${new Date(report.value.checked_at_unix_ms).toLocaleString([], { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`
+  if (report.value) {
+    return `更新于 ${new Date(report.value.checked_at_unix_ms).toLocaleString([], {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`
+  }
   return '尚未检测'
 })
 

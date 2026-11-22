@@ -750,7 +750,9 @@ mod tests {
         options.name = "Unlock QA Renamed".to_owned();
         options.ip_unlocks.clear();
         storage.save_node_options(&node_id, &mut options).unwrap();
-        let status = storage.unlock_status(&node_id, now + 30 * 86_400_000).unwrap();
+        let status = storage
+            .unlock_status(&node_id, now + 30 * 86_400_000)
+            .unwrap();
         assert_eq!(status["ip_unlocks"][0]["google"]["region"], "HK");
         assert_eq!(status["ip_unlocks"][0]["checked_at_unix_ms"], now + 2000);
         assert!(status["ip_unlocks"][0].get("address").is_none());
