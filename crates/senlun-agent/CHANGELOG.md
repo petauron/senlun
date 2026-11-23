@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0](https://github.com/petauron/senlun/compare/senlun-agent-v0.1.1...senlun-agent-v0.2.0) (2026-11-22)
+
+
+### Features
+
+* add directional node-to-node latency monitoring ([#262](https://github.com/petauron/senlun/issues/262)) ([a7147d6](https://github.com/petauron/senlun/commit/a7147d6669223539efa428399ae0dd513add104d))
+
+
+### Bug Fixes
+
+* **deps:** bump the cargo-minor-patch group with 4 updates ([#278](https://github.com/petauron/senlun/issues/278)) ([0ba22d6](https://github.com/petauron/senlun/commit/0ba22d67f35b343e245d14d4c901190bfd3011b4))
+* **deps:** update url to 2.5.9 for RUSTSEC-2026-0592 ([#289](https://github.com/petauron/senlun/issues/289)) ([1c9e19d](https://github.com/petauron/senlun/commit/1c9e19d177e79ccac6b62ac680a65a937a87d5f0))
+* remove display expiry, skip IPv6 TikTok unlock probe, and trim normal Google hint ([#287](https://github.com/petauron/senlun/issues/287)) ([496a67e](https://github.com/petauron/senlun/commit/496a67ee7e1dbe16a02984353720890b4eb96650))
+
 ## [0.1.1](https://github.com/petauron/senlun/compare/senlun-agent-v0.1.0...senlun-agent-v0.1.1) (2026-11-22)
 
 
