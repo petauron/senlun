@@ -32,7 +32,7 @@ Matching-file counts include history and immutable identities, not only defects.
   remain attached to the same application UUID rather than creating new empty
   volumes or credentials. New installations use canonical defaults.
 - Unrelated local checkouts/worktrees and other sessions. Their relocation is
-  not part of a source PR; no Codex history was modified.
+  not part of a source PR; no local session history was modified.
 
 See [the migration runbook](technical-brand-migration.md) for rollout order,
 standalone path/account conversion and acceptance criteria. This audit contains
