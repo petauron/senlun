@@ -65,11 +65,21 @@ const RULES = [
   { match: exact('deny.toml', 'about.toml', 'about.hbs', 'RUST_THIRD_PARTY_LICENSES.html', 'RUST_STDLIB_LICENSES.html', 'scripts/rust-licenses.mjs'), jobs: ['security', 'rust'] },
   { match: exact('crates/senlun-agent/dependencies.sha256', 'scripts/check-release-please.mjs', 'scripts/agent-dependencies.mjs'), jobs: ['rust'] },
   { match: path => /^crates\/senlun-(agent|protocol|service)\/Cargo\.toml$/.test(path), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'path', e2e: 'desktop' },
-  // Enrollment, snapshot reporting and probe execution run in browser E2E;
-  // standalone Agent modules (unlock, return routes, peer latency, region) have
-  // no Web UI surface and run fast crate-scoped Rust checks only.
-  { match: exact('crates/senlun-agent/src/main.rs', 'crates/senlun-agent/src/probes.rs'), jobs: ['rust', 'e2e'], crate: 'senlun-agent', e2e: 'desktop' },
-  { match: prefix('crates/senlun-agent/'), jobs: ['rust'], crate: 'senlun-agent' },
+  // Allowlist only standalone Agent collectors and CLI tests that are never
+  // exercised by browser E2E; all other Agent files (and any new Agent module)
+  // fail closed to include desktop browser integration coverage.
+  {
+    match: exact(
+      'crates/senlun-agent/src/ip_unlock.rs',
+      'crates/senlun-agent/src/return_routes.rs',
+      'crates/senlun-agent/src/shanghai-routes.sh',
+      'crates/senlun-agent/src/peer_latency.rs',
+    ),
+    jobs: ['rust'],
+    crate: 'senlun-agent',
+  },
+  { match: prefix('crates/senlun-agent/tests/'), jobs: ['rust'], crate: 'senlun-agent' },
+  { match: prefix('crates/senlun-agent/'), jobs: ['rust', 'e2e'], crate: 'senlun-agent', e2e: 'desktop' },
   { match: prefix('crates/senlun-service/'), jobs: ['rust', 'e2e'], crate: 'senlun-service', e2e: 'desktop' },
   { match: prefix('crates/senlun-protocol/'), jobs: ['rust', 'e2e'], crate: 'workspace', e2e: 'desktop' },
   { match: exact('web/package.json', 'web/package-lock.json'), jobs: ['web', 'e2e', 'security', 'source_docker', 'rust'], e2e: 'both' },

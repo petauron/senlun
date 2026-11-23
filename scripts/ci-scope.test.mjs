@@ -104,6 +104,14 @@ test('crate-only source changes skip release packaging and narrow Rust and brows
   assert.equal(agentLoop.rustPackages, '-p senlun-agent');
   assert.deepEqual(agentLoop.e2eProjects, DESKTOP_E2E_PROJECTS);
 
+  const agentRegion = classifyPaths(['crates/senlun-agent/src/region.rs']);
+  assert.deepEqual(jobs(agentRegion), ['e2e', 'rust']);
+  assert.equal(agentRegion.rustPackages, '-p senlun-agent');
+  assert.deepEqual(agentRegion.e2eProjects, DESKTOP_E2E_PROJECTS);
+
+  const newAgentFile = classifyPaths(['crates/senlun-agent/src/future_collector.rs']);
+  assert.deepEqual(jobs(newAgentFile), ['e2e', 'rust']);
+
   const service = classifyPaths(['crates/senlun-service/src/control.rs']);
   assert.deepEqual(jobs(service), ['e2e', 'rust']);
   assert.equal(service.rustPackages, '-p senlun-service');

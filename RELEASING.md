@@ -64,9 +64,11 @@ whenever dependencies, the toolchain or license inputs change.
 `ci.yml` verifies each change once, sized to what it can affect, leaving heavy
 release packaging to `release.yml` unless packaging or dependency inputs change.
 `scripts/ci-scope.mjs` (tested on every run) maps changed paths to jobs:
-Web sources run Web checks and both browser viewports; standalone Agent modules
-run `-p senlun-agent` Clippy and tests only; Service, protocol and Agent loop
-sources run crate-scoped Rust checks plus desktop browser flows; dependency,
+Web sources run Web checks and both browser viewports; allowlisted standalone
+Agent collectors (`ip_unlock`, `return_routes`, `peer_latency`) and Agent CLI
+tests run `-p senlun-agent` Clippy and tests only; Service, protocol and live
+Agent reporting sources run crate-scoped Rust checks plus desktop browser flows;
+dependency,
 toolchain and container-input files add security and release/source image
 smoke tests; documentation, deploy tooling and untested packaging notices run
 only the fast repository checks. Unknown paths, workflow or classifier edits,

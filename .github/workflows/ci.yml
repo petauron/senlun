@@ -359,8 +359,8 @@ jobs:
           PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-cache.outputs.cache-hit }}
         run: |
           set -eu
-          shell_bin=$(find "$HOME/.cache/ms-playwright" -path '*/headless_shell' -type f 2>/dev/null | head -n 1 || true)
-          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && ! ldd "$shell_bin" | grep -q "not found"; then
+          shell_bin=$(find "$HOME/.cache/ms-playwright" \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -n 1 || true)
+          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && [ -x "$shell_bin" ] && ! ldd "$shell_bin" | grep -q "not found"; then
             echo "Reusing cached Chromium headless shell: $shell_bin"
           else
             npx playwright install --with-deps chromium
