@@ -4,7 +4,7 @@
 
 Local macOS x86_64 comparison of the released schema-3 Service and the schema-4 split-storage implementation. Both binaries were built from source with Rust/Cargo 1.98.0 in the debug profile and the same lockfile. No production databases, remote hosts, real Agents or external notification services were used.
 
-The baseline source is `f81a58a8cbb6a4111376152d58d4e3c5b1f8cc8c`; its Service sources, Cargo.toml and Cargo.lock match released `b6b2fde9cc9df252626c023212a9ac7fd1b565f9`. At measurement time, the candidate was the uncommitted `kuddy/split-metrics-storage` worktree before alpha.4 release preparation.
+The baseline source is `f81a58a8cbb6a4111376152d58d4e3c5b1f8cc8c`; its Service sources, Cargo.toml and Cargo.lock match released `b6b2fde9cc9df252626c023212a9ac7fd1b565f9`. At measurement time, the candidate was the uncommitted `feat/split-metrics-storage` worktree before alpha.4 release preparation.
 
 ## Write comparison
 
