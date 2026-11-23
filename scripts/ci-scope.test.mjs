@@ -70,7 +70,7 @@ function release(overrides = {}) {
 }
 
 test('documentation, deploy tooling and release-only packaging select no code jobs', () => {
-  const scope = classifyPaths(['docs/MONITORING.md', 'README.md', 'deploy/install-systemd.sh', '.env.example', 'compat/luminaplus/LICENSE', 'scripts/publish-agent-draft.sh', 'scripts/brand-names.test.mjs']);
+  const scope = classifyPaths(['docs/MONITORING.md', 'README.md', 'deploy/install-systemd.sh', '.env.example', 'compat/luminaplus/LICENSE', 'scripts/benchmark-storage.py', 'scripts/brand-names.test.mjs']);
   assert.deepEqual(jobs(scope), []);
 });
 
@@ -106,9 +106,15 @@ test('test-consumed assets and Web-dependent release tests keep their coverage',
 });
 
 test('container inputs select only their own image checks', () => {
-  assert.deepEqual(jobs(classifyPaths(['Dockerfile'])), ['source_docker']);
-  assert.deepEqual(jobs(classifyPaths(['Dockerfile.release'])), ['container']);
+  assert.deepEqual(jobs(classifyPaths(['.dockerignore'])), ['source_docker']);
   assert.deepEqual(jobs(classifyPaths(['scripts/build-linux-release.sh'])), ['container', 'rust']);
+});
+
+test('files asserted by release-source tests select the Web job that runs them', () => {
+  assert.deepEqual(jobs(classifyPaths(['scripts/publish-agent-draft.sh'])), ['web']);
+  assert.deepEqual(jobs(classifyPaths(['release-please-config.json'])), ['rust', 'web']);
+  assert.deepEqual(jobs(classifyPaths(['Dockerfile'])), ['source_docker', 'web']);
+  assert.deepEqual(jobs(classifyPaths(['Dockerfile.release'])), ['container', 'web']);
 });
 
 test('workflow, classifier and unknown paths fail closed to the complete suite', () => {

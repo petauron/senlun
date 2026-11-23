@@ -66,7 +66,7 @@ whenever dependencies, the toolchain or license inputs change, and daily.
 Web sources run Web checks and both browser projects; a single crate narrows
 Clippy and tests to that package while keeping browser and Debian runtime
 checks; dependency or toolchain files add security and source-image builds;
-documentation, deploy tooling and release-only packaging run only the fast
+documentation, deploy tooling and untested packaging notices run only the fast
 repository checks. Unknown paths, workflow or classifier edits, scheduled and
 manually dispatched runs select the complete suite. A daily scheduled complete
 run on main catches new advisories and drift between changes.

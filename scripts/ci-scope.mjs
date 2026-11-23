@@ -39,19 +39,21 @@ const RULES = [
   // Fast repository checks for these files run unconditionally in `changes`.
   { match: exact('.env.example', 'scripts/brand-names.test.mjs'), jobs: [] },
   { match: prefix('deploy/'), jobs: [] },
-  // Release-source tests need the Web toolchain's YAML parser.
-  { match: exact('scripts/release-source.mjs', 'scripts/release-source.test.mjs'), jobs: ['web'] },
+  // Release-source tests need the Web toolchain's YAML parser and also assert on
+  // the Agent publication script, Release Please config and both Dockerfiles.
+  { match: exact('scripts/release-source.mjs', 'scripts/release-source.test.mjs', 'scripts/publish-agent-draft.sh'), jobs: ['web'] },
   // The Service compiles and serves the bundled theme package in its tests.
   { match: path => /^compat\/luminaplus\/.+\.zip$/.test(path), jobs: RUST_BUILD, crate: 'senlun-service' },
-  // Release-only packaging and manual tools have no CI-executable coverage.
-  { match: exact('scripts/publish-agent-draft.sh', 'scripts/benchmark-storage.py', '.editorconfig'), jobs: [] },
+  // Manual tools and remaining release packaging have no CI-executable coverage.
+  { match: exact('scripts/benchmark-storage.py', '.editorconfig'), jobs: [] },
   { match: prefix('compat/'), jobs: [] },
   { match: exact('web/UPSTREAM.md', 'web/THIRD_PARTY_NOTICES.md'), jobs: ['web'] },
   { match: path => /^web\/LICENSE\./.test(path), jobs: ['web'] },
   { match: prefix('docs/', '.github/ISSUE_TEMPLATE/'), jobs: [] },
   { match: exact('.github/PULL_REQUEST_TEMPLATE.md'), jobs: [] },
   { match: path => path.endsWith('.md') && !/THIRD_PARTY|NOTICE|LICENSE/i.test(path), jobs: [] },
-  { match: exact('.release-please-manifest.json', 'version.txt', 'release-please-config.json', 'crates/senlun-agent/version.txt'), jobs: ['rust'] },
+  { match: exact('.release-please-manifest.json', 'version.txt', 'crates/senlun-agent/version.txt'), jobs: ['rust'] },
+  { match: exact('release-please-config.json'), jobs: ['rust', 'web'] },
   { match: exact('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'), jobs: [...RUST_BUILD, 'security', 'source_docker'], crate: 'workspace' },
   { match: exact('rustfmt.toml'), jobs: ['rust'] },
   // check-release-please.mjs also asserts the bundle keeps version-free attributions.
@@ -63,9 +65,10 @@ const RULES = [
   { match: prefix('web/e2e/'), jobs: ['web', 'e2e'] },
   { match: prefix('web/'), jobs: ['web', 'e2e'] },
   { match: exact('scripts/build-linux-release.sh', 'scripts/build-linux-service.sh', 'scripts/verify-linux-service.sh', 'scripts/Dockerfile.native-builder'), jobs: ['container', 'rust'] },
-  { match: exact('Dockerfile.release'), jobs: ['container'] },
+  { match: exact('Dockerfile.release'), jobs: ['container', 'web'] },
   { match: exact('LICENSE', 'NOTICE'), jobs: ['container', 'source_docker'] },
-  { match: exact('Dockerfile', '.dockerignore'), jobs: ['source_docker'] },
+  { match: exact('Dockerfile'), jobs: ['source_docker', 'web'] },
+  { match: exact('.dockerignore'), jobs: ['source_docker'] },
 ];
 
 function crateOf(path) {
