@@ -1,7 +1,9 @@
 // Select the CI jobs a change can affect. The classifier fails closed: unknown
-// paths, workflow or classifier edits, and unverifiable version bumps select the
-// complete suite. A version-only Release Please change is proven by content, not
-// by path, before it may skip code builds.
+// paths, workflow or classifier edits, and manual dispatches select the
+// complete suite. Routine source edits run fast verification without release
+// packaging; dependency, toolchain and container-input edits add packaging
+// checks. A version-only Release Please change is proven by content, not by
+// path, before it may skip code builds.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync } from 'node:fs';
@@ -11,7 +13,8 @@ import { isDeepStrictEqual } from 'node:util';
 
 export const CODE_JOBS = ['web', 'rust', 'security', 'e2e', 'container', 'source_docker'];
 export const JOBS = [...CODE_JOBS, 'version'];
-const RUST_BUILD = ['rust', 'e2e', 'container'];
+export const ALL_E2E_PROJECTS = ['desktop-chromium', 'mobile-chromium'];
+export const DESKTOP_E2E_PROJECTS = ['desktop-chromium'];
 const WORKSPACE_CRATES = new Set(['senlun-agent', 'senlun-protocol', 'senlun-service']);
 const FULL = Symbol('full');
 
@@ -32,7 +35,8 @@ const VERSION_FILES = new Set([
 const exact = (...paths) => path => paths.includes(path);
 const prefix = (...prefixes) => path => prefixes.some(value => path.startsWith(value));
 
-// First match wins. `jobs` may be FULL; `crate` narrows Rust checks.
+// First match wins. `jobs` may be FULL; `crate` narrows Rust checks; `e2e`
+// selects `'desktop'` (backend integration) or `'both'` (desktop + mobile UI).
 const RULES = [
   { match: prefix('.github/workflows/'), jobs: FULL },
   { match: exact('.github/dependabot.yml', 'scripts/ci-scope.mjs', 'scripts/ci-scope.test.mjs', '.gitignore'), jobs: FULL },
@@ -43,7 +47,7 @@ const RULES = [
   // the Agent publication script, Release Please config and both Dockerfiles.
   { match: exact('scripts/release-source.mjs', 'scripts/release-source.test.mjs', 'scripts/publish-agent-draft.sh'), jobs: ['web'] },
   // The Service compiles and serves the bundled theme package in its tests.
-  { match: path => /^compat\/luminaplus\/.+\.zip$/.test(path), jobs: RUST_BUILD, crate: 'senlun-service' },
+  { match: path => /^compat\/luminaplus\/.+\.zip$/.test(path), jobs: ['rust', 'e2e'], crate: 'senlun-service', e2e: 'desktop' },
   // Manual tools and remaining release packaging have no CI-executable coverage.
   { match: exact('scripts/benchmark-storage.py', '.editorconfig'), jobs: [] },
   { match: prefix('compat/'), jobs: [] },
@@ -54,16 +58,23 @@ const RULES = [
   { match: path => path.endsWith('.md') && !/THIRD_PARTY|NOTICE|LICENSE/i.test(path), jobs: [] },
   { match: exact('.release-please-manifest.json', 'version.txt', 'crates/senlun-agent/version.txt'), jobs: ['rust'] },
   { match: exact('release-please-config.json'), jobs: ['rust', 'web'] },
-  { match: exact('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'), jobs: [...RUST_BUILD, 'security', 'source_docker'], crate: 'workspace' },
+  // Dependency and toolchain changes validate release packaging as well.
+  { match: exact('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'workspace', e2e: 'desktop' },
   { match: exact('rustfmt.toml'), jobs: ['rust'] },
   // check-release-please.mjs also asserts the bundle keeps version-free attributions.
   { match: exact('deny.toml', 'about.toml', 'about.hbs', 'RUST_THIRD_PARTY_LICENSES.html', 'RUST_STDLIB_LICENSES.html', 'scripts/rust-licenses.mjs'), jobs: ['security', 'rust'] },
   { match: exact('crates/senlun-agent/dependencies.sha256', 'scripts/check-release-please.mjs', 'scripts/agent-dependencies.mjs'), jobs: ['rust'] },
-  { match: path => /^crates\/senlun-(agent|protocol|service)\/Cargo\.toml$/.test(path), jobs: [...RUST_BUILD, 'security', 'source_docker'], crate: 'path' },
-  { match: path => /^crates\/senlun-(agent|protocol|service)\//.test(path), jobs: RUST_BUILD, crate: 'path' },
-  { match: exact('web/package.json', 'web/package-lock.json'), jobs: ['web', 'e2e', 'security', 'source_docker', 'rust', 'container'] },
-  { match: prefix('web/e2e/'), jobs: ['web', 'e2e'] },
-  { match: prefix('web/'), jobs: ['web', 'e2e'] },
+  { match: path => /^crates\/senlun-(agent|protocol|service)\/Cargo\.toml$/.test(path), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'path', e2e: 'desktop' },
+  // Enrollment, snapshot reporting and probe execution run in browser E2E;
+  // standalone Agent modules (unlock, return routes, peer latency, region) have
+  // no Web UI surface and run fast crate-scoped Rust checks only.
+  { match: exact('crates/senlun-agent/src/main.rs', 'crates/senlun-agent/src/probes.rs'), jobs: ['rust', 'e2e'], crate: 'senlun-agent', e2e: 'desktop' },
+  { match: prefix('crates/senlun-agent/'), jobs: ['rust'], crate: 'senlun-agent' },
+  { match: prefix('crates/senlun-service/'), jobs: ['rust', 'e2e'], crate: 'senlun-service', e2e: 'desktop' },
+  { match: prefix('crates/senlun-protocol/'), jobs: ['rust', 'e2e'], crate: 'workspace', e2e: 'desktop' },
+  { match: exact('web/package.json', 'web/package-lock.json'), jobs: ['web', 'e2e', 'security', 'source_docker', 'rust'], e2e: 'both' },
+  { match: prefix('web/e2e/'), jobs: ['web', 'e2e'], e2e: 'both' },
+  { match: prefix('web/'), jobs: ['web', 'e2e'], e2e: 'both' },
   { match: exact('scripts/build-linux-release.sh', 'scripts/build-linux-service.sh', 'scripts/verify-linux-service.sh', 'scripts/Dockerfile.native-builder'), jobs: ['container', 'rust'] },
   { match: exact('Dockerfile.release'), jobs: ['container', 'web'] },
   { match: exact('LICENSE', 'NOTICE'), jobs: ['container', 'source_docker'] },
@@ -84,13 +95,19 @@ export function rustPackages(crates) {
 }
 
 function fullScope(reason) {
-  return { jobs: new Set(CODE_JOBS), rustPackages: '--workspace', reason };
+  return {
+    jobs: new Set(CODE_JOBS),
+    rustPackages: '--workspace',
+    e2eProjects: ALL_E2E_PROJECTS,
+    reason,
+  };
 }
 
 // Classify ordinary changes by path. Returns the selected job set.
 export function classifyPaths(paths) {
   const jobs = new Set();
   const crates = new Set();
+  let mobileE2e = false;
   for (const path of paths) {
     const rule = RULES.find(candidate => candidate.match(path));
     if (!rule || rule.jobs === FULL) return fullScope(rule ? `full suite required by ${path}` : `unclassified path ${path}`);
@@ -98,13 +115,14 @@ export function classifyPaths(paths) {
     if (rule.crate === 'workspace') crates.add('workspace');
     else if (rule.crate === 'path') crates.add(crateOf(path));
     else if (rule.crate) crates.add(rule.crate);
+    if (rule.e2e === 'both') mobileE2e = true;
   }
+  const e2eProjects = mobileE2e ? ALL_E2E_PROJECTS : DESKTOP_E2E_PROJECTS;
   const reason = jobs.size === 0 ? 'no CI-executable changes' : `change-scoped: ${[...jobs].sort().join(', ')}`;
-  return { jobs, rustPackages: rustPackages(crates), reason };
+  return { jobs, rustPackages: rustPackages(crates), e2eProjects, reason };
 }
 
 const versionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-
 const versionLine = /^version = "[^"]+"\r?$/;
 const nameLine = /^name = "([^"]+)"\r?$/m;
 
@@ -186,10 +204,20 @@ export function isVersionOnly(paths, read) {
 
 export function selectScope({ paths, read, verifiedTree = false }) {
   if (isVersionOnly(paths, read)) {
-    return { jobs: new Set(['version', 'security']), rustPackages: '--workspace', reason: 'version-only Release Please change' };
+    return {
+      jobs: new Set(['version', 'security']),
+      rustPackages: '--workspace',
+      e2eProjects: DESKTOP_E2E_PROJECTS,
+      reason: 'version-only Release Please change',
+    };
   }
   if (verifiedTree) {
-    return { jobs: new Set(), rustPackages: '--workspace', reason: 'identical tree already verified by its pull request' };
+    return {
+      jobs: new Set(),
+      rustPackages: '--workspace',
+      e2eProjects: DESKTOP_E2E_PROJECTS,
+      reason: 'identical tree already verified by its pull request',
+    };
   }
   return classifyPaths(paths);
 }
@@ -237,6 +265,7 @@ function main(argv, env) {
     : scopeFromGit(options.base, options.head, options.verifiedTree);
   const lines = JOBS.map(job => `${job}=${scope.jobs.has(job)}`);
   lines.push(`rust_packages=${scope.rustPackages}`);
+  lines.push(`e2e_projects=${JSON.stringify(scope.e2eProjects)}`);
   console.log(`CI scope: ${scope.reason}`);
   for (const line of lines) console.log(line);
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);

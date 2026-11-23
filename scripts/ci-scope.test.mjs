@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { CODE_JOBS, classifyPaths, isVersionOnly, scopeFromGit, selectScope } from './ci-scope.mjs';
+import {
+  ALL_E2E_PROJECTS,
+  CODE_JOBS,
+  DESKTOP_E2E_PROJECTS,
+  classifyPaths,
+  isVersionOnly,
+  scopeFromGit,
+  selectScope,
+} from './ci-scope.mjs';
 
 const jobs = scope => [...scope.jobs].sort();
 
@@ -69,39 +77,65 @@ function release(overrides = {}) {
   return { paths, read };
 }
 
-test('documentation, deploy tooling and release-only packaging select no code jobs', () => {
+test('documentation, deploy tooling and untested packaging notices select no code jobs', () => {
   const scope = classifyPaths(['docs/MONITORING.md', 'README.md', 'deploy/install-systemd.sh', '.env.example', 'compat/luminaplus/LICENSE', 'scripts/benchmark-storage.py', 'scripts/brand-names.test.mjs']);
   assert.deepEqual(jobs(scope), []);
 });
 
-test('Web source changes run Web static checks and browser tests only', () => {
-  assert.deepEqual(jobs(classifyPaths(['web/src/components/NodeIpScores.vue'])), ['e2e', 'web']);
-  assert.deepEqual(jobs(classifyPaths(['web/e2e/monitoring.spec.ts'])), ['e2e', 'web']);
+test('Web source changes run Web static checks and both browser viewports without Rust or container builds', () => {
+  const webUi = classifyPaths(['web/src/components/NodeIpScores.vue']);
+  assert.deepEqual(jobs(webUi), ['e2e', 'web']);
+  assert.deepEqual(webUi.e2eProjects, ALL_E2E_PROJECTS);
+
+  const e2eSpec = classifyPaths(['web/e2e/monitoring.spec.ts']);
+  assert.deepEqual(jobs(e2eSpec), ['e2e', 'web']);
+  assert.deepEqual(e2eSpec.e2eProjects, ALL_E2E_PROJECTS);
+
   assert.deepEqual(jobs(classifyPaths(['web/THIRD_PARTY_NOTICES.md', 'web/LICENSE.lucide'])), ['web']);
 });
 
-test('single-crate changes narrow Rust checks without dropping browser or Debian runtime coverage', () => {
-  const agent = classifyPaths(['crates/senlun-agent/src/ip_unlock.rs']);
-  assert.deepEqual(jobs(agent), ['container', 'e2e', 'rust']);
-  assert.equal(agent.rustPackages, '-p senlun-agent');
-  assert.equal(classifyPaths(['crates/senlun-service/src/control.rs']).rustPackages, '-p senlun-service');
-  assert.equal(classifyPaths(['crates/senlun-agent/src/main.rs', 'crates/senlun-service/src/lib.rs']).rustPackages, '--workspace');
-  assert.equal(classifyPaths(['crates/senlun-protocol/src/lib.rs']).rustPackages, '--workspace');
-  assert.equal(classifyPaths(['crates/senlun-agent/src/main.rs', 'rustfmt.toml']).rustPackages, '-p senlun-agent');
+test('crate-only source changes skip release packaging and narrow Rust and browser scope', () => {
+  const agentModule = classifyPaths(['crates/senlun-agent/src/ip_unlock.rs']);
+  assert.deepEqual(jobs(agentModule), ['rust']);
+  assert.equal(agentModule.rustPackages, '-p senlun-agent');
+
+  const agentLoop = classifyPaths(['crates/senlun-agent/src/main.rs']);
+  assert.deepEqual(jobs(agentLoop), ['e2e', 'rust']);
+  assert.equal(agentLoop.rustPackages, '-p senlun-agent');
+  assert.deepEqual(agentLoop.e2eProjects, DESKTOP_E2E_PROJECTS);
+
+  const service = classifyPaths(['crates/senlun-service/src/control.rs']);
+  assert.deepEqual(jobs(service), ['e2e', 'rust']);
+  assert.equal(service.rustPackages, '-p senlun-service');
+  assert.deepEqual(service.e2eProjects, DESKTOP_E2E_PROJECTS);
+
+  const bothCrates = classifyPaths(['crates/senlun-agent/src/main.rs', 'crates/senlun-service/src/lib.rs']);
+  assert.equal(bothCrates.rustPackages, '--workspace');
+  assert.deepEqual(bothCrates.e2eProjects, DESKTOP_E2E_PROJECTS);
+
+  const protocol = classifyPaths(['crates/senlun-protocol/src/lib.rs']);
+  assert.deepEqual(jobs(protocol), ['e2e', 'rust']);
+  assert.equal(protocol.rustPackages, '--workspace');
+  assert.deepEqual(protocol.e2eProjects, DESKTOP_E2E_PROJECTS);
+
+  assert.equal(classifyPaths(['crates/senlun-agent/src/ip_unlock.rs', 'rustfmt.toml']).rustPackages, '-p senlun-agent');
 });
 
-test('dependency and toolchain changes add security and source image coverage', () => {
+test('dependency and toolchain changes add security and container packaging coverage', () => {
   assert.deepEqual(jobs(classifyPaths(['Cargo.lock'])), ['container', 'e2e', 'rust', 'security', 'source_docker']);
   assert.equal(classifyPaths(['Cargo.lock', 'crates/senlun-agent/src/main.rs']).rustPackages, '--workspace');
   assert.deepEqual(jobs(classifyPaths(['crates/senlun-service/Cargo.toml'])), ['container', 'e2e', 'rust', 'security', 'source_docker']);
-  assert.deepEqual(jobs(classifyPaths(['web/package-lock.json'])), ['container', 'e2e', 'rust', 'security', 'source_docker', 'web']);
+  const npmLock = classifyPaths(['web/package-lock.json']);
+  assert.deepEqual(jobs(npmLock), ['e2e', 'rust', 'security', 'source_docker', 'web']);
+  assert.deepEqual(npmLock.e2eProjects, ALL_E2E_PROJECTS);
   assert.deepEqual(jobs(classifyPaths(['deny.toml', 'RUST_THIRD_PARTY_LICENSES.html'])), ['rust', 'security']);
 });
 
 test('test-consumed assets and Web-dependent release tests keep their coverage', () => {
   const theme = classifyPaths(['compat/luminaplus/LuminaPlus-v1.3.5-senlun.zip']);
-  assert.deepEqual(jobs(theme), ['container', 'e2e', 'rust']);
+  assert.deepEqual(jobs(theme), ['e2e', 'rust']);
   assert.equal(theme.rustPackages, '-p senlun-service');
+  assert.deepEqual(theme.e2eProjects, DESKTOP_E2E_PROJECTS);
   assert.deepEqual(jobs(classifyPaths(['scripts/release-source.mjs'])), ['web']);
 });
 
@@ -122,6 +156,7 @@ test('workflow, classifier and unknown paths fail closed to the complete suite',
     const scope = classifyPaths(['docs/README.md', path]);
     assert.deepEqual(jobs(scope), [...CODE_JOBS].sort(), path);
     assert.equal(scope.rustPackages, '--workspace');
+    assert.deepEqual(scope.e2eProjects, ALL_E2E_PROJECTS);
   }
 });
 
@@ -187,7 +222,8 @@ const historyAvailable = Object.values(history).flat().every(hasCommit);
 test('real v0.2.0 history classifies releases, features and dependency fixes correctly', { skip: !historyAvailable && 'full Git history unavailable' }, () => {
   assert.deepEqual(jobs(scopeFromGit(...history.release020)), ['security', 'version']);
   const feature = scopeFromGit(...history.feature287);
-  assert.deepEqual(jobs(feature), ['container', 'e2e', 'rust', 'web']);
+  assert.deepEqual(jobs(feature), ['e2e', 'rust', 'web']);
   assert.equal(feature.rustPackages, '--workspace');
+  assert.deepEqual(feature.e2eProjects, ALL_E2E_PROJECTS);
   assert.deepEqual(jobs(scopeFromGit(...history.deps289)), ['container', 'e2e', 'rust', 'security', 'source_docker']);
 });

@@ -24,15 +24,17 @@
 - Required checks must represent real checks on the exact head SHA. CI selects
   jobs from the change scope with the tested, fail-closed classifier
   `scripts/ci-scope.mjs`: unknown paths, workflow or classifier edits, and
-  scheduled or manual runs execute the complete suite, and the `rust` gate
-  requires every selected job to succeed and every unselected job to be
-  skipped. A Release Please change proven by content to touch only version
+  manual runs execute the complete suite, and the `rust` gate requires every
+  selected job to succeed and every unselected job to be skipped. Routine code
+  edits run fast crate- or Web-scoped checks without release packaging;
+  dependency, toolchain and container-input edits add packaging checks, and the
+  release workflow builds, smoke-tests and attests the exact published
+  artifacts. A Release Please change proven by content to touch only version
   fields and changelogs runs the version and dependency-security checks instead
-  of repeating code builds; the release workflow then builds, smoke-tests and
-  attests the exact published artifacts. When token-created PRs do not trigger
-  checks, explicitly dispatch the existing workflows. Never manufacture
-  successful required-check results or weaken the classifier to skip a job a
-  change can affect.
+  of repeating code builds. When token-created PRs do not trigger checks,
+  explicitly dispatch the existing workflows. Never manufacture successful
+  required-check results or weaken the classifier to skip a job a change can
+  affect.
 - Publish only from an immutable, checked commit on protected `main`. Use the
   Release Please output SHA/tag throughout checkout, build, provenance and
   publication; fail closed on identity/version mismatches or failed checks.

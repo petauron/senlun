@@ -57,19 +57,20 @@ The Rust license template keeps workspace package attributions without the
 product version; registry/git dependency versions and all license texts remain
 included. A version-only PR must not stale the third-party notice bundle. CI
 still regenerates and compares the complete bundle with pinned cargo-about
-whenever dependencies, the toolchain or license inputs change, and daily.
+whenever dependencies, the toolchain or license inputs change.
 
 ## Change-scoped CI
 
-`ci.yml` verifies each change once, sized to what it can affect.
+`ci.yml` verifies each change once, sized to what it can affect, leaving heavy
+release packaging to `release.yml` unless packaging or dependency inputs change.
 `scripts/ci-scope.mjs` (tested on every run) maps changed paths to jobs:
-Web sources run Web checks and both browser projects; a single crate narrows
-Clippy and tests to that package while keeping browser and Debian runtime
-checks; dependency or toolchain files add security and source-image builds;
-documentation, deploy tooling and untested packaging notices run only the fast
-repository checks. Unknown paths, workflow or classifier edits, scheduled and
-manually dispatched runs select the complete suite. A daily scheduled complete
-run on main catches new advisories and drift between changes.
+Web sources run Web checks and both browser viewports; standalone Agent modules
+run `-p senlun-agent` Clippy and tests only; Service, protocol and Agent loop
+sources run crate-scoped Rust checks plus desktop browser flows; dependency,
+toolchain and container-input files add security and release/source image
+smoke tests; documentation, deploy tooling and untested packaging notices run
+only the fast repository checks. Unknown paths, workflow or classifier edits,
+and manually dispatched runs select the complete suite.
 
 A Release Please version PR is recognised by content, not by path: every
 changed file must be a version file or changelog, and Cargo/npm manifests and

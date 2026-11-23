@@ -5,24 +5,19 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-  schedule:
-    # Daily complete suite on main: catches new advisories, toolchain drift and
-    # anything change-scoped pull request checks intentionally do not repeat.
-    - cron: "41 18 * * *"
 
 permissions:
   contents: read
 
 concurrency:
-  # PR and Release Please dispatch use different refs for the same branch. The
-  # daily schedule gets its own group so it never replaces a pending push run
-  # that a release is waiting for.
-  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}${{ github.event_name == 'schedule' && '-schedule' || '' }}
+  # PR and Release Please dispatch use different refs for the same branch.
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
   SENLUN_BUILD_GIT_HASH: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
@@ -43,6 +38,7 @@ jobs:
       source_docker: ${{ steps.scope.outputs.source_docker }}
       version: ${{ steps.scope.outputs.version }}
       rust_packages: ${{ steps.scope.outputs.rust_packages }}
+      e2e_projects: ${{ steps.scope.outputs.e2e_projects }}
     steps:
       - name: Check out repository history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -103,7 +99,7 @@ jobs:
               fi
               ;;
             *)
-              # Scheduled and manually dispatched runs always execute everything.
+              # Manually dispatched runs always execute everything.
               node scripts/ci-scope.mjs --full
               ;;
           esac
@@ -125,7 +121,7 @@ jobs:
       - name: Cache Rust dependency sources
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ubuntu-24.04
+          shared-key: ubuntu-24.04-sources
           cache-bin: false
           cache-targets: false
       - name: Install Node.js
@@ -215,16 +211,14 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ubuntu-24.04
+          shared-key: ubuntu-24.04-rust-checks
           cache-bin: false
       - name: Check formatting
         run: cargo fmt --all --check
-      - name: Install Node.js for embedded Web assets
+      - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - name: Verify Release Please versions and Agent build inputs
         env:
           RELEASE_PLEASE_TEST_ROOT: ${{ runner.temp }}/release-please-regression
@@ -232,11 +226,13 @@ jobs:
           npm install --prefix "$RELEASE_PLEASE_TEST_ROOT" --ignore-scripts --no-audit --no-fund --package-lock=false release-please@17.6.0
           node scripts/check-release-please.mjs
           node scripts/agent-dependencies.mjs --check
-      - name: Build embedded Web assets before compiling Rust
-        working-directory: web
+      # Real Web builds are verified by `web` and `e2e`; a constant stub satisfies
+      # RustEmbed without running Vite here or invalidating the Service crate cache.
+      - name: Prepare deterministic embedded Web stub
+        if: env.RUST_PACKAGES != '-p senlun-agent'
         run: |
-          npm ci
-          npm run build
+          mkdir -p web/dist
+          printf '<!doctype html><title>Senlun</title>\n' > web/dist/index.html
       - name: Run Clippy
         # RUST_PACKAGES is validated above and intentionally word-split.
         run: cargo clippy --locked $RUST_PACKAGES --all-targets -- -D warnings
@@ -260,7 +256,7 @@ jobs:
       - name: Cache Rust dependency sources
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ubuntu-24.04
+          shared-key: ubuntu-24.04-sources
           cache-bin: false
           cache-targets: false
       - name: Install Node.js
@@ -320,19 +316,27 @@ jobs:
       fail-fast: false
       matrix:
         # Each device project runs against its own fresh Service and Agent.
-        project: [desktop-chromium, mobile-chromium]
+        project: ${{ fromJson(needs.changes.outputs.e2e_projects) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Validate Playwright project
+        env:
+          PLAYWRIGHT_PROJECT: ${{ matrix.project }}
+        run: |
+          case "$PLAYWRIGHT_PROJECT" in
+            desktop-chromium|mobile-chromium) ;;
+            *) echo "Unexpected Playwright project: $PLAYWRIGHT_PROJECT" >&2; exit 1 ;;
+          esac
       - name: Install pinned Rust toolchain
         run: rustup show
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          key: ubuntu-24.04
+          shared-key: ubuntu-24.04-e2e
           cache-bin: false
       - name: Install Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -343,9 +347,24 @@ jobs:
       - name: Install dependencies
         working-directory: web
         run: npm ci
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-ubuntu-24.04-${{ hashFiles('web/package-lock.json') }}
       - name: Install Chromium
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-cache.outputs.cache-hit }}
+        run: |
+          set -eu
+          shell_bin=$(find "$HOME/.cache/ms-playwright" -path '*/headless_shell' -type f 2>/dev/null | head -n 1 || true)
+          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && ! ldd "$shell_bin" | grep -q "not found"; then
+            echo "Reusing cached Chromium headless shell: $shell_bin"
+          else
+            npx playwright install --with-deps chromium
+          fi
       - name: Build Web assets
         working-directory: web
         run: npm run build
@@ -425,8 +444,18 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the source Dockerfile with the pinned toolchain
-        run: docker build --file Dockerfile --build-arg "SENLUN_BUILD_GIT_HASH=$SENLUN_BUILD_GIT_HASH" --tag senlun-source-ci .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Dockerfile
+          load: true
+          tags: senlun-source-ci
+          cache-from: type=gha,scope=ci-source-docker
+          cache-to: type=gha,mode=max,scope=ci-source-docker
+          build-args: SENLUN_BUILD_GIT_HASH=${{ env.SENLUN_BUILD_GIT_HASH }}
       - name: Verify runtime identity and health
         run: |
           container_id=$(docker run --detach --publish 127.0.0.1:18082:8080 senlun-source-ci)
