@@ -5,7 +5,15 @@ set -eu
 # same probe artifact runs on both GNU/Linux and Alpine without gcompat.
 # Bind mounts require a local Linux Docker daemon, not a remote desktop context.
 [ "$(uname -s)" = Linux ] || { echo "requires a local Linux Docker runner" >&2; exit 1; }
-: "${SENLUN_BUILD_GIT_HASH:?set the source revision}"
+prepare_only=0
+case "${1:-}" in
+  "") ;;
+  --prepare-builder) prepare_only=1 ;;
+  *) echo "usage: $0 [--prepare-builder]" >&2; exit 1 ;;
+esac
+if [ "$prepare_only" -eq 0 ]; then
+  : "${SENLUN_BUILD_GIT_HASH:?set the source revision}"
+fi
 : "${SENLUN_BUILD_TARGET:?set the native Rust target}"
 repository=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 builder_base=rust:1.99-bookworm@sha256:e6f2cff35d0f309acf8433b4f05878ed77092602c5065cc81801177da0bb3a9c
@@ -17,6 +25,9 @@ esac
 builder="senlun-native-builder:$SENLUN_BUILD_TARGET"
 docker build --build-arg "RUST_BASE=$builder_base" --build-arg "MUSL_TARGET=$musl_target" \
  --file "$repository/scripts/Dockerfile.native-builder" --tag "$builder" "$repository/scripts"
+if [ "$prepare_only" -eq 1 ]; then
+  exit 0
+fi
 runtime=debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 cargo_home=${CARGO_HOME:-$HOME/.cargo}
 mkdir -p "$cargo_home"

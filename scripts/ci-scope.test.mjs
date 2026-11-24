@@ -130,13 +130,24 @@ test('crate-only source changes skip release packaging and narrow Rust and brows
 });
 
 test('dependency and toolchain changes add security and container packaging coverage', () => {
-  assert.deepEqual(jobs(classifyPaths(['Cargo.lock'])), ['container', 'e2e', 'rust', 'security', 'source_docker']);
+  const cargoLock = classifyPaths(['Cargo.lock']);
+  assert.deepEqual(jobs(cargoLock), ['container', 'e2e', 'rust', 'security', 'source_docker']);
+  assert.equal(cargoLock.stdlibLicenses, false);
   assert.equal(classifyPaths(['Cargo.lock', 'crates/senlun-agent/src/main.rs']).rustPackages, '--workspace');
   assert.deepEqual(jobs(classifyPaths(['crates/senlun-service/Cargo.toml'])), ['container', 'e2e', 'rust', 'security', 'source_docker']);
+  assert.equal(classifyPaths(['crates/senlun-service/Cargo.toml']).stdlibLicenses, false);
+  const toolchain = classifyPaths(['rust-toolchain.toml']);
+  assert.deepEqual(jobs(toolchain), ['container', 'e2e', 'rust', 'security', 'source_docker']);
+  assert.equal(toolchain.stdlibLicenses, true);
   const npmLock = classifyPaths(['web/package-lock.json']);
   assert.deepEqual(jobs(npmLock), ['e2e', 'rust', 'security', 'source_docker', 'web']);
   assert.deepEqual(npmLock.e2eProjects, ALL_E2E_PROJECTS);
-  assert.deepEqual(jobs(classifyPaths(['deny.toml', 'RUST_THIRD_PARTY_LICENSES.html'])), ['rust', 'security']);
+  assert.equal(npmLock.stdlibLicenses, false);
+  const crateLicenses = classifyPaths(['deny.toml', 'RUST_THIRD_PARTY_LICENSES.html']);
+  assert.deepEqual(jobs(crateLicenses), ['rust', 'security']);
+  assert.equal(crateLicenses.stdlibLicenses, false);
+  assert.equal(classifyPaths(['RUST_STDLIB_LICENSES.html']).stdlibLicenses, true);
+  assert.equal(classifyPaths(['scripts/rust-licenses.mjs']).stdlibLicenses, true);
 });
 
 test('test-consumed assets and Web-dependent release tests keep their coverage', () => {
@@ -165,6 +176,7 @@ test('workflow, classifier and unknown paths fail closed to the complete suite',
     assert.deepEqual(jobs(scope), [...CODE_JOBS].sort(), path);
     assert.equal(scope.rustPackages, '--workspace');
     assert.deepEqual(scope.e2eProjects, ALL_E2E_PROJECTS);
+    assert.equal(scope.stdlibLicenses, true, path);
   }
 });
 

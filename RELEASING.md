@@ -56,8 +56,11 @@ CI still checks the actual generated files with Cargo's `--locked` checks.
 The Rust license template keeps workspace package attributions without the
 product version; registry/git dependency versions and all license texts remain
 included. A version-only PR must not stale the third-party notice bundle. CI
-still regenerates and compares the complete bundle with pinned cargo-about
-whenever dependencies, the toolchain or license inputs change.
+still regenerates and compares the complete third-party bundle with pinned
+cargo-about whenever dependencies, the toolchain or license inputs change, and
+installs `rust-docs` to re-verify `RUST_STDLIB_LICENSES.html` whenever the
+pinned Rust toolchain, stdlib license notice, license script or full-suite CI
+inputs change.
 
 ## Change-scoped CI
 
@@ -137,10 +140,11 @@ copying into the original Agent draft. A public Agent release is never overwritt
 Recovery does not invoke Release Please to recreate the release. It requires an
 existing bot-created draft whose target is a full commit SHA. It preserves that
 source, checks main ancestry, any existing tag, successful source CI and all
-version files, then runs the same binary, container and publication jobs. The
-workflow revision must itself be current checked main. Published releases and
-mutable targets are rejected. Never delete/recreate the draft, move its tag or
-overwrite a published release to work around a failure.
+version files, then runs the same native binary verification, multi-arch image
+packaging and publication jobs. The workflow revision must itself be current
+checked main. Published releases and mutable targets are rejected. Never
+delete/recreate the draft, move its tag or overwrite a published release to work
+around a failure.
 
 Push-triggered preparation preserves pending drafts and does not create the next
 version PR while one remains unfinished. Draft readers need job-scoped

@@ -10,7 +10,11 @@ import { fileURLToPath } from 'node:url'
 
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const cargoAbout = process.env.CARGO_ABOUT || 'cargo-about'
-const check = process.argv.slice(2).includes('--check')
+const args = process.argv.slice(2)
+const check = args.includes('--check')
+const skipStdlib = args.includes('--skip-stdlib')
+if (skipStdlib && !check)
+  throw new Error('--skip-stdlib is only supported with --check')
 const temporary = mkdtempSync(join(tmpdir(), 'senlun-license-output-'))
 const read = path => readFileSync(path, 'utf8')
 const run = (command, args) => execFileSync(command, args, {
@@ -75,9 +79,16 @@ try {
     throw new Error('License template is missing the original-notice appendix marker')
   output('RUST_THIRD_PARTY_LICENSES.html', html.replace(marker, sections.join('\n')))
 
-  const sysroot = run('rustc', ['--print', 'sysroot']).trim()
-  output('RUST_STDLIB_LICENSES.html', read(join(sysroot, 'share/doc/rust/COPYRIGHT-library.html')))
-  console.log(`Rust licenses ${check ? 'verified' : 'generated'} for ${packages.length} Linux dependency packages and the pinned standard library`)
+  if (skipStdlib) {
+    if (!read(join(repository, 'RUST_STDLIB_LICENSES.html')).trim())
+      throw new Error('RUST_STDLIB_LICENSES.html is empty')
+    console.log(`Rust licenses verified for ${packages.length} Linux dependency packages (stdlib unchanged)`)
+  }
+  else {
+    const sysroot = run('rustc', ['--print', 'sysroot']).trim()
+    output('RUST_STDLIB_LICENSES.html', read(join(sysroot, 'share/doc/rust/COPYRIGHT-library.html')))
+    console.log(`Rust licenses ${check ? 'verified' : 'generated'} for ${packages.length} Linux dependency packages and the pinned standard library`)
+  }
 }
 finally {
   rmSync(temporary, { recursive: true, force: true })

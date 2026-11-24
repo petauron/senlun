@@ -235,13 +235,20 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build embedded Web assets
-        working-directory: web
+      - name: Prepare native builder and embedded Web assets
         env:
           SENLUN_BUILD_GIT_HASH: ${{ needs.prepare.outputs.release_sha }}
+          SENLUN_BUILD_TARGET: ${{ matrix.target }}
         run: |
-          npm ci
-          npm run build
+          set -eu
+          sh scripts/build-linux-release.sh --prepare-builder &
+          builder_pid=$!
+          web_status=0
+          (cd web && npm ci && npm run build) || web_status=$?
+          builder_status=0
+          wait "$builder_pid" || builder_status=$?
+          test "$web_status" -eq 0
+          test "$builder_status" -eq 0
       - name: Build and verify native release binaries on Debian 12
         env:
           SENLUN_BUILD_GIT_HASH: ${{ needs.prepare.outputs.release_sha }}
@@ -286,67 +293,14 @@ jobs:
             "release/senlun-$RELEASE_TAG-linux-$ARCH.tar.gz" \
             "release/senlun-$RELEASE_TAG-linux-$ARCH.spdx.json" --clobber
 
-  container:
-    env:
-      RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
-      RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
-    name: Validate ${{ matrix.arch }} container
-    needs: [prepare, binaries]
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            archive_arch: x86_64
-            runner: ubuntu-24.04
-          - arch: arm64
-            archive_arch: aarch64
-            runner: ubuntu-24.04-arm
-    permissions:
-      # Downloading staged assets also requires access to the release draft.
-      contents: write
-    steps:
-      - name: Check out release tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.release_sha }}
-          persist-credentials: false
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Download verified native archive
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ARCH: ${{ matrix.archive_arch }}
-        run: |
-          mkdir -p release
-          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-          gh release download "$RELEASE_TAG" --dir release \
-            --pattern "senlun-$RELEASE_TAG-linux-$ARCH.tar.gz"
-      - name: Prepare image contents
-        run: |
-          mkdir -p image/${{ matrix.arch }}
-          tar -xzf release/senlun-${{ needs.prepare.outputs.release_tag }}-linux-${{ matrix.archive_arch }}.tar.gz --strip-components=1 -C image/${{ matrix.arch }}
-      - name: Build image without publishing
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: image
-          file: Dockerfile.release
-          platforms: linux/${{ matrix.arch }}
-          push: false
-          cache-from: type=gha,scope=release-container-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=release-container-${{ matrix.arch }}
-          build-args: SENLUN_BUILD_GIT_HASH=${{ needs.prepare.outputs.release_sha }}
-
   publish:
     env:
       RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
       RELEASE_SHA: ${{ needs.prepare.outputs.release_sha }}
     name: Publish GitHub release
-    needs: [prepare, binaries, container]
+    needs: [prepare, binaries]
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
       packages: write
@@ -424,9 +378,8 @@ jobs:
           push: true
           provenance: mode=max
           sbom: true
-          cache-from: |
-            type=gha,scope=release-container-amd64
-            type=gha,scope=release-container-arm64
+          cache-from: type=gha,scope=release-container-multiarch
+          cache-to: type=gha,mode=max,scope=release-container-multiarch
           tags: |
             ghcr.io/${{ github.repository }}:${{ needs.prepare.outputs.release_tag }}
             ghcr.io/${{ github.repository }}:sha-${{ needs.prepare.outputs.release_sha }}

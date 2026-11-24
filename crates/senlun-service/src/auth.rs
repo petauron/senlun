@@ -117,6 +117,7 @@ pub struct AuthState {
 struct AuthInner {
     connection: Mutex<Connection>,
     database_permit: Arc<Semaphore>,
+    password_permit: Arc<Semaphore>,
     attempts: Mutex<VecDeque<Instant>>,
     origin: String,
     secure: bool,
@@ -292,6 +293,7 @@ impl AuthState {
             inner: Arc::new(AuthInner {
                 connection: Mutex::new(connection),
                 database_permit: Arc::new(Semaphore::new(1)),
+                password_permit: Arc::new(Semaphore::new(1)),
                 attempts: Mutex::new(VecDeque::with_capacity(MAX_ATTEMPTS)),
                 origin: url.origin().ascii_serialization(),
                 secure: url.scheme() == "https",
@@ -356,6 +358,32 @@ impl AuthState {
                 let _permit = permit;
                 let mut connection = inner.connection.lock().map_err(|_| AuthError::internal())?;
                 operation(&mut connection)
+            }),
+        )
+        .await
+        .map_err(|_| AuthError::internal())?
+        .map_err(|_| AuthError::internal())?
+    }
+
+    async fn password_work<T, F>(&self, operation: F) -> Result<T, AuthError>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> Result<T, AuthError> + Send + 'static,
+    {
+        let permit = timeout(
+            Duration::from_secs(5),
+            Arc::clone(&self.inner.password_permit).acquire_owned(),
+        )
+        .await
+        .map_err(|_| AuthError::internal())?
+        .map_err(|_| AuthError::internal())?;
+        let session_lease = crate::session_gate::current();
+        timeout(
+            Duration::from_secs(15),
+            tokio::task::spawn_blocking(move || {
+                let _session_lease = session_lease;
+                let _permit = permit;
+                operation()
             }),
         )
         .await
@@ -651,6 +679,14 @@ async fn setup(
         ));
     }
     validate_password(&request.password)?;
+    if state.initialized().await? {
+        return Err(AuthError {
+            status: StatusCode::CONFLICT,
+            message: "administrator already initialized",
+        });
+    }
+    let pw = request.password;
+    let password_hash = state.password_work(move || hash_password(&pw)).await?;
     let token = state
         .database(move |connection| {
             let transaction =
@@ -665,7 +701,6 @@ async fn setup(
                     message: "administrator already initialized",
                 });
             }
-            let password_hash = hash_password(&request.password)?;
             transaction.execute(
                 "INSERT INTO auth_admin (id, username, password_hash) VALUES (1, ?1, ?2)",
                 params![request.username, password_hash],
@@ -694,22 +729,31 @@ async fn login(
     state.verify_browser(&headers).await?;
     state.allow_attempt()?;
     let dummy = state.inner.dummy_password_hash.clone();
+    let entry = state.database(|connection| admin(connection)).await?;
+    let hash_to_check = entry.as_ref().map_or(dummy, |a| a.password_hash.clone());
+    let password = request.password;
+    let valid_password = state
+        .password_work(move || Ok(verify_password(&password, &hash_to_check)))
+        .await?;
+    let entry = entry.ok_or(AuthError::unauthorized())?;
+    if !valid_password || request.username != entry.username {
+        return Err(AuthError::unauthorized());
+    }
+    let expected_username = entry.username;
+    let expected_hash = entry.password_hash;
+    let expected_version = entry.auth_version;
     let token = state
         .database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let admin = admin(&transaction)?;
-            let valid_password = verify_password(
-                &request.password,
-                admin
-                    .as_ref()
-                    .map_or(dummy.as_str(), |admin| admin.password_hash.as_str()),
-            );
-            let admin = admin.ok_or(AuthError::unauthorized())?;
-            if !valid_password || request.username != admin.username {
+            let current = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
+            if current.auth_version != expected_version
+                || current.password_hash != expected_hash
+                || current.username != expected_username
+            {
                 return Err(AuthError::unauthorized());
             }
-            verify_totp(&transaction, &admin, request.code.as_deref())?;
+            verify_totp(&transaction, &current, request.code.as_deref())?;
             let token = insert_session(&transaction, true)?;
             audit(&transaction, "auth.login")?;
             transaction.commit()?;
@@ -750,19 +794,39 @@ async fn change_password(
     let session = state.require_mutation(&headers).await?;
     state.allow_attempt()?;
     validate_password(&request.new_password)?;
+    let check_session = session.clone();
+    let snapshot = state
+        .database(move |connection| {
+            require_current_session(connection, &check_session, true)?;
+            admin(connection)?.ok_or(AuthError::unauthorized())
+        })
+        .await?;
+    let expected_hash = snapshot.password_hash;
+    let expected_version = snapshot.auth_version;
+    let verify_hash = expected_hash.clone();
+    let current_password = request.current_password;
+    let new_password = request.new_password;
+    let new_hash = state
+        .password_work(move || {
+            if !verify_password(&current_password, &verify_hash) {
+                return Err(AuthError::unauthorized());
+            }
+            hash_password(&new_password)
+        })
+        .await?;
     state
         .database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, true)?;
-            let admin = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
-            if !verify_password(&request.current_password, &admin.password_hash) {
+            let current = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
+            if current.auth_version != expected_version || current.password_hash != expected_hash {
                 return Err(AuthError::unauthorized());
             }
-            verify_totp(&transaction, &admin, request.code.as_deref())?;
+            verify_totp(&transaction, &current, request.code.as_deref())?;
             transaction.execute(
                 "UPDATE auth_admin SET password_hash = ?1 WHERE id = 1",
-                [hash_password(&request.new_password)?],
+                [new_hash],
             )?;
             revoke_sessions(&transaction)?;
             audit(&transaction, "auth.password.change")?;
@@ -785,23 +849,52 @@ async fn totp_setup(
 ) -> Result<Json<Value>, AuthError> {
     let session = state.require_mutation(&headers).await?;
     state.allow_attempt()?;
-    state.database(move |connection| {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_current_session(&transaction, &session, true)?;
-        let admin = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
-        if !verify_password(&request.password, &admin.password_hash) { return Err(AuthError::unauthorized()); }
-        if admin.totp_secret.is_some() { return Err(AuthError::bad_request("TOTP is already enabled")); }
-        let secret = random_secret();
-        let totp = totp(&secret, &admin.username)?;
-        let otpauth_url = totp.to_url().map_err(|_| AuthError::internal())?;
-        let encoded = Secret::from(secret.clone()).to_base32();
-        transaction.execute(
-            "UPDATE auth_admin SET pending_totp_secret = ?1, pending_totp_expires_at = ?2, pending_totp_session_hash = ?3 WHERE id = 1",
-            params![secret, now_seconds()? + FLOW_TTL, session.token_hash],
-        )?;
-        transaction.commit()?;
-        Ok(Json(json!({ "secret": encoded, "otpauth_url": otpauth_url, "expires_in": FLOW_TTL })))
-    }).await
+    let check_session = session.clone();
+    let snapshot = state
+        .database(move |connection| {
+            require_current_session(connection, &check_session, true)?;
+            admin(connection)?.ok_or(AuthError::unauthorized())
+        })
+        .await?;
+    let expected_hash = snapshot.password_hash;
+    let expected_version = snapshot.auth_version;
+    let verify_hash = expected_hash.clone();
+    let password = request.password;
+    let valid_password = state
+        .password_work(move || Ok(verify_password(&password, &verify_hash)))
+        .await?;
+    if !valid_password {
+        return Err(AuthError::unauthorized());
+    }
+    state
+        .database(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            require_current_session(&transaction, &session, true)?;
+            let current = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
+            if current.auth_version != expected_version || current.password_hash != expected_hash {
+                return Err(AuthError::unauthorized());
+            }
+            if current.totp_secret.is_some() {
+                return Err(AuthError::bad_request("TOTP is already enabled"));
+            }
+            let secret = random_secret();
+            let totp = totp(&secret, &current.username)?;
+            let otpauth_url = totp.to_url().map_err(|_| AuthError::internal())?;
+            let encoded = Secret::from(secret.clone()).to_base32();
+            transaction.execute(
+                "UPDATE auth_admin SET pending_totp_secret = ?1, pending_totp_expires_at = ?2, pending_totp_session_hash = ?3 WHERE id = 1",
+                params![secret, now_seconds()? + FLOW_TTL, session.token_hash],
+            )?;
+            transaction.commit()?;
+            let body = json!({
+                "secret": encoded,
+                "otpauth_url": otpauth_url,
+                "expires_in": FLOW_TTL,
+            });
+            Ok(Json(body))
+        })
+        .await
 }
 
 #[derive(Deserialize)]
@@ -848,18 +941,36 @@ async fn totp_disable(
 ) -> Result<Response, AuthError> {
     let session = state.require_mutation(&headers).await?;
     state.allow_attempt()?;
+    let check_session = session.clone();
+    let snapshot = state
+        .database(move |connection| {
+            require_current_session(connection, &check_session, true)?;
+            admin(connection)?.ok_or(AuthError::unauthorized())
+        })
+        .await?;
+    let expected_hash = snapshot.password_hash;
+    let expected_version = snapshot.auth_version;
+    let verify_hash = expected_hash.clone();
+    let password = request.password;
+    let valid_password = state
+        .password_work(move || Ok(verify_password(&password, &verify_hash)))
+        .await?;
+    if !valid_password || snapshot.totp_secret.is_none() {
+        return Err(AuthError::unauthorized());
+    }
     state
         .database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, true)?;
-            let admin = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
-            if !verify_password(&request.password, &admin.password_hash)
-                || admin.totp_secret.is_none()
+            let current = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
+            if current.auth_version != expected_version
+                || current.password_hash != expected_hash
+                || current.totp_secret.is_none()
             {
                 return Err(AuthError::unauthorized());
             }
-            verify_totp(&transaction, &admin, Some(&request.code))?;
+            verify_totp(&transaction, &current, Some(&request.code))?;
             transaction.execute(
                 "UPDATE auth_admin SET totp_secret = NULL, totp_last_step = -1 WHERE id = 1",
                 [],
@@ -1175,11 +1286,11 @@ fn admin(connection: &Connection) -> Result<Option<Admin>, AuthError> {
 }
 
 fn require_current_session(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     session: &AuthSession,
     complete: bool,
 ) -> Result<(), AuthError> {
-    let exists: bool = transaction.query_row(
+    let exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM auth_sessions s JOIN auth_admin a ON a.id = s.admin_id
          WHERE s.token_hash = ?1 AND s.expires_at > ?2 AND s.auth_version = a.auth_version AND s.mfa_complete = ?3)",
         params![session.token_hash, now_seconds()?, complete], |row| row.get(0),
@@ -2014,6 +2125,35 @@ mod tests {
         let next_admin = gate.acquire(false).await.unwrap();
         drop(next_admin);
         assert!(gate.write_available());
+    }
+
+    #[tokio::test]
+    async fn password_work_does_not_hold_database_write_lock() {
+        let (directory, state) = state();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::sync_channel(1);
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move {
+            worker_state
+                .password_work(move || {
+                    let _ = started_tx.send(());
+                    finish_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| AuthError::internal())?;
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        assert!(!state.initialized().await.unwrap());
+        let mut writer = Connection::open(directory.path().join("senlun.db")).unwrap();
+        writer.busy_timeout(Duration::from_millis(100)).unwrap();
+        let transaction = writer
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        transaction.commit().unwrap();
+        finish_tx.send(()).unwrap();
+        worker.await.unwrap().unwrap();
     }
 
     #[test]
