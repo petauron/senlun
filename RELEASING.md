@@ -56,27 +56,57 @@ CI still checks the actual generated files with Cargo's `--locked` checks.
 The Rust license template keeps workspace package attributions without the
 product version; registry/git dependency versions and all license texts remain
 included. A version-only PR must not stale the third-party notice bundle. CI
-still regenerates and compares the complete bundle with pinned cargo-about.
+still regenerates and compares the complete bundle with pinned cargo-about
+whenever dependencies, the toolchain or license inputs change.
+
+## Change-scoped CI
+
+`ci.yml` verifies each change once, sized to what it can affect, leaving heavy
+release packaging to `release.yml` unless packaging or dependency inputs change.
+`scripts/ci-scope.mjs` (tested on every run) maps changed paths to jobs:
+Web sources run Web checks and both browser viewports; allowlisted standalone
+Agent collectors (`ip_unlock`, `return_routes`, `peer_latency`) and Agent CLI
+tests run `-p senlun-agent` Clippy and tests only; Service, protocol and live
+Agent reporting sources run crate-scoped Rust checks plus desktop browser flows;
+dependency,
+toolchain and container-input files add security and release/source image
+smoke tests; documentation, deploy tooling and untested packaging notices run
+only the fast repository checks. Unknown paths, workflow or classifier edits,
+and manually dispatched runs select the complete suite.
+
+A Release Please version PR is recognised by content, not by path: every
+changed file must be a version file or changelog, and Cargo/npm manifests and
+lockfiles may differ only in the local packages' version fields. Such a change
+(on its PR and again on main) runs only version consistency, Release Please,
+Agent build-input, lockfile and dependency-security checks — about a minute —
+instead of repeating code builds that its unchanged code tree already passed.
+Anything else falls back to path classification. The release workflow then
+compiles, smoke-tests and attests the exact artifacts it publishes. On main,
+scoped checks are used only when the previous main commit's own push CI
+succeeded; a failed, cancelled or missing predecessor run makes the commit run
+the complete suite, so a release never rests on unverified code. A squash
+merge whose tree equals its successful same-repository PR head skips repeated
+code checks on main. The `rust` gate fails unless every selected job succeeded
+and every unselected job was skipped.
 
 After a push to main, the release workflow waits (at most 30 minutes) for the
-exact commit's normal CI to succeed. It then creates the release, finishes
+exact commit's CI to succeed. It then creates the release, finishes
 publication, and maintains the next version PR. Review and merge that PR rather
 than bumping versions or creating tags manually.
 
-GITHUB_TOKEN-created tags do not start another release workflow, and generated
-PR workflows can require manual approval. The release workflow explicitly
-dispatches ci.yml on the version PR branch to run the existing checks.
-Before dispatching each workflow, it reads the exact PR head and reuses an active
-or completed native/dispatched run. It does not automatically rerun real failures;
-approval-blocked, cancelled or absent runs still require dispatch. This avoids
-cancelling native PR checks with a redundant dispatch.
+GITHUB_TOKEN-created tags do not start another release workflow. Version PRs
+are created with the `petauron-nova` App token, so their pull request checks
+start natively; if a generated PR's workflows ever require approval or do not
+start, dispatch ci.yml on the version PR branch (a dispatched run executes the
+complete suite). Do not rerun real failures blindly.
 CI and dependency review use the same repository/branch concurrency identity for
 PR and dispatch events, so overlapping runs cancel the older duplicate. A later
 dispatch after completion is still a deliberate rerun. CI checks out the exact
-PR head (or dispatch/push SHA); both event paths execute all existing checks.
+PR head (or dispatch/push SHA); a dispatched run executes the complete suite.
 The aggregate gate does not run in cancelled workflows, but still fails on any
-failed or skipped dependency in an ordinary run. Release preparation requires a
-complete successful CI workflow; cancellation or a skipped gate cannot publish.
+failed selected job or any skipped selected job in an ordinary run. Release
+preparation requires a complete successful CI workflow; cancellation or a
+skipped gate cannot publish.
 
 Publication runs in the same release.yml, gated by Release Please's output tags
 and immutable source SHA. For new releases the source must equal the workflow
@@ -162,8 +192,10 @@ and embedded Web assets are compiled again for the checked source SHA.
 Within CI, the container job compiles the Debian 12 binaries once, verifies both
 binaries in the restricted non-root Debian runtime, then packages those same
 binaries with Dockerfile.release and checks the final container's identity and
-health. Clippy, Rust tests, Web checks, security, browser flows and the required
-`rust` aggregate gate remain mandatory. Release builds still compile their own
+health. The source Dockerfile is built and smoke-tested in its own parallel job.
+Clippy, Rust tests, Web checks, security, browser flows and image checks are
+selected per change (see Change-scoped CI); the `rust` aggregate gate is always
+required. Release builds still compile their own
 immutable source for both supported architectures; only dependencies are reused.
 
 Caches stay within GitHub's repository cache quota and normal eviction policy;
