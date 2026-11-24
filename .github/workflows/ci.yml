@@ -321,7 +321,7 @@ jobs:
           esac
 
   e2e:
-    name: Browser tests (${{ matrix.project }})
+    name: Browser tests (${{ matrix.project }} ${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-24.04
@@ -329,21 +329,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each device project runs against its own fresh Service and Agent.
+        # Each device/shard runs against its own fresh Service and Agent.
         project: ${{ fromJson(needs.changes.outputs.e2e_projects) }}
+        shard: [1, 2]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Validate Playwright project
+      - name: Validate Playwright project and shard
         env:
           PLAYWRIGHT_PROJECT: ${{ matrix.project }}
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: |
           case "$PLAYWRIGHT_PROJECT" in
             desktop-chromium|mobile-chromium) ;;
             *) echo "Unexpected Playwright project: $PLAYWRIGHT_PROJECT" >&2; exit 1 ;;
+          esac
+          case "$PLAYWRIGHT_SHARD" in
+            1|2) ;;
+            *) echo "Unexpected Playwright shard: $PLAYWRIGHT_SHARD" >&2; exit 1 ;;
           esac
       - name: Install pinned Rust toolchain
         run: rustup show
@@ -398,7 +404,8 @@ jobs:
         working-directory: web
         env:
           PLAYWRIGHT_PROJECT: ${{ matrix.project }}
-        run: npx playwright test --project="$PLAYWRIGHT_PROJECT"
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+        run: npx playwright test --project="$PLAYWRIGHT_PROJECT" --shard="$PLAYWRIGHT_SHARD/2"
 
   container:
     name: Debian 12 binaries and non-root container smoke test
