@@ -366,19 +366,31 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-ubuntu-24.04-${{ hashFiles('web/package-lock.json') }}
+          key: playwright-shell-ubuntu-24.04-${{ hashFiles('web/package-lock.json') }}
       - name: Install Chromium
         working-directory: web
         env:
           PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-cache.outputs.cache-hit }}
         run: |
           set -eu
-          shell_bin=$(find "$HOME/.cache/ms-playwright" \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -n 1 || true)
-          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && [ -x "$shell_bin" ] && ! ldd "$shell_bin" | grep -q "not found"; then
+          find_shell() {
+            find "$HOME/.cache/ms-playwright" \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -n 1 || true
+          }
+          shell_bin=$(find_shell)
+          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && [ -x "$shell_bin" ]; then
             echo "Reusing cached Chromium headless shell: $shell_bin"
           else
-            npx playwright install --with-deps chromium
+            npx playwright install --only-shell chromium
+            shell_bin=$(find_shell)
           fi
+          if [ -z "$shell_bin" ] || [ ! -x "$shell_bin" ]; then
+            echo "Chromium headless shell binary was not found after installation" >&2
+            exit 1
+          fi
+          ldd_output=$(ldd "$shell_bin")
+          case "$ldd_output" in
+            *"not found"*) npx playwright install-deps chromium ;;
+          esac
       - name: Build Web assets
         working-directory: web
         run: npm run build
