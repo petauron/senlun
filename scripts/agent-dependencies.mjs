@@ -40,10 +40,12 @@ for (const target of targets) {
 // Agent; global overrides and overrides of resolved dependencies can.
 const root = read('Cargo.toml');
 const profile = structuredClone(root.profile ?? {});
-for (const settings of Object.values(profile)) {
-  if (!settings.package) continue;
-  settings.package = Object.fromEntries(Object.entries(settings.package).filter(([name]) => name === '*' || name.includes('/') || name.includes('#') || packageNames.has(name.split(/[:@]/)[0])));
-  if (!Object.keys(settings.package).length) delete settings.package;
+for (const [name, settings] of Object.entries(profile)) {
+  if (settings.package) {
+    settings.package = Object.fromEntries(Object.entries(settings.package).filter(([pkg]) => pkg === '*' || pkg.includes('/') || pkg.includes('#') || packageNames.has(pkg.split(/[:@]/)[0])));
+    if (!Object.keys(settings.package).length) delete settings.package;
+  }
+  if (!Object.keys(settings).length) delete profile[name];
 }
 const buildFiles = Object.fromEntries(['scripts/build-linux-release.sh', 'scripts/Dockerfile.native-builder']
   .map(path => [path, createHash('sha256').update(readFileSync(path)).digest('hex')]));

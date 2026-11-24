@@ -39,6 +39,7 @@ jobs:
       version: ${{ steps.scope.outputs.version }}
       rust_packages: ${{ steps.scope.outputs.rust_packages }}
       e2e_projects: ${{ steps.scope.outputs.e2e_projects }}
+      stdlib_licenses: ${{ steps.scope.outputs.stdlib_licenses }}
     steps:
       - name: Check out repository history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -293,7 +294,9 @@ jobs:
         env:
           CARGO_ABOUT_VERSION: 0.9.2
           CARGO_ABOUT_SHA256: 9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af
+          CHECK_STDLIB_LICENSES: ${{ needs.changes.outputs.stdlib_licenses }}
         run: |
+          set -eu
           tool_directory=$(mktemp -d)
           trap 'rm -rf "$tool_directory"' EXIT
           archive="$tool_directory/cargo-about.tar.gz"
@@ -302,12 +305,23 @@ jobs:
             "https://github.com/EmbarkStudios/cargo-about/releases/download/$CARGO_ABOUT_VERSION/cargo-about-$CARGO_ABOUT_VERSION-x86_64-unknown-linux-musl.tar.gz"
           printf '%s  %s\n' "$CARGO_ABOUT_SHA256" "$archive" | sha256sum --check
           tar --extract --gzip --file "$archive" --directory "$tool_directory" --strip-components=1
-          rustup component add rust-docs
           cargo fetch --locked
-          CARGO_ABOUT="$tool_directory/cargo-about" node scripts/rust-licenses.mjs --check
+          case "$CHECK_STDLIB_LICENSES" in
+            true)
+              rustup component add rust-docs
+              CARGO_ABOUT="$tool_directory/cargo-about" node scripts/rust-licenses.mjs --check
+              ;;
+            false)
+              CARGO_ABOUT="$tool_directory/cargo-about" node scripts/rust-licenses.mjs --check --skip-stdlib
+              ;;
+            *)
+              echo "Unexpected stdlib_licenses scope: $CHECK_STDLIB_LICENSES" >&2
+              exit 1
+              ;;
+          esac
 
   e2e:
-    name: Browser tests (${{ matrix.project }})
+    name: Browser tests (${{ matrix.project }} ${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
     runs-on: ubuntu-24.04
@@ -315,21 +329,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each device project runs against its own fresh Service and Agent.
+        # Each device/shard runs against its own fresh Service and Agent.
         project: ${{ fromJson(needs.changes.outputs.e2e_projects) }}
+        shard: [1, 2]
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - name: Validate Playwright project
+      - name: Validate Playwright project and shard
         env:
           PLAYWRIGHT_PROJECT: ${{ matrix.project }}
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
         run: |
           case "$PLAYWRIGHT_PROJECT" in
             desktop-chromium|mobile-chromium) ;;
             *) echo "Unexpected Playwright project: $PLAYWRIGHT_PROJECT" >&2; exit 1 ;;
+          esac
+          case "$PLAYWRIGHT_SHARD" in
+            1|2) ;;
+            *) echo "Unexpected Playwright shard: $PLAYWRIGHT_SHARD" >&2; exit 1 ;;
           esac
       - name: Install pinned Rust toolchain
         run: rustup show
@@ -352,19 +372,31 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-ubuntu-24.04-${{ hashFiles('web/package-lock.json') }}
+          key: playwright-shell-ubuntu-24.04-${{ hashFiles('web/package-lock.json') }}
       - name: Install Chromium
         working-directory: web
         env:
           PLAYWRIGHT_CACHE_HIT: ${{ steps.playwright-cache.outputs.cache-hit }}
         run: |
           set -eu
-          shell_bin=$(find "$HOME/.cache/ms-playwright" \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -n 1 || true)
-          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && [ -x "$shell_bin" ] && ! ldd "$shell_bin" | grep -q "not found"; then
+          find_shell() {
+            find "$HOME/.cache/ms-playwright" \( -name chrome-headless-shell -o -name headless_shell \) -type f 2>/dev/null | head -n 1 || true
+          }
+          shell_bin=$(find_shell)
+          if [ "$PLAYWRIGHT_CACHE_HIT" = "true" ] && [ -n "$shell_bin" ] && [ -x "$shell_bin" ]; then
             echo "Reusing cached Chromium headless shell: $shell_bin"
           else
-            npx playwright install --with-deps chromium
+            npx playwright install --only-shell chromium
+            shell_bin=$(find_shell)
           fi
+          if [ -z "$shell_bin" ] || [ ! -x "$shell_bin" ]; then
+            echo "Chromium headless shell binary was not found after installation" >&2
+            exit 1
+          fi
+          ldd_output=$(ldd "$shell_bin")
+          case "$ldd_output" in
+            *"not found"*) npx playwright install-deps chromium ;;
+          esac
       - name: Build Web assets
         working-directory: web
         run: npm run build
@@ -372,7 +404,8 @@ jobs:
         working-directory: web
         env:
           PLAYWRIGHT_PROJECT: ${{ matrix.project }}
-        run: npx playwright test --project="$PLAYWRIGHT_PROJECT"
+          PLAYWRIGHT_SHARD: ${{ matrix.shard }}
+        run: npx playwright test --project="$PLAYWRIGHT_PROJECT" --shard="$PLAYWRIGHT_SHARD/2"
 
   container:
     name: Debian 12 binaries and non-root container smoke test
@@ -399,11 +432,19 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Build embedded Web assets
-        working-directory: web
+      - name: Prepare native builder and embedded Web assets
+        env:
+          SENLUN_BUILD_TARGET: x86_64-unknown-linux-gnu
         run: |
-          npm ci
-          npm run build
+          set -eu
+          sh scripts/build-linux-release.sh --prepare-builder &
+          builder_pid=$!
+          web_status=0
+          (cd web && npm ci && npm run build) || web_status=$?
+          builder_status=0
+          wait "$builder_pid" || builder_status=$?
+          test "$web_status" -eq 0
+          test "$builder_status" -eq 0
       - name: Build and verify release binaries on Debian 12
         env:
           SENLUN_BUILD_TARGET: x86_64-unknown-linux-gnu

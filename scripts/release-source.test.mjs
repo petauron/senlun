@@ -87,11 +87,16 @@ test('release workflow retains draft permissions, identity gates and one publica
   assert.equal(workflow.on.workflow_dispatch.inputs.release_tag.required, true);
   assert.equal(workflow.permissions.contents, 'read');
   assert.equal(workflow.jobs.prepare.if, "github.ref == 'refs/heads/main' && !(github.event_name == 'workflow_dispatch' && startsWith(inputs.release_tag, 'senlun-agent-v'))");
-  for (const name of ['verify-source', 'binaries', 'container', 'publish']) {
+  for (const name of ['verify-source', 'binaries', 'publish']) {
     assert.equal(workflow.jobs[name].permissions.contents, 'write', `${name} must see draft releases`);
     const checkout = workflow.jobs[name].steps.find((step) => step.uses?.startsWith('actions/checkout@'));
     assert.equal(checkout.with.ref, '${{ needs.prepare.outputs.release_sha }}');
   }
+  assert.deepEqual(workflow.jobs.publish.needs, ['prepare', 'binaries']);
+  const pushImage = workflow.jobs.publish.steps.find((step) => step.id === 'image');
+  assert.equal(pushImage.with.file, 'Dockerfile.release');
+  assert.equal(pushImage.with.platforms, 'linux/amd64,linux/arm64');
+  assert.equal(pushImage.with.push, true);
   const validation = workflow.jobs['verify-source'].steps.map((step) => step.run ?? '').join('\n');
   for (const gate of ['merge-base --is-ancestor', 'targetCommitish', 'refs/tags/$RELEASE_TAG^{commit}', 'source_ci', '.release-please-manifest.json']) {
     assert.ok(validation.includes(gate), `Keep the ${gate} gate`);

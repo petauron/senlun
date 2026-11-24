@@ -1,7 +1,7 @@
 import type { TrafficCorrectionContext } from '../src/utils/trafficCorrection'
 import { expect, test } from '@playwright/test'
 import { nodeMetadata } from '../src/utils/admin'
-import { login, mutation, waitForNode } from './auth'
+import { login, loginViaUi, mutation, waitForNode } from './auth'
 import { testPassword, testUsername } from './credentials.mjs'
 
 test('private monitoring, setup lockout, administrator CSRF, and logout enforce the session boundary', async ({ page, request }, testInfo) => {
@@ -13,7 +13,7 @@ test('private monitoring, setup lockout, administrator CSRF, and logout enforce 
   await page.goto('/admin')
   await expect(page).toHaveURL(/\/login\?redirect=/)
 
-  await login(page, '/admin')
+  await loginViaUi(page, '/admin')
   await expect(page.getByRole('heading', { name: '管理 Senlun' })).toBeVisible()
   const screenshot = testInfo.outputPath('authenticated-admin.png')
   await page.screenshot({ path: screenshot, fullPage: true })

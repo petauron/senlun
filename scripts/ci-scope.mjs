@@ -59,10 +59,12 @@ const RULES = [
   { match: exact('.release-please-manifest.json', 'version.txt', 'crates/senlun-agent/version.txt'), jobs: ['rust'] },
   { match: exact('release-please-config.json'), jobs: ['rust', 'web'] },
   // Dependency and toolchain changes validate release packaging as well.
-  { match: exact('Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'workspace', e2e: 'desktop' },
+  { match: exact('Cargo.toml', 'Cargo.lock'), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'workspace', e2e: 'desktop' },
+  { match: exact('rust-toolchain.toml'), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'workspace', e2e: 'desktop', stdlibLicenses: true },
   { match: exact('rustfmt.toml'), jobs: ['rust'] },
   // check-release-please.mjs also asserts the bundle keeps version-free attributions.
-  { match: exact('deny.toml', 'about.toml', 'about.hbs', 'RUST_THIRD_PARTY_LICENSES.html', 'RUST_STDLIB_LICENSES.html', 'scripts/rust-licenses.mjs'), jobs: ['security', 'rust'] },
+  { match: exact('deny.toml', 'about.toml', 'about.hbs', 'RUST_THIRD_PARTY_LICENSES.html'), jobs: ['security', 'rust'] },
+  { match: exact('RUST_STDLIB_LICENSES.html', 'scripts/rust-licenses.mjs'), jobs: ['security', 'rust'], stdlibLicenses: true },
   { match: exact('crates/senlun-agent/dependencies.sha256', 'scripts/check-release-please.mjs', 'scripts/agent-dependencies.mjs'), jobs: ['rust'] },
   { match: path => /^crates\/senlun-(agent|protocol|service)\/Cargo\.toml$/.test(path), jobs: ['rust', 'e2e', 'security', 'container', 'source_docker'], crate: 'path', e2e: 'desktop' },
   // Allowlist only standalone Agent collectors and CLI tests that are never
@@ -109,6 +111,7 @@ function fullScope(reason) {
     jobs: new Set(CODE_JOBS),
     rustPackages: '--workspace',
     e2eProjects: ALL_E2E_PROJECTS,
+    stdlibLicenses: true,
     reason,
   };
 }
@@ -118,6 +121,7 @@ export function classifyPaths(paths) {
   const jobs = new Set();
   const crates = new Set();
   let mobileE2e = false;
+  let stdlibLicenses = false;
   for (const path of paths) {
     const rule = RULES.find(candidate => candidate.match(path));
     if (!rule || rule.jobs === FULL) return fullScope(rule ? `full suite required by ${path}` : `unclassified path ${path}`);
@@ -126,10 +130,11 @@ export function classifyPaths(paths) {
     else if (rule.crate === 'path') crates.add(crateOf(path));
     else if (rule.crate) crates.add(rule.crate);
     if (rule.e2e === 'both') mobileE2e = true;
+    if (rule.stdlibLicenses) stdlibLicenses = true;
   }
   const e2eProjects = mobileE2e ? ALL_E2E_PROJECTS : DESKTOP_E2E_PROJECTS;
   const reason = jobs.size === 0 ? 'no CI-executable changes' : `change-scoped: ${[...jobs].sort().join(', ')}`;
-  return { jobs, rustPackages: rustPackages(crates), e2eProjects, reason };
+  return { jobs, rustPackages: rustPackages(crates), e2eProjects, stdlibLicenses, reason };
 }
 
 const versionPattern = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -218,6 +223,7 @@ export function selectScope({ paths, read, verifiedTree = false }) {
       jobs: new Set(['version', 'security']),
       rustPackages: '--workspace',
       e2eProjects: DESKTOP_E2E_PROJECTS,
+      stdlibLicenses: false,
       reason: 'version-only Release Please change',
     };
   }
@@ -226,6 +232,7 @@ export function selectScope({ paths, read, verifiedTree = false }) {
       jobs: new Set(),
       rustPackages: '--workspace',
       e2eProjects: DESKTOP_E2E_PROJECTS,
+      stdlibLicenses: false,
       reason: 'identical tree already verified by its pull request',
     };
   }
@@ -276,6 +283,7 @@ function main(argv, env) {
   const lines = JOBS.map(job => `${job}=${scope.jobs.has(job)}`);
   lines.push(`rust_packages=${scope.rustPackages}`);
   lines.push(`e2e_projects=${JSON.stringify(scope.e2eProjects)}`);
+  lines.push(`stdlib_licenses=${scope.stdlibLicenses}`);
   console.log(`CI scope: ${scope.reason}`);
   for (const line of lines) console.log(line);
   if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);

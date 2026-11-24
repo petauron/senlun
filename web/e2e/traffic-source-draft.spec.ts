@@ -1,9 +1,10 @@
 import type { ExternalTrafficConfig, ExternalTrafficSource } from '../src/utils/admin'
 import { expect, test } from '@playwright/test'
-import { login } from './auth'
+import { login, waitForNode } from './auth'
 
 test('traffic status refresh preserves drafts and credentials until a node switch is confirmed', async ({ page }) => {
   await login(page, '/admin')
+  await waitForNode(page.request)
   const state = await (await page.request.get('/api/admin/state')).json()
   expect(state.nodes.length).toBeGreaterThan(0)
   const nodes = [
