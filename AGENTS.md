@@ -14,9 +14,14 @@
 
 ## GitHub releases and Actions storage
 
-- Use Release Please v5, pinned to a reviewed full commit SHA, with the built-in
-  `GITHUB_TOKEN`. Do not add a PAT or a separate release-token secret. Grant only
-  the job permissions needed; never weaken branch protection to enable releases.
+- Use Release Please v5, pinned to a reviewed full commit SHA. Version PR
+  creation/updates use a short-lived, repository-scoped installation token from
+  the minimal-permission organization release GitHub App (`petauron-nova`:
+  `contents: write` and `pull-requests: write` via `RELEASE_APP_CLIENT_ID` and
+  `RELEASE_APP_PRIVATE_KEY`) so normal `pull_request` CI and CodeQL checks run
+  automatically; do not add a personal PAT. Actual release creation and asset
+  publication continue using the built-in `GITHUB_TOKEN`. Grant only the job
+  permissions needed; never weaken branch protection to enable releases.
 - Release through the generated version PR and the repository's Release Please
   config/manifest. Use Conventional Commits, including the final squash title;
   do not hide a releasable fix under a `ci:` or `chore:` title. Do not manually
@@ -31,8 +36,7 @@
   release workflow builds, smoke-tests and attests the exact published
   artifacts. A Release Please change proven by content to touch only version
   fields and changelogs runs the version and dependency-security checks instead
-  of repeating code builds. When token-created PRs do not trigger checks,
-  explicitly dispatch the existing workflows. Never manufacture successful
+  of repeating code builds. Never manufacture successful
   required-check results or weaken the classifier to skip a job a change can
   affect.
 - Publish only from an immutable, checked commit on protected `main`. Use the
