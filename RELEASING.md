@@ -10,9 +10,13 @@ The paired catalog/Vastora changes must land before operators upgrade retained
 installations; see [the technical migration](docs/technical-brand-migration.md).
 
 Release Please v5 is pinned to 45996ed1f6d02564a971a2fa1b5860e934307cf7.
-Like Vastora, it uses only the built-in GITHUB_TOKEN; no extra release secret or
-personal token is needed. Repository settings must allow Actions to create pull
-requests. Existing branch protection and required CI remain mandatory.
+Version PR creation and updates mint a short-lived installation token from the
+minimal-permission organization GitHub App (`petauron-nova`: `contents: write`
+and `pull-requests: write` via `RELEASE_APP_CLIENT_ID` and
+`RELEASE_APP_PRIVATE_KEY`) so normal `pull_request` CI and CodeQL checks run
+automatically without a personal PAT. Actual release creation and publication
+continue using the built-in `GITHUB_TOKEN`. Existing branch protection and
+required CI remain mandatory.
 
 The Service and Agent are independently versioned Release Please components.
 The Service and internal protocol retain `workspace.package.version`; Web
