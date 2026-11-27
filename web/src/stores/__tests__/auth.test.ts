@@ -117,6 +117,53 @@ describe('auth store session lifecycle', () => {
     expect(mocks.updateLoginState).not.toHaveBeenCalled()
   })
 
+  it('does not let a refresh started during login cancel authenticate() or overwrite the new session', async () => {
+    const auth = useAuthStore()
+    let resolveLogin!: (value: AuthStatus) => void
+    let resolveStatus!: (value: AuthStatus) => void
+    mocks.post.mockReturnValueOnce(new Promise<AuthStatus>((resolve) => {
+      resolveLogin = resolve
+    }))
+    mocks.get.mockReturnValueOnce(new Promise<AuthStatus>((resolve) => {
+      resolveStatus = resolve
+    }))
+
+    const pendingLogin = auth.authenticate('login', { username: 'admin', password: 'synthetic-password' })
+    const midLoginRefresh = auth.refresh()
+
+    resolveLogin(statusFixture({ logged_in: true, csrf_token: 'session-csrf' }))
+    await pendingLogin
+    expect(auth.loggedIn).toBe(true)
+    expect(auth.status?.csrf_token).toBe('session-csrf')
+
+    mocks.setCsrfToken.mockClear()
+    mocks.updateLoginState.mockClear()
+    resolveStatus(statusFixture({ logged_in: false, username: null, csrf_token: 'stale-anon' }))
+    const resolved = await midLoginRefresh
+
+    expect(auth.loggedIn).toBe(true)
+    expect(auth.status?.csrf_token).toBe('session-csrf')
+    expect(resolved.csrf_token).toBe('session-csrf')
+    expect(mocks.setCsrfToken).not.toHaveBeenCalled()
+    expect(mocks.updateLoginState).not.toHaveBeenCalled()
+  })
+
+  it('rejects authenticate() instead of succeeding when clear() invalidates it mid-flight', async () => {
+    const auth = useAuthStore()
+    let resolveLogin!: (value: AuthStatus) => void
+    mocks.post.mockReturnValueOnce(new Promise<AuthStatus>((resolve) => {
+      resolveLogin = resolve
+    }))
+
+    const pendingLogin = auth.authenticate('login', { username: 'admin', password: 'synthetic-password' })
+    auth.clear()
+    resolveLogin(statusFixture({ logged_in: true, csrf_token: 'aborted-csrf' }))
+
+    await expect(pendingLogin).rejects.toThrow('登录状态已变更')
+    expect(auth.loggedIn).toBe(false)
+    expect(auth.status).toBeNull()
+  })
+
   it('clears local auth on logout 401/403 only after auth/status confirms signed out', async () => {
     const auth = useAuthStore()
     mocks.get.mockResolvedValueOnce(statusFixture({ logged_in: true }))
@@ -164,6 +211,47 @@ describe('auth store session lifecycle', () => {
     await expect(auth.logout()).rejects.toThrow('Origin mismatch')
     expect(auth.loggedIn).toBe(true)
     expect(auth.status?.csrf_token).toBe('csrf-2')
+  })
+
+  it('rejects logout when 401/403 status verification is superseded by clear() or a newer refresh', async () => {
+    const auth = useAuthStore()
+    mocks.get.mockResolvedValueOnce(statusFixture({ logged_in: true, csrf_token: 'csrf-1' }))
+    await auth.refresh()
+
+    let resolveVerification!: (value: AuthStatus) => void
+    mocks.post.mockRejectedValueOnce(new mocks.MockApiError('Invalid CSRF token', 403))
+    mocks.get.mockReturnValueOnce(new Promise<AuthStatus>((resolve) => {
+      resolveVerification = resolve
+    }))
+
+    const pendingLogout = auth.logout()
+    await Promise.resolve()
+    auth.clear()
+    resolveVerification(statusFixture({ logged_in: true, csrf_token: 'still-active-csrf' }))
+
+    await expect(pendingLogout).rejects.toThrow('退出登录状态校验已过期')
+    expect(mocks.post).toHaveBeenCalledTimes(1)
+
+    // A newer refresh superseding the verification must also prevent reporting signed out.
+    mocks.get.mockResolvedValueOnce(statusFixture({ logged_in: true, csrf_token: 'csrf-3' }))
+    await auth.refresh()
+    let resolveSecondVerification!: (value: AuthStatus) => void
+    mocks.post.mockRejectedValueOnce(new mocks.MockApiError('Invalid CSRF token', 403))
+    mocks.get
+      .mockReturnValueOnce(new Promise<AuthStatus>((resolve) => {
+        resolveSecondVerification = resolve
+      }))
+      .mockResolvedValueOnce(statusFixture({ logged_in: true, csrf_token: 'csrf-4' }))
+
+    const secondLogout = auth.logout()
+    await Promise.resolve()
+    const newerRefresh = auth.refresh(true)
+    await newerRefresh
+    resolveSecondVerification(statusFixture({ logged_in: false, username: null, csrf_token: 'stale' }))
+
+    await expect(secondLogout).rejects.toThrow('退出登录状态校验已过期')
+    expect(auth.loggedIn).toBe(true)
+    expect(auth.status?.csrf_token).toBe('csrf-4')
   })
 })
 

@@ -20,7 +20,8 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref('')
   const epoch = ref(0)
   const loggedIn = computed(() => status.value?.logged_in === true)
-  let requestSequence = 0
+  let transitionSequence = 0
+  let refreshSequence = 0
   let pending: { sequence: number, promise: Promise<AuthStatus> } | null = null
 
   function accept(value: AuthStatus): AuthStatus {
@@ -34,9 +35,10 @@ export const useAuthStore = defineStore('auth', () => {
   async function refresh(force = false): Promise<AuthStatus> {
     if (!force && pending)
       return pending.promise
-    const sequence = ++requestSequence
+    const startedTransition = transitionSequence
+    const sequence = ++refreshSequence
     const promise = getSharedApi().get<AuthStatus>('auth/status').then((value) => {
-      if (sequence !== requestSequence) {
+      if (startedTransition !== transitionSequence || sequence !== refreshSequence) {
         return status.value ?? {
           ...value,
           logged_in: false,
@@ -47,7 +49,7 @@ export const useAuthStore = defineStore('auth', () => {
       }
       return accept(value)
     }).catch((cause) => {
-      if (sequence === requestSequence) {
+      if (startedTransition === transitionSequence && sequence === refreshSequence) {
         error.value = cause instanceof Error
           ? cause.message
           : String(cause)
@@ -62,7 +64,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function clear(): void {
-    requestSequence += 1
+    transitionSequence += 1
+    refreshSequence += 1
     pending = null
     invalidateSessionRequests()
     status.value = null
@@ -73,11 +76,13 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function authenticate(path: 'setup' | 'login' | 'oauth/complete', body: unknown): Promise<void> {
-    const sequence = ++requestSequence
-    pending = null
+    const startedTransition = transitionSequence
     const next = await getSharedApi().post<AuthStatus>(`auth/${path}`, body)
-    if (sequence !== requestSequence)
-      return
+    if (startedTransition !== transitionSequence)
+      throw new Error('登录状态已变更，请重试')
+    transitionSequence += 1
+    refreshSequence += 1
+    pending = null
     accept(next)
     invalidateSessionRequests()
     useNodesStore().clearNodes()
@@ -92,7 +97,13 @@ export const useAuthStore = defineStore('auth', () => {
     catch (cause) {
       if (!(cause instanceof ApiError) || (cause.statusCode !== 401 && cause.statusCode !== 403))
         throw cause
-      const latest = await refresh(true)
+      const verificationTransition = transitionSequence
+      const verificationRefresh = ++refreshSequence
+      pending = null
+      const latest = await getSharedApi().get<AuthStatus>('auth/status')
+      if (verificationTransition !== transitionSequence || verificationRefresh !== refreshSequence)
+        throw new Error('退出登录状态校验已过期，请重试')
+      accept(latest)
       if (!latest.logged_in) {
         clear()
         return
