@@ -15,7 +15,6 @@ export interface ProbeComparisonLoaderOptions {
 
 export interface ProbeComparisonLoader {
   syncQuery: (taskId: string, hours: number) => Promise<void>
-  refresh: () => Promise<void>
   handleVisibilityChange: () => void
   dispose: () => void
 }
@@ -80,6 +79,7 @@ export function createProbeComparisonLoader(options: ProbeComparisonLoaderOption
     finally {
       if (current === generation && !disposed) {
         loading = false
+        options.onState({ loading: false })
         scheduleRefresh()
       }
     }
@@ -93,11 +93,6 @@ export function createProbeComparisonLoader(options: ProbeComparisonLoaderOption
       activeTaskId = taskId
       activeHours = hours
       await run(true)
-    },
-    async refresh(): Promise<void> {
-      if (!activeTaskId)
-        return
-      await run(false)
     },
     handleVisibilityChange(): void {
       if (disposed)

@@ -7,7 +7,6 @@ function comparisonRow(nodeId: string, avgLatencyMs: number): ProbeComparison {
   return {
     node_id: nodeId,
     samples: 10,
-    failures: 0,
     loss_percent: 0,
     avg_latency_ms: avgLatencyMs,
   }
