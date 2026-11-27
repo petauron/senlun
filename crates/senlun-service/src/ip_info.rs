@@ -130,7 +130,9 @@ impl IpInfo {
         }
         if provider.calls >= 200
             || provider.minute_calls >= 6
-            || provider.next_request.is_some_and(|next| Instant::now() < next)
+            || provider
+                .next_request
+                .is_some_and(|next| Instant::now() < next)
         {
             return stale_or_error(old.as_ref(), now, "IP information rate limit; retry later");
         }
