@@ -1077,6 +1077,21 @@ struct GithubIdentity {
     id: u64,
 }
 
+fn active_oauth_flow(
+    connection: &Connection,
+    state_hash: &str,
+    binding_hash: &str,
+) -> Result<Option<(String, i64)>, AuthError> {
+    Ok(connection
+        .query_row(
+            "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
+             WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
+            params![state_hash, binding_hash, now_seconds()?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?)
+}
+
 async fn consume_oauth_flow(
     state: &AuthState,
     state_hash: String,
@@ -1085,22 +1100,24 @@ async fn consume_oauth_flow(
     let attempt_state = state.clone();
     state
         .database(move |connection| {
+            // Confirm a matching active flow read-only first so unmatched callbacks
+            // never acquire a SQLite write reservation or consume callback quota.
+            let exists = active_oauth_flow(connection, &state_hash, &binding_hash)?;
+            if exists.is_none() {
+                return Err(AuthError::unauthorized());
+            }
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let flow: Option<(String, i64)> = transaction
-                .query_row(
-                    "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
-                     WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
-                    params![state_hash, binding_hash, now_seconds()?],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?;
-            let flow = flow.ok_or(AuthError::unauthorized())?;
+            let flow = active_oauth_flow(&transaction, &state_hash, &binding_hash)?
+                .ok_or(AuthError::unauthorized())?;
             attempt_state.allow_oauth_attempt()?;
-            transaction.execute(
-                "DELETE FROM auth_oauth_flows WHERE state_hash = ?1",
-                [state_hash],
+            let deleted = transaction.execute(
+                "DELETE FROM auth_oauth_flows WHERE state_hash = ?1 AND binding_hash = ?2",
+                params![state_hash, binding_hash],
             )?;
+            if deleted != 1 {
+                return Err(AuthError::unauthorized());
+            }
             transaction.commit()?;
             Ok(flow)
         })
@@ -2276,8 +2293,7 @@ mod tests {
         assert_eq!(login.status(), StatusCode::OK);
     }
 
-    #[tokio::test]
-    async fn oauth_callback_rate_limit_requires_a_matching_flow_and_is_isolated() {
+    fn oauth_state() -> (tempfile::TempDir, std::path::PathBuf, AuthState) {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("senlun.db");
         let _storage = crate::storage::Storage::open(&database, 32 * 1024 * 1024).unwrap();
@@ -2294,59 +2310,112 @@ mod tests {
             32 * 1024 * 1024,
         )
         .unwrap();
-        initialize(&state).await;
-        let (anon_cookie, anon_csrf) = anonymous(&state).await;
-        let auth_version = state
-            .database(|connection| {
-                Ok(admin(connection)?
+        (directory, database, state)
+    }
+
+    async fn insert_oauth_flow(
+        state: &AuthState,
+        state_hash: String,
+        binding_hash: String,
+        verifier: &'static str,
+    ) -> i64 {
+        state
+            .database(move |connection| {
+                let version = admin(connection)?
                     .ok_or(AuthError::unauthorized())?
-                    .auth_version)
+                    .auth_version;
+                connection.execute(
+                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        state_hash,
+                        binding_hash,
+                        verifier,
+                        version,
+                        now_seconds()? + FLOW_TTL,
+                    ],
+                )?;
+                Ok(version)
             })
             .await
-            .unwrap();
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unmatched_oauth_callback_stays_read_only_and_uncounted() {
+        let (_directory, database, state) = oauth_state();
+        initialize(&state).await;
 
         let flow_state = random_token();
         let valid_binding = random_token();
         let wrong_binding = random_token();
         let state_hash = hash(&flow_state);
         let binding_hash = hash(&valid_binding);
-        let insert_state_hash = state_hash.clone();
-        let insert_binding_hash = binding_hash.clone();
-        state
-            .database(move |connection| {
-                connection.execute(
-                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        insert_state_hash,
-                        insert_binding_hash,
-                        "synthetic-verifier",
-                        auth_version,
-                        now_seconds()? + FLOW_TTL,
-                    ],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
-
-        // Missing or wrong binding must fail without consuming callback quota or the flow.
-        let wrong_cookie = format!("{}={wrong_binding}", state.oauth_cookie_name());
-        let callback_path = format!("/api/auth/oauth/callback?code=synthetic&state={flow_state}");
-        let wrong = request(
+        insert_oauth_flow(
             &state,
-            "GET",
-            &callback_path,
-            &wrong_cookie,
-            None,
-            None,
-            json!(null),
+            state_hash.clone(),
+            binding_hash.clone(),
+            "synthetic-verifier",
         )
         .await;
+
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            let mut connection = Connection::open(&database).unwrap();
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(transaction);
+        });
+        locked_rx.await.unwrap();
+
+        let wrong_cookie = format!("{}={wrong_binding}", state.oauth_cookie_name());
+        let callback_path = format!("/api/auth/oauth/callback?code=synthetic&state={flow_state}");
+        let wrong = timeout(
+            Duration::from_secs(2),
+            request(
+                &state,
+                "GET",
+                &callback_path,
+                &wrong_cookie,
+                None,
+                None,
+                json!(null),
+            ),
+        )
+        .await
+        .expect("unmatched callback must not wait for a SQLite write reservation");
         assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 0);
 
-        // Matching the stored flow records one callback attempt and consumes the one-time row.
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+
+        let (verifier, _) = consume_oauth_flow(&state, state_hash, binding_hash)
+            .await
+            .unwrap();
+        assert_eq!(verifier, "synthetic-verifier");
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_rate_limit_requires_a_matching_flow_and_is_isolated() {
+        let (_directory, _database, state) = oauth_state();
+        initialize(&state).await;
+        let (anon_cookie, anon_csrf) = anonymous(&state).await;
+
+        let state_hash = hash(&random_token());
+        let binding_hash = hash(&random_token());
+        let auth_version = insert_oauth_flow(
+            &state,
+            state_hash.clone(),
+            binding_hash.clone(),
+            "synthetic-verifier",
+        )
+        .await;
+
         let (verifier, version) =
             consume_oauth_flow(&state, state_hash.clone(), binding_hash.clone())
                 .await
@@ -2360,32 +2429,18 @@ mod tests {
         assert_eq!(replay.status, StatusCode::UNAUTHORIZED);
         assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 1);
 
-        // Exhausting the dedicated OAuth callback bucket blocks another matched flow
-        // without rolling into the shared password-login bucket.
         for _ in 1..MAX_ATTEMPTS {
             state.allow_oauth_attempt().unwrap();
         }
         let next_state_hash = hash(&random_token());
         let next_binding_hash = hash(&random_token());
-        let insert_next_state = next_state_hash.clone();
-        let insert_next_binding = next_binding_hash.clone();
-        state
-            .database(move |connection| {
-                connection.execute(
-                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![
-                        insert_next_state,
-                        insert_next_binding,
-                        "synthetic-verifier-2",
-                        auth_version,
-                        now_seconds()? + FLOW_TTL,
-                    ],
-                )?;
-                Ok(())
-            })
-            .await
-            .unwrap();
+        insert_oauth_flow(
+            &state,
+            next_state_hash.clone(),
+            next_binding_hash.clone(),
+            "synthetic-verifier-2",
+        )
+        .await;
         let limited = consume_oauth_flow(&state, next_state_hash, next_binding_hash)
             .await
             .unwrap_err();
