@@ -292,11 +292,12 @@ test('logout and 401 expiry leave dirty traffic drafts cleanly, and expired oaut
       },
     })
   })
-  await page.goto('/login?oauth_totp=required')
+  await page.goto('/login?oauth_totp=required&redirect=%2F')
   await expect(page.getByRole('button', { name: '返回常规登录' })).toBeVisible()
   await page.getByLabel('两步验证码').fill('123456')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page.getByText('OAuth 两步验证会话已过期')).toBeVisible()
+  await expect(page).toHaveURL(/\/login\?redirect=(?:\/|%2F)$/)
   await expect(page.getByLabel('用户名', { exact: true })).toBeVisible()
   await page.getByLabel('用户名', { exact: true }).fill('admin')
   await page.getByLabel('密码', { exact: true }).fill('synthetic-password')
