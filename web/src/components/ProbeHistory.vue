@@ -830,7 +830,9 @@ function exportPng(): void {
     <Spinner :show="loading" :aria-busy="loading" class="min-h-32" :description="loading && !data ? '正在读取探测记录…' : undefined">
       <div v-if="error" role="alert" class="flex flex-col items-center gap-3 py-8 text-center text-sm text-destructive">
         <span>{{ error }}</span>
-        <Button variant="outline" size="sm" @click="reload">重新尝试</Button>
+        <Button variant="outline" size="sm" @click="reload">
+          重新尝试
+        </Button>
       </div>
       <Empty v-else-if="!loading && (!data || !tasks.length)" description="暂无延迟数据" />
       <template v-else-if="data && tasks.length">
@@ -841,7 +843,9 @@ function exportPng(): void {
                 <h3 class="text-sm font-semibold">
                   {{ tasks.length }} 条线路 {{ chartMetric === 'failure' ? chartFailureLabel : chartLatencyLabel }} 趋势
                 </h3>
-                <p class="mt-1 text-[11px] text-muted-foreground">悬停对比同一时刻的线路数据</p>
+                <p class="mt-1 text-[11px] text-muted-foreground">
+                  悬停对比同一时刻的线路数据
+                </p>
               </div>
               <div role="group" aria-label="趋势指标" class="flex items-center rounded-lg bg-muted/70 p-1">
                 <Button variant="ghost" size="xs" class="h-7 cursor-pointer rounded-md px-3 text-xs transition-colors duration-100 motion-reduce:transition-none" :class="chartMetric === 'latency' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white'" :aria-pressed="chartMetric === 'latency'" @click="chartMetric = 'latency'">
@@ -880,10 +884,16 @@ function exportPng(): void {
               {{ !selectedTasks.length ? '请选择要显示的线路。' : '此时间范围暂无上报样本。' }}
             </div>
             <details class="border-t border-border/50 px-4 py-3">
-              <summary class="cursor-pointer text-xs font-medium text-muted-foreground">图表选项与导出</summary>
+              <summary class="cursor-pointer text-xs font-medium text-muted-foreground">
+                图表选项与导出
+              </summary>
               <div class="mt-3 flex flex-wrap items-center gap-2">
-                <Button variant="outline" size="xs" :aria-pressed="showDelay" @click="chartMetric = showDelay ? 'failure' : 'combined'">延迟</Button>
-                <Button variant="outline" size="xs" :aria-pressed="showFailures" @click="chartMetric = showFailures ? 'latency' : 'combined'">{{ chartFailureLabel }}</Button>
+                <Button variant="outline" size="xs" :aria-pressed="showDelay" @click="chartMetric = showDelay ? 'failure' : 'combined'">
+                  延迟
+                </Button>
+                <Button variant="outline" size="xs" :aria-pressed="showFailures" @click="chartMetric = showFailures ? 'latency' : 'combined'">
+                  {{ chartFailureLabel }}
+                </Button>
                 <Button variant="outline" size="xs" :aria-pressed="showThresholds" @click="showThresholds = !showThresholds">阈值线</Button>
                 <Button variant="outline" size="xs" :aria-pressed="showPeaks" @click="showPeaks = !showPeaks">峰值标记</Button>
                 <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-muted/60 p-1">
