@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Input } from '@/components/ui/input'
 import { useAuthStore } from '@/stores/auth'
-import { getSharedApi } from '@/utils/api'
+import { ApiError, getSharedApi } from '@/utils/api'
+import { resolveOAuthTotpViewState } from '@/utils/authFlow'
 import { loginDestination } from '@/utils/session'
 
 const auth = useAuthStore()
@@ -16,11 +17,53 @@ const password = ref('')
 const code = ref('')
 const busy = ref(false)
 const error = ref('')
+const dismissedOAuthTotp = ref(false)
+const oauthTotpExpiredNotice = ref(false)
 const setup = computed(() => auth.status?.initialized === false)
-const oauthTotp = computed(() => route.query.oauth_totp === 'required' || auth.status?.oauth_totp_required === true)
+const oauthTotpState = computed(() => resolveOAuthTotpViewState(
+  route.query.oauth_totp,
+  auth.status,
+  dismissedOAuthTotp.value,
+))
+const oauthTotp = computed(() => oauthTotpState.value.active)
 const heading = computed(() => setup.value
   ? '初始化 Senlun'
   : oauthTotp.value ? '完成两步验证' : '登录 Senlun')
+
+async function clearOAuthTotpQuery(): Promise<void> {
+  if (route.query.oauth_totp === undefined)
+    return
+  const query = { ...route.query }
+  delete query.oauth_totp
+  await router.replace({ name: 'login', query })
+}
+
+watch(oauthTotpState, (state) => {
+  if (state.expired) {
+    oauthTotpExpiredNotice.value = true
+    void clearOAuthTotpQuery()
+  }
+}, { immediate: true })
+
+async function returnToStandardLogin(): Promise<void> {
+  busy.value = true
+  error.value = ''
+  try {
+    await auth.refresh(true)
+    dismissedOAuthTotp.value = true
+    oauthTotpExpiredNotice.value = false
+    code.value = ''
+    await clearOAuthTotpQuery()
+  }
+  catch (cause) {
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
+  finally {
+    busy.value = false
+  }
+}
 
 async function refresh(): Promise<void> {
   busy.value = true
@@ -41,13 +84,14 @@ onMounted(refresh)
 async function submit(): Promise<void> {
   busy.value = true
   error.value = ''
+  const submittingOAuthTotp = oauthTotp.value
   try {
     const path = setup.value
       ? 'setup'
-      : oauthTotp.value ? 'oauth/complete' : 'login'
+      : submittingOAuthTotp ? 'oauth/complete' : 'login'
     const body = setup.value
       ? { username: username.value, password: password.value }
-      : oauthTotp.value
+      : submittingOAuthTotp
         ? { code: code.value }
         : { username: username.value, password: password.value, code: code.value || undefined }
     await auth.authenticate(path, body)
@@ -56,6 +100,20 @@ async function submit(): Promise<void> {
     await router.replace(loginDestination(route.query.redirect))
   }
   catch (cause) {
+    if (submittingOAuthTotp && cause instanceof ApiError && (cause.statusCode === 401 || cause.statusCode === 403)) {
+      try {
+        const latest = await auth.refresh(true)
+        if (!latest.oauth_totp_required) {
+          oauthTotpExpiredNotice.value = true
+          code.value = ''
+          await clearOAuthTotpQuery()
+          return
+        }
+      }
+      catch {
+        // Keep the original submission failure visible when status verification fails.
+      }
+    }
     error.value = cause instanceof Error
       ? cause.message
       : String(cause)
@@ -91,6 +149,9 @@ async function startOAuth(): Promise<void> {
       <p v-else-if="oauthTotp" class="text-sm text-muted-foreground">
         输入身份验证器中的六位验证码以完成 OAuth 登录。
       </p>
+      <p v-else-if="oauthTotpExpiredNotice" role="status" class="rounded-md border border-border p-3 text-sm text-muted-foreground">
+        OAuth 两步验证会话已过期，请重新使用密码或 OAuth 登录。
+      </p>
       <p v-if="error" id="login-error" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
         {{ error }}
       </p>
@@ -118,6 +179,9 @@ async function startOAuth(): Promise<void> {
       </form>
       <Button v-else class="min-h-11 w-full" :disabled="busy" @click="refresh">
         {{ busy ? '正在连接…' : '重新连接' }}
+      </Button>
+      <Button v-if="oauthTotp" variant="outline" class="min-h-11 w-full" :disabled="busy" @click="returnToStandardLogin">
+        返回常规登录
       </Button>
       <Button v-if="auth.status?.oauth_enabled && !oauthTotp" variant="outline" class="min-h-11 w-full" :disabled="busy" @click="startOAuth">
         使用 OAuth 登录

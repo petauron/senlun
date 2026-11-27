@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import { getSharedApi, setCsrfToken } from '@/utils/api'
+import { ApiError, getSharedApi, setCsrfToken } from '@/utils/api'
 import { invalidateSessionRequests } from '@/utils/session'
 import { useAppStore } from './app'
 import { useNodesStore } from './nodes'
@@ -20,7 +20,9 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref('')
   const epoch = ref(0)
   const loggedIn = computed(() => status.value?.logged_in === true)
-  let pending: Promise<AuthStatus> | null = null
+  let transitionSequence = 0
+  let refreshSequence = 0
+  let pending: { sequence: number, promise: Promise<AuthStatus> } | null = null
 
   function accept(value: AuthStatus): AuthStatus {
     status.value = value
@@ -30,19 +32,41 @@ export const useAuthStore = defineStore('auth', () => {
     return value
   }
 
-  async function refresh(): Promise<AuthStatus> {
-    if (pending)
-      return pending
-    pending = getSharedApi().get<AuthStatus>('auth/status').then(accept).catch((cause) => {
-      error.value = cause instanceof Error
-        ? cause.message
-        : String(cause)
+  async function refresh(force = false): Promise<AuthStatus> {
+    if (!force && pending)
+      return pending.promise
+    const startedTransition = transitionSequence
+    const sequence = ++refreshSequence
+    const promise = getSharedApi().get<AuthStatus>('auth/status').then((value) => {
+      if (startedTransition !== transitionSequence || sequence !== refreshSequence) {
+        return status.value ?? {
+          ...value,
+          logged_in: false,
+          username: null,
+          csrf_token: '',
+          oauth_totp_required: false,
+        }
+      }
+      return accept(value)
+    }).catch((cause) => {
+      if (startedTransition === transitionSequence && sequence === refreshSequence) {
+        error.value = cause instanceof Error
+          ? cause.message
+          : String(cause)
+      }
       throw cause
-    }).finally(() => { pending = null })
-    return pending
+    }).finally(() => {
+      if (pending?.sequence === sequence)
+        pending = null
+    })
+    pending = { sequence, promise }
+    return promise
   }
 
   function clear(): void {
+    transitionSequence += 1
+    refreshSequence += 1
+    pending = null
     invalidateSessionRequests()
     status.value = null
     setCsrfToken('')
@@ -52,15 +76,41 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function authenticate(path: 'setup' | 'login' | 'oauth/complete', body: unknown): Promise<void> {
-    accept(await getSharedApi().post<AuthStatus>(`auth/${path}`, body))
+    const startedTransition = transitionSequence
+    const next = await getSharedApi().post<AuthStatus>(`auth/${path}`, body)
+    if (startedTransition !== transitionSequence)
+      throw new Error('登录状态已变更，请重试')
+    transitionSequence += 1
+    refreshSequence += 1
+    pending = null
+    accept(next)
     invalidateSessionRequests()
     useNodesStore().clearNodes()
     epoch.value += 1
   }
 
   async function logout(): Promise<void> {
-    await getSharedApi().post('auth/logout')
-    clear()
+    try {
+      await getSharedApi().post('auth/logout')
+      clear()
+    }
+    catch (cause) {
+      if (!(cause instanceof ApiError) || (cause.statusCode !== 401 && cause.statusCode !== 403))
+        throw cause
+      const verificationTransition = transitionSequence
+      const verificationRefresh = ++refreshSequence
+      pending = null
+      const latest = await getSharedApi().get<AuthStatus>('auth/status')
+      if (verificationTransition !== transitionSequence || verificationRefresh !== refreshSequence)
+        throw new Error('退出登录状态校验已过期，请重试')
+      accept(latest)
+      if (!latest.logged_in) {
+        clear()
+        return
+      }
+      await getSharedApi().post('auth/logout')
+      clear()
+    }
   }
 
   return {
