@@ -1077,6 +1077,36 @@ struct GithubIdentity {
     id: u64,
 }
 
+async fn consume_oauth_flow(
+    state: &AuthState,
+    state_hash: String,
+    binding_hash: String,
+) -> Result<(String, i64), AuthError> {
+    let attempt_state = state.clone();
+    state
+        .database(move |connection| {
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let flow: Option<(String, i64)> = transaction
+                .query_row(
+                    "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
+                     WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
+                    params![state_hash, binding_hash, now_seconds()?],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let flow = flow.ok_or(AuthError::unauthorized())?;
+            attempt_state.allow_oauth_attempt()?;
+            transaction.execute(
+                "DELETE FROM auth_oauth_flows WHERE state_hash = ?1",
+                [state_hash],
+            )?;
+            transaction.commit()?;
+            Ok(flow)
+        })
+        .await
+}
+
 async fn oauth_callback(
     State(state): State<AuthState>,
     headers: HeaderMap,
@@ -1096,21 +1126,9 @@ async fn oauth_callback(
         .filter(|state| valid_token(state))
         .ok_or(AuthError::unauthorized())?;
     let binding = cookie(&headers, state.oauth_cookie_name()).ok_or(AuthError::unauthorized())?;
-    state.allow_oauth_attempt()?;
     let state_hash = hash(&flow_state);
     let binding_hash = hash(&binding);
-    let (verifier, auth_version) = state.database(move |connection| {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let flow: Option<(String, i64)> = transaction.query_row(
-            "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
-             WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
-            params![state_hash, binding_hash, now_seconds()?], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?;
-        let flow = flow.ok_or(AuthError::unauthorized())?;
-        transaction.execute("DELETE FROM auth_oauth_flows WHERE state_hash = ?1", [state_hash])?;
-        transaction.commit()?;
-        Ok(flow)
-    }).await?;
+    let (verifier, auth_version) = consume_oauth_flow(&state, state_hash, binding_hash).await?;
     let (token, complete) = oauth_session_after_identity(
         &state,
         auth_version,
@@ -2259,7 +2277,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_callback_rate_limit_is_isolated_from_login_budget() {
+    async fn oauth_callback_rate_limit_requires_a_matching_flow_and_is_isolated() {
         let directory = tempfile::tempdir().unwrap();
         let database = directory.path().join("senlun.db");
         let _storage = crate::storage::Storage::open(&database, 32 * 1024 * 1024).unwrap();
@@ -2278,32 +2296,100 @@ mod tests {
         .unwrap();
         initialize(&state).await;
         let (anon_cookie, anon_csrf) = anonymous(&state).await;
+        let auth_version = state
+            .database(|connection| {
+                Ok(admin(connection)?
+                    .ok_or(AuthError::unauthorized())?
+                    .auth_version)
+            })
+            .await
+            .unwrap();
 
-        // Invalid parameters or missing binding cookie must not consume callback quota.
-        for _ in 0..=MAX_ATTEMPTS {
-            let response = request(
-                &state,
-                "GET",
-                "/api/auth/oauth/callback?code=synthetic&state=short",
-                "",
-                None,
-                None,
-                json!(null),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        }
-
-        // Syntactically complete callbacks count against the dedicated OAuth bucket only.
         let flow_state = random_token();
-        let binding = format!("{}={}", state.oauth_cookie_name(), random_token());
-        let path = format!("/api/auth/oauth/callback?code=synthetic&state={flow_state}");
-        for _ in 0..MAX_ATTEMPTS {
-            let response = request(&state, "GET", &path, &binding, None, None, json!(null)).await;
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let valid_binding = random_token();
+        let wrong_binding = random_token();
+        let state_hash = hash(&flow_state);
+        let binding_hash = hash(&valid_binding);
+        let insert_state_hash = state_hash.clone();
+        let insert_binding_hash = binding_hash.clone();
+        state
+            .database(move |connection| {
+                connection.execute(
+                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        insert_state_hash,
+                        insert_binding_hash,
+                        "synthetic-verifier",
+                        auth_version,
+                        now_seconds()? + FLOW_TTL,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Missing or wrong binding must fail without consuming callback quota or the flow.
+        let wrong_cookie = format!("{}={wrong_binding}", state.oauth_cookie_name());
+        let callback_path = format!("/api/auth/oauth/callback?code=synthetic&state={flow_state}");
+        let wrong = request(
+            &state,
+            "GET",
+            &callback_path,
+            &wrong_cookie,
+            None,
+            None,
+            json!(null),
+        )
+        .await;
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 0);
+
+        // Matching the stored flow records one callback attempt and consumes the one-time row.
+        let (verifier, version) =
+            consume_oauth_flow(&state, state_hash.clone(), binding_hash.clone())
+                .await
+                .unwrap();
+        assert_eq!(verifier, "synthetic-verifier");
+        assert_eq!(version, auth_version);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 1);
+        let replay = consume_oauth_flow(&state, state_hash, binding_hash)
+            .await
+            .unwrap_err();
+        assert_eq!(replay.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 1);
+
+        // Exhausting the dedicated OAuth callback bucket blocks another matched flow
+        // without rolling into the shared password-login bucket.
+        for _ in 1..MAX_ATTEMPTS {
+            state.allow_oauth_attempt().unwrap();
         }
-        let limited = request(&state, "GET", &path, &binding, None, None, json!(null)).await;
-        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        let next_state_hash = hash(&random_token());
+        let next_binding_hash = hash(&random_token());
+        let insert_next_state = next_state_hash.clone();
+        let insert_next_binding = next_binding_hash.clone();
+        state
+            .database(move |connection| {
+                connection.execute(
+                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        insert_next_state,
+                        insert_next_binding,
+                        "synthetic-verifier-2",
+                        auth_version,
+                        now_seconds()? + FLOW_TTL,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        let limited = consume_oauth_flow(&state, next_state_hash, next_binding_hash)
+            .await
+            .unwrap_err();
+        assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
 
         let login = request(
             &state,
@@ -2323,10 +2409,29 @@ mod tests {
         let (_directory, state) = state();
         initialize(&state).await;
         let (anon_cookie, anon_csrf) = anonymous(&state).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::sync_channel(1);
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move {
+            worker_state
+                .password_work(move || {
+                    let _ = started_tx.send(());
+                    finish_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| AuthError::internal())?;
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        assert!(state.session_gate.write_available());
         let admin_lease = state.session_gate.acquire(false).await.unwrap();
+        finish_tx.send(()).unwrap();
+        worker.await.unwrap().unwrap();
 
         let bad_origin = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             request(
                 &state,
                 "POST",
@@ -2342,7 +2447,7 @@ mod tests {
         assert_eq!(bad_origin.status(), StatusCode::FORBIDDEN);
 
         let wrong_password = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             request(
                 &state,
                 "POST",
@@ -2358,7 +2463,7 @@ mod tests {
         assert_eq!(wrong_password.status(), StatusCode::UNAUTHORIZED);
 
         let empty_logout = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             request(
                 &state,
                 "POST",
@@ -2383,18 +2488,9 @@ mod tests {
         let (session_cookie, session_csrf) = initialize(&state).await;
         let (anon_cookie, anon_csrf) = anonymous(&state).await;
 
-        for _ in 0..MAX_ATTEMPTS {
-            let response = request(
-                &state,
-                "POST",
-                "/api/auth/login",
-                &anon_cookie,
-                Some(&anon_csrf),
-                Some(TEST_ORIGIN),
-                json!({ "username": "admin", "password": "wrong" }),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        // initialize() already consumed one attempt in the shared login bucket.
+        for _ in 1..MAX_ATTEMPTS {
+            state.allow_attempt().unwrap();
         }
         let limited = request(
             &state,

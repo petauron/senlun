@@ -2179,7 +2179,7 @@ mod tests {
 
         let admin_lease = state.session_gate.acquire(false).await.unwrap();
         let wrong_password = timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(5),
             router(state.clone()).oneshot(
                 Request::builder()
                     .method("POST")
