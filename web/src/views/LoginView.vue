@@ -46,11 +46,23 @@ watch(oauthTotpState, (state) => {
 }, { immediate: true })
 
 async function returnToStandardLogin(): Promise<void> {
-  dismissedOAuthTotp.value = true
-  oauthTotpExpiredNotice.value = false
-  code.value = ''
+  busy.value = true
   error.value = ''
-  await clearOAuthTotpQuery()
+  try {
+    await auth.refresh(true)
+    dismissedOAuthTotp.value = true
+    oauthTotpExpiredNotice.value = false
+    code.value = ''
+    await clearOAuthTotpQuery()
+  }
+  catch (cause) {
+    error.value = cause instanceof Error
+      ? cause.message
+      : String(cause)
+  }
+  finally {
+    busy.value = false
+  }
 }
 
 async function refresh(): Promise<void> {
@@ -88,7 +100,7 @@ async function submit(): Promise<void> {
     await router.replace(loginDestination(route.query.redirect))
   }
   catch (cause) {
-    if (submittingOAuthTotp && cause instanceof ApiError && cause.statusCode === 401) {
+    if (submittingOAuthTotp && cause instanceof ApiError && (cause.statusCode === 401 || cause.statusCode === 403)) {
       try {
         const latest = await auth.refresh(true)
         if (!latest.oauth_totp_required) {
