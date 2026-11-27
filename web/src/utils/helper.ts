@@ -38,6 +38,10 @@ const DEFAULT_BYTE_DECIMALS: ByteDecimalsConfig = {
   TB: 1,
 }
 
+function clampByteUnitIndex(bytes: number): number {
+  return Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1))
+}
+
 /**
  * 格式化字节数为可读单位
  * @param bytes 字节数
@@ -45,11 +49,11 @@ const DEFAULT_BYTE_DECIMALS: ByteDecimalsConfig = {
  * @returns 格式化后的字符串，如 "1.5 GB"
  */
 export function formatBytes(bytes: number, decimals = 1): string {
-  if (bytes === 0)
+  if (!Number.isFinite(bytes) || bytes <= 0)
     return '0 B'
 
   const k = 1024
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const i = clampByteUnitIndex(bytes)
   const unit = BYTE_UNITS[i] ?? LAST_BYTE_UNIT
   return `${(bytes / k ** i).toFixed(decimals)} ${unit}`
 }
@@ -59,7 +63,7 @@ export function formatTrafficQuota(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0)
     return '0B'
 
-  const index = Math.max(0, Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), BYTE_UNITS.length - 1))
+  const index = clampByteUnitIndex(bytes)
   const value = Number((bytes / 1024 ** index).toFixed(2))
   const unit = index === 0
     ? 'B'
@@ -74,47 +78,8 @@ export function formatTrafficQuota(bytes: number): string {
  * @returns 格式化后的字符串，如 "1.5 GB"
  */
 export function formatBytesWithConfig(bytes: number, config?: ByteDecimalsConfig): string {
-  const mergedConfig = {
-    ...DEFAULT_BYTE_DECIMALS,
-    ...config,
-  }
-
-  if (bytes === 0) {
-    // 0 字节时，检查 B 是否被禁用
-    if (mergedConfig.B === -1)
-      return '0 KB'
-    return '0 B'
-  }
-
-  const k = 1024
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-
-  // 获取对应单位的精度配置
-  const unitKey = BYTE_UNITS[i]
-  // PB 及以上单位使用 TB 的精度配置
-  const decimals = (unitKey === 'TB' || unitKey === 'PB')
-    ? mergedConfig.TB
-    : mergedConfig[unitKey as keyof ByteDecimalsConfig]
-
-  // 如果当前单位被禁用，向上查找可用单位
-  if (decimals === -1) {
-    for (let j = i + 1; j < BYTE_UNITS.length; j++) {
-      const nextUnitKey = BYTE_UNITS[j]
-      const nextDecimals = (nextUnitKey === 'TB' || nextUnitKey === 'PB')
-        ? mergedConfig.TB
-        : mergedConfig[nextUnitKey as keyof ByteDecimalsConfig]
-      if (nextDecimals !== -1) {
-        const unit = BYTE_UNITS[j]
-        return `${(bytes / k ** j).toFixed(nextDecimals)} ${unit}`
-      }
-    }
-    // 所有单位都被禁用，使用默认行为
-    const unit = BYTE_UNITS[i] ?? LAST_BYTE_UNIT
-    return `${(bytes / k ** i).toFixed(1)} ${unit}`
-  }
-
-  const unit = BYTE_UNITS[i] ?? LAST_BYTE_UNIT
-  return `${(bytes / k ** i).toFixed(decimals)} ${unit}`
+  const { value, unit } = formatBytesSplit(bytes, config)
+  return `${value} ${unit}`
 }
 
 /**
@@ -129,14 +94,14 @@ export function formatBytesSplit(bytes: number, config?: ByteDecimalsConfig): { 
     ...config,
   }
 
-  if (bytes === 0) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
     if (mergedConfig.B === -1)
       return { value: '0', unit: 'KB' }
     return { value: '0', unit: 'B' }
   }
 
   const k = 1024
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const i = clampByteUnitIndex(bytes)
 
   const unitKey = BYTE_UNITS[i]
   const decimals = (unitKey === 'TB' || unitKey === 'PB')

@@ -9,6 +9,7 @@ import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { fetchProbeComparison } from '@/utils/admin'
+import { createProbeComparisonLoader } from '@/utils/networkQuality'
 import { failureRateLabel } from '@/utils/probeLabels'
 
 const app = useAppStore()
@@ -49,60 +50,33 @@ const selected = computed(() => nodes.value.find(node => node.uuid === selectedI
 const summary = shallowRef<ProbeComparison[]>([])
 const loading = ref(false)
 const error = ref('')
-let controller: AbortController | null = null
-let refreshTimer: ReturnType<typeof setTimeout> | undefined
-let generation = 0
+const comparisonLoader = createProbeComparisonLoader({
+  fetchComparison: fetchProbeComparison,
+  isVisible: () => document.visibilityState === 'visible',
+  onState(patch) {
+    if (patch.summary !== undefined)
+      summary.value = patch.summary
+    if (patch.loading !== undefined)
+      loading.value = patch.loading
+    if (patch.error !== undefined)
+      error.value = patch.error
+  },
+})
 
-async function reload(): Promise<void> {
-  clearTimeout(refreshTimer)
-  controller?.abort()
-  const current = ++generation
-  const selectedTask = task.value
-  if (!selectedTask) {
-    summary.value = []
-    loading.value = false
-    error.value = ''
-    return
-  }
-  controller = new AbortController()
-  summary.value = []
-  loading.value = true
-  error.value = ''
-  try {
-    const rows = await fetchProbeComparison(selectedTask.id, hours.value, controller.signal)
-    if (current === generation)
-      summary.value = rows
-  }
-  catch (cause) {
-    if (current === generation) {
-      summary.value = []
-      error.value = cause instanceof Error
-        ? cause.message
-        : '读取探测汇总失败'
-    }
-  }
-  finally {
-    if (current === generation) {
-      loading.value = false
-      if (document.visibilityState === 'visible')
-        refreshTimer = setTimeout(() => void reload(), 30000)
-    }
-  }
-}
-
-watch(() => [task.value?.id, hours.value], () => void reload(), { immediate: true })
+watch(
+  [() => task.value?.id ?? '', hours],
+  ([nextTaskId, nextHours]) => {
+    void comparisonLoader.syncQuery(nextTaskId, nextHours)
+  },
+  { immediate: true },
+)
 function onVisibilityChange(): void {
-  if (document.visibilityState !== 'visible')
-    clearTimeout(refreshTimer)
-  else if (!loading.value && task.value)
-    void reload()
+  comparisonLoader.handleVisibilityChange()
 }
 onMounted(() => document.addEventListener('visibilitychange', onVisibilityChange))
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange)
-  clearTimeout(refreshTimer)
-  ++generation
-  controller?.abort()
+  comparisonLoader.dispose()
 })
 const summaryByNode = computed(() => new Map(summary.value.map(row => [row.node_id, row])))
 const comparisons = computed(() => nodes.value.map((node) => {
