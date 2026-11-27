@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -9,9 +9,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
+import { useAuthStore } from '@/stores/auth'
 import { getSharedApi } from '@/utils/api'
+import { decideTrafficDeparture, unmountLeaveResult } from '@/utils/authFlow'
 
 const props = defineProps<{ nodes: ManagedNode[] }>()
+const auth = useAuthStore()
 const selectedId = ref(props.nodes[0]?.id ?? '')
 const sources = ref<ExternalTrafficSource[]>([])
 const keyReady = ref(false)
@@ -119,9 +122,20 @@ function restoreDiscardFocus(event: Event): void {
 }
 
 function confirmDeparture(to: RouteLocationNormalized): boolean | Promise<boolean> {
-  if ((to.name === 'admin' && to.query.section === 'traffic') || !hasUnsavedChanges.value)
+  const decision = decideTrafficDeparture({
+    loggedIn: auth.loggedIn,
+    stayingOnTrafficSection: to.name === 'admin' && to.query.section === 'traffic',
+    hasUnsavedChanges: hasUnsavedChanges.value,
+    busy: busy.value,
+  })
+  if (decision === 'allow') {
+    if (!auth.loggedIn) {
+      pendingNodeId.value = null
+      settleLeave(true)
+    }
     return true
-  if (busy.value)
+  }
+  if (decision === 'block')
     return false
   // Keep only one pending decision, including repeated browser Back attempts.
   cancelDiscard()
@@ -134,9 +148,16 @@ function confirmDeparture(to: RouteLocationNormalized): boolean | Promise<boolea
   })
 }
 
+watch(() => auth.loggedIn, (loggedIn) => {
+  if (!loggedIn) {
+    pendingNodeId.value = null
+    settleLeave(true)
+  }
+})
+
 onBeforeRouteUpdate(confirmDeparture)
 onBeforeRouteLeave(confirmDeparture)
-onBeforeUnmount(() => settleLeave(false))
+onBeforeUnmount(() => settleLeave(unmountLeaveResult(auth.loggedIn)))
 
 async function load(): Promise<void> {
   loading.value = true

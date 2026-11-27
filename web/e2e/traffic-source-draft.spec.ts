@@ -201,3 +201,63 @@ test('traffic status refresh preserves drafts and credentials until a node switc
   expect(mutations).toBe(2)
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
+
+test('logout and 401 expiry leave dirty traffic drafts cleanly, and expired oauth_totp recovers', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const state = await (await page.request.get('/api/admin/state')).json()
+  let logoutCalls = 0
+  await page.route('**/api/admin/traffic-sources', route => route.fulfill({
+    json: { sources: [], credential_key_ready: true },
+  }))
+  await page.route('**/api/auth/logout', async (route) => {
+    logoutCalls++
+    await route.fulfill({ json: { ok: true } })
+  })
+  await page.route('**/api/auth/status', route => route.fulfill({
+    json: {
+      initialized: true,
+      logged_in: logoutCalls === 0,
+      username: logoutCalls === 0 ? 'admin' : null,
+      csrf_token: 'synthetic-csrf',
+      totp_enabled: false,
+      oauth_enabled: true,
+      oauth_totp_required: false,
+    },
+  }))
+
+  await page.goto('/admin?section=traffic')
+  const refreshButton = page.getByRole('button', { name: '刷新同步状态' })
+  await expect(refreshButton).toBeEnabled()
+  const name = page.getByLabel('来源名称（必填）')
+  await name.fill('Unsaved before logout')
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await expect(page).toHaveURL('/login')
+  await expect(page.getByRole('dialog', { name: '放弃未保存修改？' })).toBeHidden()
+  expect(logoutCalls).toBe(1)
+
+  // Stale oauth_totp=required after 10-minute expiry must recover to standard login.
+  await page.goto('/login?oauth_totp=required')
+  await expect(page.getByLabel('用户名', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('密码', { exact: true })).toBeVisible()
+  await expect(page.getByText('OAuth 两步验证会话已过期')).toBeVisible()
+
+  // Simulate session expiry (401) during an active save on a dirty draft.
+  logoutCalls = 0
+  await page.route('**/api/admin/state', route => route.fulfill({ json: state }))
+  await page.route('**/api/admin/traffic-sources/*', route => route.fulfill({
+    status: 401,
+    json: { error: 'Session expired' },
+  }))
+  await page.goto('/admin?section=traffic')
+  await expect(refreshButton).toBeEnabled()
+  await name.fill('Unsaved before 401')
+  await page.getByLabel('流量查询网址（HTTPS，GET，必填）').fill('https://example.invalid/usage')
+  await page.getByLabel('上行字节路径（必填）').fill('/up')
+  await page.getByLabel('下行字节路径（必填）').fill('/down')
+  logoutCalls = 1
+  await page.getByRole('button', { name: '保存外部流量源' }).click()
+  await expect(page).toHaveURL(/\/login\?redirect=/)
+  await expect(page.getByRole('dialog', { name: '放弃未保存修改？' })).toBeHidden()
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})
