@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     net::IpAddr,
+    sync::RwLock,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
@@ -27,11 +28,11 @@ const PROVIDER: &str = "https://ip.net.coffee";
 
 pub(crate) struct IpInfo {
     client: reqwest::Client,
-    inner: Mutex<Cache>,
+    entries: RwLock<HashMap<String, Entry>>,
+    provider: Mutex<ProviderState>,
 }
 #[derive(Default)]
-struct Cache {
-    entries: HashMap<String, Entry>,
+struct ProviderState {
     next_request: Option<Instant>,
     day: u64,
     calls: u32,
@@ -54,46 +55,89 @@ impl IpInfo {
                 .connect_timeout(Duration::from_secs(3))
                 .no_proxy()
                 .build()?,
-            inner: Mutex::new(Cache {
-                entries,
-                ..Cache::default()
-            }),
+            entries: RwLock::new(entries),
+            provider: Mutex::new(ProviderState::default()),
         })
+    }
+
+    fn cached_entry(&self, key: &str) -> Result<Option<Entry>, ApiError> {
+        let entries = self
+            .entries
+            .read()
+            .map_err(|_| ApiError::unavailable("IP cache unavailable"))?;
+        Ok(entries.get(key).cloned())
+    }
+
+    fn store_entry(&self, key: String, entry: Entry) -> Result<(), ApiError> {
+        let mut entries = self
+            .entries
+            .write()
+            .map_err(|_| ApiError::unavailable("IP cache unavailable"))?;
+        entries.insert(key, entry);
+        if entries.len() > usize::from(MAX_CACHE)
+            && let Some(oldest) = entries
+                .iter()
+                .min_by(|(left_key, left), (right_key, right)| {
+                    left.updated
+                        .cmp(&right.updated)
+                        .then_with(|| left_key.cmp(right_key))
+                })
+                .map(|(key, _)| key.clone())
+        {
+            entries.remove(&oldest);
+        }
+        Ok(())
     }
 
     async fn fetch(
         &self,
         state: &AppState,
-        cache: &mut Cache,
+        provider: &mut ProviderState,
         ip: IpAddr,
         latency: bool,
     ) -> Result<Value, ApiError> {
+        let request = |url: String| async move { self.request(&url).await };
+        self.fetch_with(state, provider, ip, latency, request).await
+    }
+
+    async fn fetch_with<F, Fut>(
+        &self,
+        state: &AppState,
+        provider: &mut ProviderState,
+        ip: IpAddr,
+        latency: bool,
+        request: F,
+    ) -> Result<Value, ApiError>
+    where
+        F: FnOnce(String) -> Fut,
+        Fut: Future<Output = Result<Value, ApiError>>,
+    {
         let now = crate::current_time()? / 1000;
         let key = format!("{ip}:{latency}");
-        let old = cache.entries.get(&key).cloned();
+        let old = self.cached_entry(&key)?;
         if let Some(entry) = &old
             && !entry.stale(now)
         {
             return Ok(envelope(entry, now, "hit", None));
         }
-        if cache.day != now / DAY {
-            cache.day = now / DAY;
-            cache.calls = 0;
+        if provider.day != now / DAY {
+            provider.day = now / DAY;
+            provider.calls = 0;
         }
-        if cache.minute != now / 60 {
-            cache.minute = now / 60;
-            cache.minute_calls = 0;
+        if provider.minute != now / 60 {
+            provider.minute = now / 60;
+            provider.minute_calls = 0;
         }
-        if cache.calls >= 200
-            || cache.minute_calls >= 6
-            || cache.next_request.is_some_and(|next| Instant::now() < next)
+        if provider.calls >= 200
+            || provider.minute_calls >= 6
+            || provider.next_request.is_some_and(|next| Instant::now() < next)
         {
             return stale_or_error(old.as_ref(), now, "IP information rate limit; retry later");
         }
-        cache.calls += 1;
-        cache.minute_calls += 1;
+        provider.calls += 1;
+        provider.minute_calls += 1;
         // Set before I/O so cancellation cannot bypass the cooldown.
-        cache.next_request = Some(Instant::now() + Duration::from_secs(10));
+        provider.next_request = Some(Instant::now() + Duration::from_secs(10));
         let url = if latency {
             format!(
                 "{PROVIDER}/api/ping/global?host={ip}&node=n02&node=n03&node=n04&node=n09&node=n11&node=n13"
@@ -101,7 +145,7 @@ impl IpInfo {
         } else {
             format!("{PROVIDER}/api/ip/lookup/{ip}")
         };
-        let result = self.request(&url).await.and_then(|raw| {
+        let result = request(url).await.and_then(|raw| {
             if latency {
                 normalize_latency(&raw, ip)
             } else {
@@ -129,25 +173,12 @@ impl IpInfo {
                 .database(move |storage| storage.save_ip_info_cache(&saved_key, &saved_entry))
                 .await?;
             let result = envelope(&entry, now, "miss", None);
-            cache.entries.insert(key, entry);
-            if cache.entries.len() > usize::from(MAX_CACHE)
-                && let Some(key) = cache
-                    .entries
-                    .iter()
-                    .min_by(|(left_key, left), (right_key, right)| {
-                        left.updated
-                            .cmp(&right.updated)
-                            .then_with(|| left_key.cmp(right_key))
-                    })
-                    .map(|(key, _)| key.clone())
-            {
-                cache.entries.remove(&key);
-            }
+            self.store_entry(key, entry)?;
             // A lookup and its following latency request are one logical operation.
-            cache.next_request = None;
+            provider.next_request = None;
             Ok(result)
         } else {
-            cache.next_request = Some(Instant::now() + Duration::from_secs(300));
+            provider.next_request = Some(Instant::now() + Duration::from_secs(300));
             stale_or_error(old.as_ref(), now, "IP provider unavailable")
         }
     }
@@ -395,13 +426,14 @@ async fn run(
     latency: bool,
     refresh: bool,
 ) -> Result<Value, ApiError> {
-    // One bounded serialized provider lane coalesces normal duplicate requests via cache.
-    let mut cache = state.ip_info.inner.lock().await;
+    // One bounded serialized provider lane keeps validation fresh before any outbound
+    // call and coalesces duplicate misses without blocking dashboard cache reads.
+    let mut provider = state.ip_info.provider.lock().await;
     let ip = validate(state, input).await?;
-    let mut base = state.ip_info.fetch(state, &mut cache, ip, false).await?;
+    let mut base = state.ip_info.fetch(state, &mut provider, ip, false).await?;
     base["data"]["uuid"] = json!(input.uuid);
     if latency && base["data"]["excluded"] != true {
-        let result = state.ip_info.fetch(state, &mut cache, ip, true).await;
+        let result = state.ip_info.fetch(state, &mut provider, ip, true).await;
         match result {
             Ok(mut profile) => {
                 profile["data"]["uuid"] = json!(input.uuid);
@@ -470,8 +502,18 @@ pub(crate) async fn enrich_nodes(
             Ok((enabled, rows.collect::<Result<HashMap<_, _>, _>>()?))
         })
         .await?;
-    let cache = state.ip_info.inner.lock().await;
-    enrich_scores(value, &nodes, &cache, include_addresses, include_scores);
+    if !include_scores {
+        if include_addresses {
+            enrich_scores(value, &nodes, None, true);
+        }
+        return Ok(());
+    }
+    let entries = state
+        .ip_info
+        .entries
+        .read()
+        .map_err(|_| ApiError::unavailable("IP cache unavailable"))?;
+    enrich_scores(value, &nodes, Some(&entries), include_addresses);
     Ok(())
 }
 
@@ -480,9 +522,8 @@ pub(crate) async fn enrich_nodes(
 fn enrich_scores(
     value: &mut Value,
     nodes: &HashMap<String, [String; 2]>,
-    cache: &Cache,
+    entries: Option<&HashMap<String, Entry>>,
     include_addresses: bool,
-    include_scores: bool,
 ) {
     if let Some(id) = value["uuid"].as_str() {
         let Some(addresses) = nodes.get(id) else {
@@ -492,13 +533,13 @@ fn enrich_scores(
             value["ipv4"] = json!(addresses[0]);
             value["ipv6"] = json!(addresses[1]);
         }
-        if include_scores {
+        if let Some(entries) = entries {
             let scores: Vec<Value> = addresses
                 .iter()
                 .zip([4, 6])
                 .filter_map(|(address, family)| {
                     let ip = address.parse::<IpAddr>().ok()?;
-                    let entry = cache.entries.get(&format!("{ip}:false"));
+                    let entry = entries.get(&format!("{ip}:false"));
                     let score =
                         entry.and_then(|entry| entry.data["reputation"]["trust_score"].as_f64());
                     Some(json!({
@@ -513,11 +554,11 @@ fn enrich_scores(
         }
     } else if let Some(items) = value.as_object_mut() {
         for item in items.values_mut() {
-            enrich_scores(item, nodes, cache, include_addresses, include_scores);
+            enrich_scores(item, nodes, entries, include_addresses);
         }
     } else if let Some(items) = value.as_array_mut() {
         for item in items {
-            enrich_scores(item, nodes, cache, include_addresses, include_scores);
+            enrich_scores(item, nodes, entries, include_addresses);
         }
     }
 }
@@ -647,7 +688,123 @@ fn normalize_latency(raw: &Value, ip: IpAddr) -> Result<Value, ApiError> {
 
 #[cfg(test)]
 mod tests {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt;
+
     use super::*;
+
+    fn test_state_with_node(ip_info_enabled: bool) -> (tempfile::TempDir, AppState, String) {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::open(&crate::ServiceConfig::with_database(
+            directory.path().join("senlun.db"),
+        ))
+        .unwrap();
+        let mut settings = state.storage.settings().unwrap();
+        settings.private_site = false;
+        settings.ip_info_enabled = ip_info_enabled;
+        state.storage.save_settings(&settings).unwrap();
+        let now_ms = crate::storage::unix_time_ms().unwrap();
+        let secret = state.storage.create_enrollment(600, now_ms).unwrap();
+        let request: senlun_protocol::EnrollmentRequest = serde_json::from_value(json!({
+            "protocol_version": senlun_protocol::PROTOCOL_VERSION,
+            "node_name": "Synthetic IP",
+            "agent_version": "test",
+            "region": "SG",
+            "group": ""
+        }))
+        .unwrap();
+        let enrolled = state
+            .storage
+            .enroll(
+                &request,
+                &crate::storage::hash_token(&secret.token),
+                100,
+                now_ms,
+            )
+            .unwrap();
+        let mut node = state.storage.admin_state().unwrap()["nodes"][0]
+            .as_object()
+            .unwrap()
+            .clone();
+        for key in [
+            "disabled",
+            "traffic_used_up",
+            "traffic_used_down",
+            "selected_traffic",
+            "traffic_next_reset_unix_ms",
+        ] {
+            node.remove(key);
+        }
+        let mut options: crate::control::NodeOptions = serde_json::from_value(json!(node)).unwrap();
+        options.ipv4 = "1.1.1.1".into();
+        state
+            .storage
+            .save_node_options(&enrolled.node_id, &mut options)
+            .unwrap();
+        (directory, state, enrolled.node_id)
+    }
+
+    async fn admin_headers(state: &AppState) -> HeaderMap {
+        let status_response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let cookie = status_response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let body = to_bytes(status_response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let status: Value = serde_json::from_slice(&body).unwrap();
+        let setup_body = json!({
+            "username": "admin",
+            "password": "example-test-password-please-change"
+        });
+        let setup_response = crate::router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/setup")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ORIGIN, "http://127.0.0.1:8080")
+                    .header(header::COOKIE, cookie)
+                    .header("X-CSRF-Token", status["csrf_token"].as_str().unwrap())
+                    .body(Body::from(setup_body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(setup_response.status(), StatusCode::OK);
+        let session_cookie = setup_response
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::COOKIE, session_cookie.parse().unwrap());
+        headers
+    }
+
     #[tokio::test]
     async fn cache_hits_do_not_consume_quota_and_expired_results_survive_limits() {
         let directory = tempfile::tempdir().unwrap();
@@ -657,35 +814,210 @@ mod tests {
         .unwrap();
         let service = &state.ip_info;
         let now = crate::current_time().unwrap() / 1000;
-        let mut cache = Cache {
+        let mut limit = ProviderState {
             day: now / DAY,
             calls: 200,
-            ..Cache::default()
+            ..ProviderState::default()
         };
         let ip = "1.1.1.1".parse().unwrap();
-        cache.entries.insert(
-            format!("{ip}:false"),
-            Entry {
-                data: json!({"test":true}),
-                updated: now,
-                ttl: 60,
-            },
-        );
+        service
+            .store_entry(
+                format!("{ip}:false"),
+                Entry {
+                    data: json!({"test":true}),
+                    updated: now,
+                    ttl: 60,
+                },
+            )
+            .unwrap();
         assert_eq!(
-            service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
+            service.fetch(&state, &mut limit, ip, false).await.unwrap()["meta"]["cache"],
             "hit"
         );
-        cache
-            .entries
-            .get_mut(&format!("{ip}:false"))
-            .unwrap()
-            .updated = now - 61;
+        service
+            .store_entry(
+                format!("{ip}:false"),
+                Entry {
+                    data: json!({"test":true}),
+                    updated: now - 61,
+                    ttl: 60,
+                },
+            )
+            .unwrap();
         assert_eq!(
-            service.fetch(&state, &mut cache, ip, false).await.unwrap()["meta"]["cache"],
+            service.fetch(&state, &mut limit, ip, false).await.unwrap()["meta"]["cache"],
             "stale"
         );
-        assert_eq!(cache.calls, 200);
-        assert!(service.fetch(&state, &mut cache, ip, true).await.is_err());
+        assert_eq!(limit.calls, 200);
+        assert!(service.fetch(&state, &mut limit, ip, true).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn dashboard_enrichment_does_not_block_behind_slow_provider_fetch() {
+        let (_directory, state, node_id) = test_state_with_node(true);
+        let now = crate::current_time().unwrap() / 1000;
+        let cached_ip: IpAddr = "1.1.1.1".parse().unwrap();
+        state
+            .ip_info
+            .store_entry(
+                format!("{cached_ip}:false"),
+                Entry {
+                    data: json!({"reputation": {"trust_score": 88.5}}),
+                    updated: now,
+                    ttl: DAY,
+                },
+            )
+            .unwrap();
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let fetch_state = state.clone();
+        let fetch_task = tokio::spawn(async move {
+            let mut provider = fetch_state.ip_info.provider.lock().await;
+            let target: IpAddr = "8.8.8.8".parse().unwrap();
+            let request = |_url: String| async move {
+                let _ = started_tx.send(());
+                release_rx.await.unwrap()
+            };
+            fetch_state
+                .ip_info
+                .fetch_with(&fetch_state, &mut provider, target, false, request)
+                .await
+        });
+        started_rx.await.unwrap();
+
+        let mut visitor = json!({"data": [{"uuid": node_id}]});
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            enrich_nodes(&state, &HeaderMap::new(), &mut visitor),
+        )
+        .await
+        .expect("dashboard score enrichment must not wait on provider I/O")
+        .unwrap();
+        assert_eq!(visitor["data"][0]["ip_scores"][0]["score"], json!(88.5));
+        assert!(visitor["data"][0].get("ipv4").is_none());
+
+        release_tx
+            .send(Ok(json!({
+                "ip": "8.8.8.8",
+                "countryCode": "US",
+                "registered_country_code": "US",
+                "trust_score": 91.0
+            })))
+            .unwrap();
+        let fetched = fetch_task.await.unwrap().unwrap();
+        assert_eq!(fetched["meta"]["cache"], "miss");
+        assert!(
+            state
+                .ip_info
+                .cached_entry("8.8.8.8:false")
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            state
+                .storage
+                .ip_info_cache()
+                .unwrap()
+                .contains_key("8.8.8.8:false")
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_ip_info_enrichment_skips_score_cache_lock() {
+        let (_directory, state, node_id) = test_state_with_node(false);
+        let headers = admin_headers(&state).await;
+
+        let lock_state = state.clone();
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let locker = std::thread::spawn(move || {
+            let guard = lock_state.ip_info.entries.write().unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(guard);
+        });
+        locked_rx.await.unwrap();
+
+        let mut visitor = json!({"uuid": node_id});
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            enrich_nodes(&state, &HeaderMap::new(), &mut visitor),
+        )
+        .await
+        .expect("disabled visitor enrichment must skip score cache lock")
+        .unwrap();
+        assert!(visitor.get("ipv4").is_none());
+        assert!(visitor.get("ip_scores").is_none());
+
+        let mut admin = json!({"uuid": node_id});
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            enrich_nodes(&state, &headers, &mut admin),
+        )
+        .await
+        .expect("disabled admin enrichment must skip score cache lock")
+        .unwrap();
+        assert_eq!(admin["ipv4"], "1.1.1.1");
+        assert!(admin.get("ip_scores").is_none());
+
+        release_tx.send(()).unwrap();
+        locker.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_failure_sets_backoff_and_cache_remains_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::open(&crate::ServiceConfig::with_database(
+            directory.path().join("senlun.db"),
+        ))
+        .unwrap();
+        let now = crate::current_time().unwrap() / 1000;
+        let ip: IpAddr = "1.1.1.1".parse().unwrap();
+        state
+            .ip_info
+            .store_entry(
+                format!("{ip}:false"),
+                Entry {
+                    data: json!({"test": true}),
+                    updated: now - DAY - 10,
+                    ttl: DAY,
+                },
+            )
+            .unwrap();
+
+        let mut provider = ProviderState::default();
+        let request = |_url: String| async { Err(ApiError::unavailable("synthetic outage")) };
+        let response = state
+            .ip_info
+            .fetch_with(&state, &mut provider, ip, false, request)
+            .await
+            .unwrap();
+        assert_eq!(response["meta"]["cache"], "stale");
+        assert!(
+            provider
+                .next_request
+                .is_some_and(|next| next > Instant::now() + Duration::from_secs(200))
+        );
+
+        for index in 0..=usize::from(MAX_CACHE) + 4 {
+            let offset = u64::try_from(index).unwrap();
+            state
+                .ip_info
+                .store_entry(
+                    format!("1.1.1.{index}:false"),
+                    Entry {
+                        data: json!({"index": index}),
+                        updated: now + offset,
+                        ttl: DAY,
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            state.ip_info.entries.read().unwrap().len(),
+            usize::from(MAX_CACHE)
+        );
     }
     #[test]
     fn blocks_non_public_and_mapped_addresses() {
