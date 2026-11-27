@@ -22,8 +22,14 @@ afterEach(() => {
 
 describe('network quality probe comparison polling', () => {
   it('does not re-fetch or clear rows when dashboard node updates keep the same task id and range', async () => {
+    const initialRow = comparisonRow('node-1', 12.3)
     const nodes = ref([
-      { uuid: 'node-1', probes: [{ id: 'task-a', kind: 'tcp' }] },
+      {
+        uuid: 'node-1',
+        probes: [
+          { id: 'task-a', kind: 'tcp' },
+        ],
+      },
     ])
     const hours = ref(1)
     const task = computed(() => nodes.value.flatMap(node => node.probes).find(probe => probe.kind === 'tcp'))
@@ -31,7 +37,7 @@ describe('network quality probe comparison polling', () => {
     const signals: AbortSignal[] = []
     const fetchComparison = vi.fn(async (_taskId: string, _hours: number, signal: AbortSignal) => {
       signals.push(signal)
-      return [comparisonRow('node-1', 12.3)]
+      return [initialRow]
     })
     let summary: ProbeComparison[] = []
     let loading = false
@@ -51,7 +57,10 @@ describe('network quality probe comparison polling', () => {
     })
 
     const stop = watch(
-      [() => task.value?.id ?? '', hours],
+      [
+        () => task.value?.id ?? '',
+        hours,
+      ],
       ([nextTaskId, nextHours]) => {
         void loader.syncQuery(nextTaskId, nextHours)
       },
@@ -66,24 +75,33 @@ describe('network quality probe comparison polling', () => {
 
     // Simulate repeated 3-second node status polls replacing node/probe objects.
     for (let tick = 0; tick < 5; tick++) {
-      nodes.value = [{ uuid: 'node-1', probes: [{ id: 'task-a', kind: 'tcp' }] }]
+      nodes.value = [
+        {
+          uuid: 'node-1',
+          probes: [
+            { id: 'task-a', kind: 'tcp' },
+          ],
+        },
+      ]
       await nextTick()
       await vi.advanceTimersByTimeAsync(3000)
     }
 
     expect(fetchComparison).toHaveBeenCalledTimes(1)
     expect(signals[0]?.aborted).toBe(false)
-    expect(summary).toEqual([comparisonRow('node-1', 12.3)])
+    expect(summary).toEqual([initialRow])
 
     stop()
     loader.dispose()
   })
 
   it('preserves displayed rows during 30-second background refreshes and transient background failures', async () => {
+    const firstRow = comparisonRow('node-1', 10)
+    const secondRow = comparisonRow('node-1', 14)
     let finishSecond!: (rows: ProbeComparison[]) => void
     let failThird!: (cause: Error) => void
     const fetchComparison = vi.fn()
-      .mockResolvedValueOnce([comparisonRow('node-1', 10)])
+      .mockResolvedValueOnce([firstRow])
       .mockImplementationOnce(() => new Promise<ProbeComparison[]>(resolve => finishSecond = resolve))
       .mockImplementationOnce(() => new Promise<ProbeComparison[]>((_, reject) => failThird = reject))
 
@@ -101,27 +119,30 @@ describe('network quality probe comparison polling', () => {
     })
 
     await loader.syncQuery('task-a', 1)
-    expect(summary).toEqual([comparisonRow('node-1', 10)])
+    expect(summary).toEqual([firstRow])
 
     await vi.advanceTimersByTimeAsync(30_000)
     expect(fetchComparison).toHaveBeenCalledTimes(2)
     // Existing rows stay visible while background refresh is in flight.
-    expect(summary).toEqual([comparisonRow('node-1', 10)])
+    expect(summary).toEqual([firstRow])
 
-    finishSecond([comparisonRow('node-1', 14)])
+    finishSecond([secondRow])
     await vi.advanceTimersByTimeAsync(0)
-    expect(summary).toEqual([comparisonRow('node-1', 14)])
+    expect(summary).toEqual([secondRow])
 
     await vi.advanceTimersByTimeAsync(30_000)
     failThird(new Error('temporary backend outage'))
     await vi.advanceTimersByTimeAsync(0)
     expect(error).toBe('temporary backend outage')
-    expect(summary).toEqual([comparisonRow('node-1', 14)])
+    expect(summary).toEqual([secondRow])
 
     loader.dispose()
   })
 
   it('aborts in-flight queries and clears stale rows when switching task, switching range, or unmounting', async () => {
+    const oldRow = comparisonRow('node-old', 99)
+    const staleRow = comparisonRow('node-stale', 88)
+    const lateRow = comparisonRow('node-late', 55)
     const signals: AbortSignal[] = []
     let resolveFirst!: (rows: ProbeComparison[]) => void
     let resolveSecond!: (rows: ProbeComparison[]) => void
@@ -135,7 +156,7 @@ describe('network quality probe comparison polling', () => {
         return new Promise<ProbeComparison[]>(resolve => resolveSecond = resolve)
       })
 
-    let summary: ProbeComparison[] = [comparisonRow('node-old', 99)]
+    let summary: ProbeComparison[] = [oldRow]
     const loader = createProbeComparisonLoader({
       fetchComparison,
       isVisible: () => true,
@@ -150,21 +171,22 @@ describe('network quality probe comparison polling', () => {
     const second = loader.syncQuery('task-b', 6)
     expect(signals[0]?.aborted).toBe(true)
 
-    resolveFirst([comparisonRow('node-stale', 88)])
+    resolveFirst([staleRow])
     await first
     expect(summary).toEqual([])
 
     loader.dispose()
     expect(signals[1]?.aborted).toBe(true)
 
-    resolveSecond([comparisonRow('node-late', 55)])
+    resolveSecond([lateRow])
     await second
     expect(summary).toEqual([])
   })
 
   it('pauses scheduled refreshes while hidden and refreshes once visible again', async () => {
     let visible = true
-    const fetchComparison = vi.fn().mockResolvedValue([comparisonRow('node-1', 15)])
+    const row = comparisonRow('node-1', 15)
+    const fetchComparison = vi.fn().mockResolvedValue([row])
     const loader = createProbeComparisonLoader({
       fetchComparison,
       isVisible: () => visible,

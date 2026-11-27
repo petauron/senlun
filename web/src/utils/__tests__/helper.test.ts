@@ -11,7 +11,15 @@ import {
 
 describe('byte formatting utilities', () => {
   it('formats zero, negative, and non-finite inputs safely', () => {
-    for (const invalid of [0, -1, -1024, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const invalidValues = [
+      0,
+      -1,
+      -1024,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+    ]
+    for (const invalid of invalidValues) {
       expect(formatBytes(invalid)).toBe('0 B')
       expect(formatBytesWithConfig(invalid)).toBe('0 B')
       expect(formatBytesSplit(invalid)).toEqual({ value: '0', unit: 'B' })

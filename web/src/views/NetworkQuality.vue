@@ -64,7 +64,10 @@ const comparisonLoader = createProbeComparisonLoader({
 })
 
 watch(
-  [() => task.value?.id ?? '', hours],
+  [
+    () => task.value?.id ?? '',
+    hours,
+  ],
   ([nextTaskId, nextHours]) => {
     void comparisonLoader.syncQuery(nextTaskId, nextHours)
   },
