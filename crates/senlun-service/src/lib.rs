@@ -513,8 +513,9 @@ async fn request_guard(
             *request.method(),
             axum::http::Method::GET | axum::http::Method::HEAD
         );
-    // OAuth callback acquires its lease only after external identity verification.
-    // Never let an anonymous slow upload hold the exclusive session lease.
+    // Session-mutating handlers acquire their exclusive lease only around the brief
+    // SQLite session transaction, after Origin/CSRF, rate-limit, and Argon2 checks.
+    // Never let an anonymous slow upload enter authentication handlers unbuffered.
     // Retain the original request parts so cookies, Origin, and CSRF are unchanged.
     let mut request = if auth_mutation {
         match buffer_authentication_body(request).await {
@@ -524,8 +525,8 @@ async fn request_guard(
     } else {
         request
     };
-    let lease = if administrative || auth_mutation {
-        match state.session_gate.acquire(auth_mutation).await {
+    let lease = if administrative {
+        match state.session_gate.acquire(false).await {
             Ok(lease) => Some(lease),
             Err(message) => return ApiError::unavailable(message).into_response(),
         }
@@ -619,10 +620,10 @@ async fn enroll_agent(
     headers: HeaderMap,
     Json(request): Json<EnrollmentRequest>,
 ) -> Result<Response, ApiError> {
-    state.allow_enrollment_attempt().await?;
     ensure_protocol(request.protocol_version)?;
     validate_enrollment(&request)?;
     let enrollment_token_hash = hash_token(bearer_token(&headers)?);
+    state.allow_enrollment_attempt().await?;
     let max_nodes = state.max_nodes;
     let now = current_time()?;
     let enrolled: EnrollmentResponse = state
@@ -2085,5 +2086,145 @@ mod tests {
             .await
             .expect("body-limit response");
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn malformed_enrollment_requests_do_not_consume_enrollment_budget() {
+        let (_directory, state) = test_state();
+        let secret = state
+            .storage
+            .create_enrollment(600, unix_time_ms().unwrap())
+            .unwrap();
+        let valid_body = json!({
+            "protocol_version": PROTOCOL_VERSION,
+            "node_name": "synthetic-node",
+            "agent_version": "0.1.0-test",
+            "region": "SG",
+            "group": "tests"
+        });
+        let bad_protocol = json!({
+            "protocol_version": PROTOCOL_VERSION + 1,
+            "node_name": "synthetic-node",
+            "agent_version": "0.1.0-test",
+            "region": "SG",
+            "group": "tests"
+        });
+
+        for _ in 0..=ENROLLMENT_ATTEMPTS_PER_MINUTE {
+            let missing_token = router(state.clone())
+                .oneshot(json_request("/api/v1/agents/enroll", &valid_body, None))
+                .await
+                .unwrap();
+            assert_eq!(missing_token.status(), StatusCode::UNAUTHORIZED);
+
+            let short_token = router(state.clone())
+                .oneshot(json_request(
+                    "/api/v1/agents/enroll",
+                    &valid_body,
+                    Some("short"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(short_token.status(), StatusCode::UNAUTHORIZED);
+
+            let unsupported = router(state.clone())
+                .oneshot(json_request(
+                    "/api/v1/agents/enroll",
+                    &bad_protocol,
+                    Some("invalid-enrollment-token"),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(unsupported.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let enrolled = router(state)
+            .oneshot(json_request(
+                "/api/v1/agents/enroll",
+                &valid_body,
+                Some(&secret.token),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(enrolled.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn request_guard_does_not_hold_session_gate_before_session_mutation() {
+        let (_directory, state) = test_state();
+        let (cookie, csrf) = initialize_admin(&state).await;
+        let status = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/auth/status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let anon_cookie = status
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+        let anon_csrf = response_json(status).await["csrf_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let admin_lease = state.session_gate.acquire(false).await.unwrap();
+        let wrong_password = timeout(
+            Duration::from_secs(5),
+            router(state.clone()).oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ORIGIN, "http://127.0.0.1:8080")
+                    .header(header::COOKIE, &anon_cookie)
+                    .header("X-CSRF-Token", &anon_csrf)
+                    .body(Body::from(
+                        json!({"username": "admin", "password": "wrong"}).to_string(),
+                    ))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .expect("failed login must not block on an active administration lease")
+        .unwrap();
+        assert_eq!(wrong_password.status(), StatusCode::UNAUTHORIZED);
+        drop(admin_lease);
+
+        let logout = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/logout")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::ORIGIN, "http://127.0.0.1:8080")
+                    .header(header::COOKIE, &cookie)
+                    .header("X-CSRF-Token", &csrf)
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(logout.status(), StatusCode::OK);
+        let after = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/admin/state")
+                    .header(header::COOKIE, &cookie)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
     }
 }

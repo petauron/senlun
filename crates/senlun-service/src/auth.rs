@@ -119,6 +119,8 @@ struct AuthInner {
     database_permit: Arc<Semaphore>,
     password_permit: Arc<Semaphore>,
     attempts: Mutex<VecDeque<Instant>>,
+    oauth_attempts: Mutex<VecDeque<Instant>>,
+    admin_attempts: Mutex<VecDeque<Instant>>,
     origin: String,
     secure: bool,
     github: Option<GithubOAuthConfig>,
@@ -295,6 +297,8 @@ impl AuthState {
                 database_permit: Arc::new(Semaphore::new(1)),
                 password_permit: Arc::new(Semaphore::new(1)),
                 attempts: Mutex::new(VecDeque::with_capacity(MAX_ATTEMPTS)),
+                oauth_attempts: Mutex::new(VecDeque::with_capacity(MAX_ATTEMPTS)),
+                admin_attempts: Mutex::new(VecDeque::with_capacity(MAX_ATTEMPTS)),
                 origin: url.origin().ascii_serialization(),
                 secure: url.scheme() == "https",
                 github: config.github,
@@ -365,6 +369,19 @@ impl AuthState {
         .map_err(|_| AuthError::internal())?
     }
 
+    async fn exclusive_database<T, F>(&self, operation: F) -> Result<T, AuthError>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut Connection) -> Result<T, AuthError> + Send + 'static,
+    {
+        let lease = self
+            .session_gate
+            .acquire(true)
+            .await
+            .map_err(|_| AuthError::internal())?;
+        crate::session_gate::scope(Some(lease), self.database(operation)).await
+    }
+
     async fn password_work<T, F>(&self, operation: F) -> Result<T, AuthError>
     where
         T: Send + 'static,
@@ -377,11 +394,9 @@ impl AuthState {
         .await
         .map_err(|_| AuthError::internal())?
         .map_err(|_| AuthError::internal())?;
-        let session_lease = crate::session_gate::current();
         timeout(
             Duration::from_secs(15),
             tokio::task::spawn_blocking(move || {
-                let _session_lease = session_lease;
                 let _permit = permit;
                 operation()
             }),
@@ -392,26 +407,15 @@ impl AuthState {
     }
 
     fn allow_attempt(&self) -> Result<(), AuthError> {
-        let mut attempts = self
-            .inner
-            .attempts
-            .lock()
-            .map_err(|_| AuthError::internal())?;
-        let now = Instant::now();
-        while attempts
-            .front()
-            .is_some_and(|attempt| now.duration_since(*attempt) >= Duration::from_secs(60))
-        {
-            attempts.pop_front();
-        }
-        if attempts.len() >= MAX_ATTEMPTS {
-            return Err(AuthError {
-                status: StatusCode::TOO_MANY_REQUESTS,
-                message: "too many authentication attempts; retry in one minute",
-            });
-        }
-        attempts.push_back(now);
-        Ok(())
+        record_attempt(&self.inner.attempts)
+    }
+
+    fn allow_oauth_attempt(&self) -> Result<(), AuthError> {
+        record_attempt(&self.inner.oauth_attempts)
+    }
+
+    fn allow_admin_attempt(&self) -> Result<(), AuthError> {
+        record_attempt(&self.inner.admin_attempts)
     }
 
     /// Reports whether the single administrator has completed setup.
@@ -626,6 +630,25 @@ impl AuthState {
     }
 }
 
+fn record_attempt(bucket: &Mutex<VecDeque<Instant>>) -> Result<(), AuthError> {
+    let mut attempts = bucket.lock().map_err(|_| AuthError::internal())?;
+    let now = Instant::now();
+    while attempts
+        .front()
+        .is_some_and(|attempt| now.duration_since(*attempt) >= Duration::from_secs(60))
+    {
+        attempts.pop_front();
+    }
+    if attempts.len() >= MAX_ATTEMPTS {
+        return Err(AuthError {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: "too many authentication attempts; retry in one minute",
+        });
+    }
+    attempts.push_back(now);
+    Ok(())
+}
+
 async fn auth_response_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     response
@@ -688,7 +711,7 @@ async fn setup(
     let pw = request.password;
     let password_hash = state.password_work(move || hash_password(&pw)).await?;
     let token = state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let exists: bool =
@@ -743,7 +766,7 @@ async fn login(
     let expected_hash = entry.password_hash;
     let expected_version = entry.auth_version;
     let token = state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let current = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
@@ -767,7 +790,7 @@ async fn logout(State(state): State<AuthState>, headers: HeaderMap) -> Result<Re
     state.verify_browser(&headers).await?;
     if let Some(session) = state.candidate_session(&headers).await? {
         state
-            .database(move |connection| {
+            .exclusive_database(move |connection| {
                 connection.execute(
                     "DELETE FROM auth_sessions WHERE token_hash = ?1",
                     [session.token_hash],
@@ -792,7 +815,7 @@ async fn change_password(
     Json(request): Json<PasswordRequest>,
 ) -> Result<Response, AuthError> {
     let session = state.require_mutation(&headers).await?;
-    state.allow_attempt()?;
+    state.allow_admin_attempt()?;
     validate_password(&request.new_password)?;
     let check_session = session.clone();
     let snapshot = state
@@ -815,7 +838,7 @@ async fn change_password(
         })
         .await?;
     state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, true)?;
@@ -848,7 +871,7 @@ async fn totp_setup(
     Json(request): Json<TotpSetupRequest>,
 ) -> Result<Json<Value>, AuthError> {
     let session = state.require_mutation(&headers).await?;
-    state.allow_attempt()?;
+    state.allow_admin_attempt()?;
     let check_session = session.clone();
     let snapshot = state
         .database(move |connection| {
@@ -867,7 +890,7 @@ async fn totp_setup(
         return Err(AuthError::unauthorized());
     }
     state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, true)?;
@@ -908,8 +931,8 @@ async fn totp_enable(
     Json(request): Json<TotpCodeRequest>,
 ) -> Result<Response, AuthError> {
     let session = state.require_mutation(&headers).await?;
-    state.allow_attempt()?;
-    state.database(move |connection| {
+    state.allow_admin_attempt()?;
+    state.exclusive_database(move |connection| {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_current_session(&transaction, &session, true)?;
         let pending: Option<(String, Vec<u8>)> = transaction.query_row(
@@ -940,7 +963,7 @@ async fn totp_disable(
     Json(request): Json<TotpDisableRequest>,
 ) -> Result<Response, AuthError> {
     let session = state.require_mutation(&headers).await?;
-    state.allow_attempt()?;
+    state.allow_admin_attempt()?;
     let check_session = session.clone();
     let snapshot = state
         .database(move |connection| {
@@ -959,7 +982,7 @@ async fn totp_disable(
         return Err(AuthError::unauthorized());
     }
     state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, true)?;
@@ -989,12 +1012,12 @@ async fn oauth_start(
     headers: HeaderMap,
 ) -> Result<Response, AuthError> {
     state.verify_browser(&headers).await?;
-    state.allow_attempt()?;
     let github = state
         .inner
         .github
         .as_ref()
         .ok_or(AuthError::bad_request("GitHub OAuth is not configured"))?;
+    state.allow_attempt()?;
     let flow_state = random_token();
     let binding = random_token();
     let verifier = random_token();
@@ -1054,12 +1077,58 @@ struct GithubIdentity {
     id: u64,
 }
 
+fn active_oauth_flow(
+    connection: &Connection,
+    state_hash: &str,
+    binding_hash: &str,
+) -> Result<Option<(String, i64)>, AuthError> {
+    Ok(connection
+        .query_row(
+            "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
+             WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
+            params![state_hash, binding_hash, now_seconds()?],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?)
+}
+
+async fn consume_oauth_flow(
+    state: &AuthState,
+    state_hash: String,
+    binding_hash: String,
+) -> Result<(String, i64), AuthError> {
+    let attempt_state = state.clone();
+    state
+        .database(move |connection| {
+            // Confirm a matching active flow read-only first so unmatched callbacks
+            // never acquire a SQLite write reservation or consume callback quota.
+            let exists = active_oauth_flow(connection, &state_hash, &binding_hash)?;
+            if exists.is_none() {
+                return Err(AuthError::unauthorized());
+            }
+            let transaction =
+                connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let flow = active_oauth_flow(&transaction, &state_hash, &binding_hash)?
+                .ok_or(AuthError::unauthorized())?;
+            attempt_state.allow_oauth_attempt()?;
+            let deleted = transaction.execute(
+                "DELETE FROM auth_oauth_flows WHERE state_hash = ?1 AND binding_hash = ?2",
+                params![state_hash, binding_hash],
+            )?;
+            if deleted != 1 {
+                return Err(AuthError::unauthorized());
+            }
+            transaction.commit()?;
+            Ok(flow)
+        })
+        .await
+}
+
 async fn oauth_callback(
     State(state): State<AuthState>,
     headers: HeaderMap,
     Query(query): Query<OAuthCallback>,
 ) -> Result<Response, AuthError> {
-    state.allow_attempt()?;
     let github = state
         .inner
         .github
@@ -1076,18 +1145,7 @@ async fn oauth_callback(
     let binding = cookie(&headers, state.oauth_cookie_name()).ok_or(AuthError::unauthorized())?;
     let state_hash = hash(&flow_state);
     let binding_hash = hash(&binding);
-    let (verifier, auth_version) = state.database(move |connection| {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let flow: Option<(String, i64)> = transaction.query_row(
-            "SELECT f.verifier, f.auth_version FROM auth_oauth_flows f JOIN auth_admin a ON a.auth_version = f.auth_version
-             WHERE f.state_hash = ?1 AND f.binding_hash = ?2 AND f.expires_at > ?3 AND a.id = 1",
-            params![state_hash, binding_hash, now_seconds()?], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?;
-        let flow = flow.ok_or(AuthError::unauthorized())?;
-        transaction.execute("DELETE FROM auth_oauth_flows WHERE state_hash = ?1", [state_hash])?;
-        transaction.commit()?;
-        Ok(flow)
-    }).await?;
+    let (verifier, auth_version) = consume_oauth_flow(&state, state_hash, binding_hash).await?;
     let (token, complete) = oauth_session_after_identity(
         &state,
         auth_version,
@@ -1122,14 +1180,8 @@ async fn oauth_session_after_identity(
     if identity.await?.id != allowed_user_id {
         return Err(AuthError::unauthorized());
     }
-    let lease = state
-        .session_gate
-        .acquire(true)
-        .await
-        .map_err(|_| AuthError::internal())?;
-    crate::session_gate::scope(
-        Some(lease),
-        state.database(move |connection| {
+    state
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let admin = admin(&transaction)?.ok_or(AuthError::unauthorized())?;
@@ -1148,9 +1200,8 @@ async fn oauth_session_after_identity(
             )?;
             transaction.commit()?;
             Ok((token, complete))
-        }),
-    )
-    .await
+        })
+        .await
 }
 
 async fn oauth_complete(
@@ -1168,7 +1219,7 @@ async fn oauth_complete(
         return Err(AuthError::unauthorized());
     }
     let token = state
-        .database(move |connection| {
+        .exclusive_database(move |connection| {
             let transaction =
                 connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
             require_current_session(&transaction, &session, false)?;
@@ -2061,18 +2112,14 @@ mod tests {
         .await
         .unwrap();
         assert!(authorization.is_some());
-        let revoke_lease = state.session_gate.acquire(true).await.unwrap();
-        let response = crate::session_gate::scope(
-            Some(revoke_lease),
-            request(
-                &state,
-                "POST",
-                "/api/auth/password",
-                &cookie,
-                Some(&csrf),
-                Some(TEST_ORIGIN),
-                json!({"current_password":PASSWORD,"new_password":"replacement password during OAuth lookup"}),
-            ),
+        let response = request(
+            &state,
+            "POST",
+            "/api/auth/password",
+            &cookie,
+            Some(&csrf),
+            Some(TEST_ORIGIN),
+            json!({"current_password":PASSWORD,"new_password":"replacement password during OAuth lookup"}),
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -2213,5 +2260,315 @@ mod tests {
                 .unwrap(),
         );
         assert!(cookie(&duplicate, "senlun_session").is_none());
+    }
+
+    #[tokio::test]
+    async fn unconfigured_and_malformed_oauth_callbacks_do_not_consume_login_budget() {
+        let (_directory, state) = state();
+        initialize(&state).await;
+        let (anon_cookie, anon_csrf) = anonymous(&state).await;
+        for _ in 0..=MAX_ATTEMPTS {
+            let response = request(
+                &state,
+                "GET",
+                "/api/auth/oauth/callback",
+                "",
+                None,
+                None,
+                json!(null),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        let login = request(
+            &state,
+            "POST",
+            "/api/auth/login",
+            &anon_cookie,
+            Some(&anon_csrf),
+            Some(TEST_ORIGIN),
+            json!({ "username": "admin", "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(login.status(), StatusCode::OK);
+    }
+
+    fn oauth_state() -> (tempfile::TempDir, std::path::PathBuf, AuthState) {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("senlun.db");
+        let _storage = crate::storage::Storage::open(&database, 32 * 1024 * 1024).unwrap();
+        let state = AuthState::new(
+            &database,
+            AuthConfig {
+                public_url: TEST_ORIGIN.to_owned(),
+                github: Some(GithubOAuthConfig {
+                    client_id: "synthetic-client".to_owned(),
+                    client_secret: "synthetic-secret".to_owned(),
+                    allowed_user_id: 42,
+                }),
+            },
+            32 * 1024 * 1024,
+        )
+        .unwrap();
+        (directory, database, state)
+    }
+
+    async fn insert_oauth_flow(
+        state: &AuthState,
+        state_hash: String,
+        binding_hash: String,
+        verifier: &'static str,
+    ) -> i64 {
+        state
+            .database(move |connection| {
+                let version = admin(connection)?
+                    .ok_or(AuthError::unauthorized())?
+                    .auth_version;
+                connection.execute(
+                    "INSERT INTO auth_oauth_flows (state_hash, binding_hash, verifier, auth_version, expires_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        state_hash,
+                        binding_hash,
+                        verifier,
+                        version,
+                        now_seconds()? + FLOW_TTL,
+                    ],
+                )?;
+                Ok(version)
+            })
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn unmatched_oauth_callback_stays_read_only_and_uncounted() {
+        let (_directory, database, state) = oauth_state();
+        initialize(&state).await;
+
+        let flow_state = random_token();
+        let valid_binding = random_token();
+        let wrong_binding = random_token();
+        let state_hash = hash(&flow_state);
+        let binding_hash = hash(&valid_binding);
+        insert_oauth_flow(
+            &state,
+            state_hash.clone(),
+            binding_hash.clone(),
+            "synthetic-verifier",
+        )
+        .await;
+
+        let (locked_tx, locked_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let writer = std::thread::spawn(move || {
+            let mut connection = Connection::open(&database).unwrap();
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv_timeout(Duration::from_secs(5));
+            drop(transaction);
+        });
+        locked_rx.await.unwrap();
+
+        let wrong_cookie = format!("{}={wrong_binding}", state.oauth_cookie_name());
+        let callback_path = format!("/api/auth/oauth/callback?code=synthetic&state={flow_state}");
+        let wrong = timeout(
+            Duration::from_secs(2),
+            request(
+                &state,
+                "GET",
+                &callback_path,
+                &wrong_cookie,
+                None,
+                None,
+                json!(null),
+            ),
+        )
+        .await
+        .expect("unmatched callback must not wait for a SQLite write reservation");
+        assert_eq!(wrong.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 0);
+
+        release_tx.send(()).unwrap();
+        writer.join().unwrap();
+
+        let (verifier, _) = consume_oauth_flow(&state, state_hash, binding_hash)
+            .await
+            .unwrap();
+        assert_eq!(verifier, "synthetic-verifier");
+    }
+
+    #[tokio::test]
+    async fn oauth_callback_rate_limit_requires_a_matching_flow_and_is_isolated() {
+        let (_directory, _database, state) = oauth_state();
+        initialize(&state).await;
+        let (anon_cookie, anon_csrf) = anonymous(&state).await;
+
+        let state_hash = hash(&random_token());
+        let binding_hash = hash(&random_token());
+        let auth_version = insert_oauth_flow(
+            &state,
+            state_hash.clone(),
+            binding_hash.clone(),
+            "synthetic-verifier",
+        )
+        .await;
+
+        let (verifier, version) =
+            consume_oauth_flow(&state, state_hash.clone(), binding_hash.clone())
+                .await
+                .unwrap();
+        assert_eq!(verifier, "synthetic-verifier");
+        assert_eq!(version, auth_version);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 1);
+        let replay = consume_oauth_flow(&state, state_hash, binding_hash)
+            .await
+            .unwrap_err();
+        assert_eq!(replay.status, StatusCode::UNAUTHORIZED);
+        assert_eq!(state.inner.oauth_attempts.lock().unwrap().len(), 1);
+
+        for _ in 1..MAX_ATTEMPTS {
+            state.allow_oauth_attempt().unwrap();
+        }
+        let next_state_hash = hash(&random_token());
+        let next_binding_hash = hash(&random_token());
+        insert_oauth_flow(
+            &state,
+            next_state_hash.clone(),
+            next_binding_hash.clone(),
+            "synthetic-verifier-2",
+        )
+        .await;
+        let limited = consume_oauth_flow(&state, next_state_hash, next_binding_hash)
+            .await
+            .unwrap_err();
+        assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+
+        let login = request(
+            &state,
+            "POST",
+            "/api/auth/login",
+            &anon_cookie,
+            Some(&anon_csrf),
+            Some(TEST_ORIGIN),
+            json!({ "username": "admin", "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(login.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn password_hashing_and_pre_auth_checks_do_not_hold_session_gate() {
+        let (_directory, state) = state();
+        initialize(&state).await;
+        let (anon_cookie, anon_csrf) = anonymous(&state).await;
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::sync_channel(1);
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move {
+            worker_state
+                .password_work(move || {
+                    let _ = started_tx.send(());
+                    finish_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .map_err(|_| AuthError::internal())?;
+                    Ok(())
+                })
+                .await
+        });
+        started_rx.await.unwrap();
+        assert!(state.session_gate.write_available());
+        let admin_lease = state.session_gate.acquire(false).await.unwrap();
+        finish_tx.send(()).unwrap();
+        worker.await.unwrap().unwrap();
+
+        let bad_origin = timeout(
+            Duration::from_secs(5),
+            request(
+                &state,
+                "POST",
+                "/api/auth/login",
+                &anon_cookie,
+                Some(&anon_csrf),
+                None,
+                json!({ "username": "admin", "password": "wrong" }),
+            ),
+        )
+        .await
+        .expect("pre-auth origin check must not wait on session gate");
+        assert_eq!(bad_origin.status(), StatusCode::FORBIDDEN);
+
+        let wrong_password = timeout(
+            Duration::from_secs(5),
+            request(
+                &state,
+                "POST",
+                "/api/auth/login",
+                &anon_cookie,
+                Some(&anon_csrf),
+                Some(TEST_ORIGIN),
+                json!({ "username": "admin", "password": "wrong" }),
+            ),
+        )
+        .await
+        .expect("password verification must not wait on session gate");
+        assert_eq!(wrong_password.status(), StatusCode::UNAUTHORIZED);
+
+        let empty_logout = timeout(
+            Duration::from_secs(5),
+            request(
+                &state,
+                "POST",
+                "/api/auth/logout",
+                &anon_cookie,
+                Some(&anon_csrf),
+                Some(TEST_ORIGIN),
+                json!({}),
+            ),
+        )
+        .await
+        .expect("logout without a session must not wait on session gate");
+        assert_eq!(empty_logout.status(), StatusCode::OK);
+
+        drop(admin_lease);
+        assert!(state.session_gate.write_available());
+    }
+
+    #[tokio::test]
+    async fn authenticated_account_mutations_are_isolated_from_login_budget() {
+        let (_directory, state) = state();
+        let (session_cookie, session_csrf) = initialize(&state).await;
+        let (anon_cookie, anon_csrf) = anonymous(&state).await;
+
+        // initialize() already consumed one attempt in the shared login bucket.
+        for _ in 1..MAX_ATTEMPTS {
+            state.allow_attempt().unwrap();
+        }
+        let limited = request(
+            &state,
+            "POST",
+            "/api/auth/login",
+            &anon_cookie,
+            Some(&anon_csrf),
+            Some(TEST_ORIGIN),
+            json!({ "username": "admin", "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        let change = request(
+            &state,
+            "POST",
+            "/api/auth/password",
+            &session_cookie,
+            Some(&session_csrf),
+            Some(TEST_ORIGIN),
+            json!({ "current_password": PASSWORD, "new_password": "updated" }),
+        )
+        .await;
+        assert_eq!(change.status(), StatusCode::OK);
     }
 }
