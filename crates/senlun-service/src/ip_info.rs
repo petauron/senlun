@@ -725,24 +725,15 @@ mod tests {
                 now_ms,
             )
             .unwrap();
-        let mut node = state.storage.admin_state().unwrap()["nodes"][0]
-            .as_object()
-            .unwrap()
-            .clone();
-        for key in [
-            "disabled",
-            "traffic_used_up",
-            "traffic_used_down",
-            "selected_traffic",
-            "traffic_next_reset_unix_ms",
-        ] {
-            node.remove(key);
-        }
-        let mut options: crate::control::NodeOptions = serde_json::from_value(json!(node)).unwrap();
-        options.ipv4 = "1.1.1.1".into();
+        let options = json!({"ipv4": "198.51.100.10"}).to_string();
         state
             .storage
-            .save_node_options(&enrolled.node_id, &mut options)
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO node_options (node_id, data) VALUES (?1, ?2)",
+                params![enrolled.node_id, options],
+            )
             .unwrap();
         (directory, state, enrolled.node_id)
     }
@@ -856,7 +847,7 @@ mod tests {
     async fn dashboard_enrichment_does_not_block_behind_slow_provider_fetch() {
         let (_directory, state, node_id) = test_state_with_node(true);
         let now = crate::current_time().unwrap() / 1000;
-        let cached_ip: IpAddr = "1.1.1.1".parse().unwrap();
+        let cached_ip: IpAddr = "198.51.100.10".parse().unwrap();
         state
             .ip_info
             .store_entry(
@@ -874,7 +865,7 @@ mod tests {
         let fetch_state = state.clone();
         let fetch_task = tokio::spawn(async move {
             let mut provider = fetch_state.ip_info.provider.lock().await;
-            let target: IpAddr = "8.8.8.8".parse().unwrap();
+            let target: IpAddr = "203.0.113.20".parse().unwrap();
             let request = |_url: String| async move {
                 let _ = started_tx.send(());
                 release_rx.await.unwrap()
@@ -899,7 +890,7 @@ mod tests {
 
         release_tx
             .send(Ok(json!({
-                "ip": "8.8.8.8",
+                "ip": "203.0.113.20",
                 "countryCode": "US",
                 "registered_country_code": "US",
                 "trust_score": 91.0
@@ -910,17 +901,21 @@ mod tests {
         assert!(
             state
                 .ip_info
-                .cached_entry("8.8.8.8:false")
+                .cached_entry("203.0.113.20:false")
                 .unwrap()
                 .is_some()
         );
-        assert!(
-            state
-                .storage
-                .ip_info_cache()
-                .unwrap()
-                .contains_key("8.8.8.8:false")
-        );
+        let persisted: i64 = state
+            .storage
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM ip_info_cache WHERE cache_key = ?1",
+                ["203.0.113.20:false"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(persisted, 1);
     }
 
     #[tokio::test]
@@ -958,7 +953,7 @@ mod tests {
         .await
         .expect("disabled admin enrichment must skip score cache lock")
         .unwrap();
-        assert_eq!(admin["ipv4"], "1.1.1.1");
+        assert_eq!(admin["ipv4"], "198.51.100.10");
         assert!(admin.get("ip_scores").is_none());
 
         release_tx.send(()).unwrap();
@@ -973,7 +968,7 @@ mod tests {
         ))
         .unwrap();
         let now = crate::current_time().unwrap() / 1000;
-        let ip: IpAddr = "1.1.1.1".parse().unwrap();
+        let ip: IpAddr = "198.51.100.10".parse().unwrap();
         state
             .ip_info
             .store_entry(
@@ -1005,7 +1000,7 @@ mod tests {
             state
                 .ip_info
                 .store_entry(
-                    format!("1.1.1.{index}:false"),
+                    format!("2001:db8::{index:x}:false"),
                     Entry {
                         data: json!({"index": index}),
                         updated: now + offset,
