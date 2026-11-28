@@ -10,7 +10,10 @@ import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { getSharedApi } from '@/utils/api'
 
-const props = defineProps<{ node: NodeData, compact?: boolean }>()
+const props = withDefaults(defineProps<{ node: NodeData, compact?: boolean, mobileTouchTarget?: boolean }>(), {
+  compact: false,
+  mobileTouchTarget: false,
+})
 const app = useAppStore()
 const nodes = useNodesStore()
 const { family, version, versions } = useNodeIpVersion(() => props.node)
@@ -178,7 +181,12 @@ async function detect() {
     <span v-if="message || busy" role="status" class="absolute bottom-full left-0 z-10 rounded bg-popover px-2 py-1 text-xs">{{ message || status }}</span>
   </div>
   <div v-else class="space-y-1.5 py-1">
-    <div class="flex min-h-8 items-center justify-between gap-2">
+    <div
+      class="flex min-h-8 justify-between gap-2"
+      :class="mobileTouchTarget
+        ? 'flex-col items-stretch sm:flex-row sm:items-center'
+        : 'items-center'"
+    >
       <div class="min-w-0 flex-1">
         <div class="text-[11px] font-medium text-foreground">
           网络质量
@@ -187,11 +195,24 @@ async function detect() {
           {{ status }}
         </div>
       </div>
-      <div class="flex shrink-0 items-center gap-1">
-        <NodeIpVersionSwitch :node="node" />
+      <div
+        class="flex shrink-0 items-center"
+        :class="mobileTouchTarget
+          ? 'w-full justify-between gap-4 sm:w-auto sm:justify-end sm:gap-2.5'
+          : 'gap-1'"
+      >
+        <NodeIpVersionSwitch :node="node" :mobile-touch-target="mobileTouchTarget" />
         <Button
-          v-if="app.isLoggedIn" variant="ghost" size="xs" class="h-7 rounded-full px-2 text-[10px]"
-          :disabled="busy || !ready" :title="hint" :aria-label="`${node.name} 检测 IPv${family} 网络质量`"
+          v-if="app.isLoggedIn"
+          variant="ghost"
+          size="xs"
+          class="rounded-full"
+          :class="mobileTouchTarget
+            ? 'ml-auto h-auto min-h-11 border border-border/60 px-3.5 text-xs sm:ml-0 sm:h-7 sm:min-h-0 sm:border-transparent sm:px-2 sm:text-[10px]'
+            : 'h-7 px-2 text-[10px]'"
+          :disabled="busy || !ready"
+          :title="hint"
+          :aria-label="`${node.name} 检测 IPv${family} 网络质量`"
           @keydown.enter.stop @keydown.space.stop
           @click.stop="detect"
         >

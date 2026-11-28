@@ -292,7 +292,7 @@ const trafficProgressStyle = computed(() => ({
         <NodeUnlockSummary :node="data" mode="badge" />
       </div>
       <div class="max-w-md px-4">
-        <NodeNetworkControls :node="data" />
+        <NodeNetworkControls :node="data" mobile-touch-target />
         <NodeReturnRoutes :node="data" />
       </div>
       <NodeUnlockSummary :node="data" mode="panel" />

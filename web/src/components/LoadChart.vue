@@ -14,6 +14,7 @@ import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { formatBytes, formatBytesSplit } from '@/utils/helper'
+import { getLoadChartStatusDisplay } from '@/utils/loadChartStatus'
 import { alignRecordsToTimeWindow } from '@/utils/recordHelper'
 import { getSharedRpc } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
@@ -156,9 +157,12 @@ const isRealtime = computed(() => selectedView.value === '实时')
 // 数据状态
 const remoteData = shallowRef<StatusRecord[]>([])
 const coverage = shallowRef<HistoryCoverage | null>(null)
+const loadedScopeKey = ref<string | null>(null)
 const loading = ref(false)
 const isInitialLoad = ref(true) // 是否为首次加载（用于控制实时模式下的 NSpin 显示）
 const error = ref<string | null>(null)
+const currentScopeKey = computed(() => `${props.uuid}:${selectedView.value}`)
+const coverageMatchesSelection = computed(() => loadedScopeKey.value === currentScopeKey.value)
 
 // 节点信息
 const nodeInfo = computed(() => nodesStore.nodesByUuid.get(props.uuid))
@@ -202,6 +206,9 @@ async function fetchData() {
   if (!uuid) {
     requestGeneration++
     activeRequest = null
+    remoteData.value = []
+    coverage.value = null
+    loadedScopeKey.value = null
     loading.value = false
     return
   }
@@ -211,6 +218,7 @@ async function fetchData() {
   const generation = ++requestGeneration
   const realtime = isRealtime.value
   const hours = selectedHours.value || 4
+  const scopeKey = `${uuid}:${selectedView.value}`
   if (!realtime || isInitialLoad.value)
     loading.value = true
   error.value = null
@@ -227,6 +235,7 @@ async function fetchData() {
     )
     remoteData.value = records
     coverage.value = result.coverage
+    loadedScopeKey.value = scopeKey
   }
   catch (err) {
     if (controller.signal.aborted || generation !== requestGeneration)
@@ -236,6 +245,7 @@ async function fetchData() {
       : '获取数据失败'
     remoteData.value = []
     coverage.value = null
+    loadedScopeKey.value = null
   }
   finally {
     if (generation === requestGeneration) {
@@ -318,14 +328,22 @@ const hasConnectionData = computed(() => remoteData.value.some(record =>
 ))
 const hasProcessData = computed(() => remoteData.value.some(record => record.process != null))
 const tableRows = computed(() => remoteData.value.slice(-100))
+const statusDisplay = computed(() => getLoadChartStatusDisplay({
+  isRealtime: isRealtime.value,
+  loading: loading.value,
+  error: error.value,
+  hasRecords: remoteData.value.length > 0,
+  coverage: coverage.value,
+  coverageMatchesSelection: coverageMatchesSelection.value,
+}))
 const chartSummary = computed(() => {
   const latest = latestStatus.value
   if (!latest)
     return '当前没有可用的节点历史数据。'
-  const range = coverage.value
-    ? `${new Date(coverage.value.requested_start_unix_ms).toLocaleString()} 至 ${new Date(coverage.value.requested_end_unix_ms).toLocaleString()}`
+  const range = statusDisplay.value.rangeLabel
+    ? statusDisplay.value.statusText
     : '当前时间窗'
-  return `${range}；最新 CPU ${latest.cpu.toFixed(1)}%，1 分钟负载 ${latest.load.toFixed(2)}，内存 ${formatBytes(latest.ram)}，磁盘 ${formatBytes(latest.disk)}。`
+  return `${statusDisplay.value.modeLabel}，${range}；最新 CPU ${latest.cpu.toFixed(1)}%，1 分钟负载 ${latest.load.toFixed(2)}，内存 ${formatBytes(latest.ram)}，磁盘 ${formatBytes(latest.disk)}。`
 })
 
 function chartAria(description: string) {
@@ -913,6 +931,10 @@ watch(isRealtime, (realtime) => {
 // 生命周期 ====================
 
 watch(selectedView, () => {
+  remoteData.value = []
+  coverage.value = null
+  loadedScopeKey.value = null
+  error.value = null
   isInitialLoad.value = true // 切换视图时重置首次加载状态
   fetchData()
 })
@@ -920,6 +942,8 @@ watch(selectedView, () => {
 watch(() => props.uuid, () => {
   remoteData.value = []
   coverage.value = null
+  loadedScopeKey.value = null
+  error.value = null
   isInitialLoad.value = true // 切换节点时重置首次加载状态
   fetchData()
 })
@@ -938,16 +962,52 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex flex-col gap-4">
     <!-- 时间选择器 -->
-    <Tabs v-model="selectedView" class="w-full items-center">
-      <TabsList :class="pickSurfaceClass('h-8 bg-background/60 pointer-events-auto rounded-md', 'h-8 bg-background/50 backdrop-blur-xl pointer-events-auto rounded-md')">
-        <TabsTrigger
-          v-for="view in availableViews" :key="view.label" :value="view.label"
-          class="h-6.5 text-xs border-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-600 shadow-none rounded-sm"
+    <div class="flex flex-col items-center gap-2">
+      <Tabs v-model="selectedView" class="w-full items-center">
+        <div class="flex w-full max-w-full overflow-x-auto px-0.5 py-0.5">
+          <TabsList
+            aria-label="资源负载时间范围"
+            :class="pickSurfaceClass(
+              'mx-auto inline-flex h-auto w-max min-w-fit gap-1 rounded-md bg-background/60 p-1 pointer-events-auto group-data-horizontal/tabs:h-auto sm:gap-0 sm:p-[3px] sm:group-data-horizontal/tabs:h-8',
+              'mx-auto inline-flex h-auto w-max min-w-fit gap-1 rounded-md bg-background/50 p-1 backdrop-blur-xl pointer-events-auto group-data-horizontal/tabs:h-auto sm:gap-0 sm:p-[3px] sm:group-data-horizontal/tabs:h-8',
+            )"
+          >
+            <TabsTrigger
+              v-for="view in availableViews" :key="view.label" :value="view.label"
+              class="h-auto min-h-11 min-w-11 flex-none shrink-0 rounded-sm border-none px-3 text-xs shadow-none sm:h-6.5 sm:min-h-0 sm:min-w-0 sm:px-2 data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-600"
+            >
+              {{ view.label }}
+            </TabsTrigger>
+          </TabsList>
+        </div>
+      </Tabs>
+
+      <div
+        class="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 text-xs"
+        data-testid="load-chart-status"
+      >
+        <span
+          class="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium leading-none"
+          :class="statusDisplay.isRealtime
+            ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700 dark:border-[#228d5a]/50 dark:bg-[#0d2817] dark:text-[#04b84c]'
+            : 'border-border/70 bg-background/80 text-foreground/80'"
+          data-testid="load-chart-mode"
         >
-          {{ view.label }}
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
+          <span
+            v-if="statusDisplay.isRealtime"
+            class="size-1.5 rounded-full bg-emerald-600 dark:bg-[#04b84c]"
+            aria-hidden="true"
+          />
+          {{ statusDisplay.modeLabel }}
+        </span>
+        <span
+          class="tabular-nums text-foreground/80"
+          data-testid="load-chart-coverage"
+        >
+          {{ statusDisplay.statusText }}
+        </span>
+      </div>
+    </div>
 
     <!-- 内容区域 -->
     <Spinner :show="loading">
@@ -955,7 +1015,7 @@ onBeforeUnmount(() => {
         {{ chartSummary }}
       </p>
       <p
-        v-if="coverage?.downsampled"
+        v-if="coverageMatchesSelection && coverage?.downsampled"
         class="mb-3 text-center text-[11px] text-muted-foreground"
       >
         已将 {{ coverage.source_points.toLocaleString() }} 个采样点按完整时间范围聚合为
