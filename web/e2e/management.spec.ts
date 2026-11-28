@@ -147,7 +147,11 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
     await expect(latencyPanel).toHaveAttribute('title', new RegExp(`${name} · 最近 1 小时平均延迟 \\d+ ms`))
     await expect(page.getByRole('button', { name: `e2e-node ${name} 失败率` })).toHaveAttribute('title', new RegExp(`${name} · 最近 1 小时平均失败率 [\\d.]+%`))
     const latencySample = latencyPanel.locator('[data-slot="data-tooltip"]').last()
-    await latencySample.dispatchEvent('pointerenter')
+    await latencySample.scrollIntoViewIfNeeded()
+    if (await page.evaluate(() => innerWidth > 640))
+      await latencySample.hover()
+    else
+      await latencySample.dispatchEvent('pointerenter')
     const tooltipId = await latencySample.getAttribute('aria-describedby')
     expect(tooltipId).toBeTruthy()
     const latencyTooltip = page.locator(`[id="${tooltipId}"]`)
