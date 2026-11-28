@@ -1,6 +1,6 @@
 import type { IpUnlockReport } from '@/utils/rpc'
 import { describe, expect, it } from 'vitest'
-import { getGoogleUnlockDisplay, getOrderedUnlockServices } from '../ipUnlock'
+import { getGoogleUnlockDisplay, getOrderedUnlockServices, getUnlockPanelState } from '../ipUnlock'
 
 function makeReport(overrides: Partial<IpUnlockReport> = {}): IpUnlockReport {
   return {
@@ -71,5 +71,27 @@ describe('ipUnlock helpers', () => {
     expect(china.label).toBe('已送中 (CN)')
     expect(china.hint).toBe('Google / YouTube 识别为中国大陆')
     expect(china.isChina).toBe(true)
+  })
+
+  it('distinguishes missing unlock records from address_changed in the detail panel state', () => {
+    const ready = getUnlockPanelState(makeReport({ family: 4, address_changed: false }), 4)
+    expect(ready.status).toBe('ready')
+
+    const missing = getUnlockPanelState(undefined, 6)
+    expect(missing.status).toBe('empty')
+    expect(missing.badgeLabel).toBe('暂无记录')
+    expect(missing.title).toContain('IPv6')
+    expect(missing.title).toContain('暂无')
+    expect(missing.description).not.toContain('回程')
+    expect(missing.description).not.toContain('点击')
+
+    const changed = getUnlockPanelState(makeReport({ family: 6, address_changed: true }), 6)
+    expect(changed.status).toBe('address_changed')
+    expect(changed.badgeLabel).toBe('地址已变更')
+    expect(changed.title).toContain('IPv6')
+    expect(changed.title).toContain('不再适用于当前地址')
+    expect(changed.description).not.toContain('回程')
+    expect(changed.title).not.toBe(missing.title)
+    expect(changed.badgeLabel).not.toBe(missing.badgeLabel)
   })
 })

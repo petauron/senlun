@@ -12,12 +12,26 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { fetchProbeHistory } from '@/utils/admin'
+import {
+  DETAIL_RANGE_TAB_PILL,
+  DETAIL_RANGE_TAB_TRIGGER,
+  DETAIL_RANGE_TABS_LIST_BLUR,
+  DETAIL_RANGE_TABS_LIST_PLAIN,
+} from '@/utils/detailTabs'
 import { isIPv6Probe } from '@/utils/nodeHelpers'
 import { probeChartSeries, probeFailureSeries } from '@/utils/probeChart'
 import { failureRateLabel, failureRateLabelForKinds } from '@/utils/probeLabels'
 import '@/utils/echarts'
 
-const props = defineProps<{ uuid: string, kind?: 'icmp' | 'tcp' | 'http', taskId?: string, selectedHours?: number }>()
+const props = withDefaults(defineProps<{
+  uuid: string
+  kind?: 'icmp' | 'tcp' | 'http'
+  taskId?: string
+  selectedHours?: number
+  detailInteractions?: boolean
+}>(), {
+  detailInteractions: false,
+})
 const app = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const presetRanges = [1, 6, 12, 24, 72, 168]
@@ -124,6 +138,7 @@ const taskIds = computed(() => new Set(tasks.value.map(task => task.id)))
 const selectedTaskIds = ref<string[]>([])
 const analysisTaskId = ref('')
 const focusedTaskId = ref('')
+const highlightedTaskId = ref('')
 let comparisonSelection: string[] | null = null
 let selectionInitialized = false
 watch(tasks, (available) => {
@@ -175,9 +190,19 @@ function clearLineFocus(): void {
   focusedTaskId.value = ''
   comparisonSelection = null
 }
+function clearChartInteraction(): void {
+  highlightedTaskId.value = ''
+  for (const value of [combinedChartRef.value, latencyChartRef.value, failureChartRef.value]) {
+    const chart = value as Pick<EChartsType, 'dispatchAction'> | null
+    chart?.dispatchAction({ type: 'downplay' })
+    chart?.dispatchAction({ type: 'hideTip' })
+  }
+}
 function selectLines(ids: string[]): void {
   clearLineFocus()
   selectedTaskIds.value = ids
+  if (props.detailInteractions)
+    clearChartInteraction()
 }
 function focusTask(id: string): void {
   analysisTaskId.value = id
@@ -192,23 +217,106 @@ function focusTask(id: string): void {
     focusedTaskId.value = id
     selectedTaskIds.value = [id]
   }
+  if (props.detailInteractions)
+    clearChartInteraction()
 }
 function highlightTask(id?: string): void {
+  const activeId = id && selectedTaskIds.value.includes(id)
+    ? id
+    : ''
+  highlightedTaskId.value = activeId
   // Dispatch emphasis only: keep the chart instance, zoom and cached series.
   for (const value of [combinedChartRef.value, latencyChartRef.value, failureChartRef.value]) {
     const chart = value as Pick<EChartsType, 'dispatchAction'> | null
     chart?.dispatchAction({ type: 'downplay' })
-    if (id && selectedTaskIds.value.includes(id)) {
+    if (activeId) {
       chart?.dispatchAction({
         type: 'highlight',
-        seriesId: [`${id}:latency`, `${id}:failure-rate`],
+        seriesId: [`${activeId}:latency`, `${activeId}:failure-rate`],
       })
     }
   }
 }
+function onTaskPointerEnter(id: string, event: PointerEvent): void {
+  if (props.detailInteractions && event.pointerType !== 'mouse')
+    return
+  highlightTask(id)
+}
+function onTaskPointerLeave(event: PointerEvent): void {
+  if (props.detailInteractions && event.pointerType !== 'mouse')
+    return
+  highlightTask()
+}
+function onTaskFocus(id: string, event: FocusEvent): void {
+  if (props.detailInteractions) {
+    const target = event.currentTarget as HTMLElement | null
+    if (!target?.matches(':focus-visible'))
+      return
+  }
+  highlightTask(id)
+}
+watch(() => [hours.value, chartMetric.value, chartLayout.value], () => {
+  if (props.detailInteractions)
+    clearChartInteraction()
+})
 const chartLatencyLabel = computed(() => tasks.value.some(task => task.kind === 'http')
   ? '延迟'
   : 'RTT')
+const metricOptions = computed(() => [
+  {
+    value: 'latency' as const,
+    label: chartLatencyLabel.value,
+  },
+  {
+    value: 'failure' as const,
+    label: failureRateLabelForKinds(tasks.value.map(task => task.kind), true),
+  },
+])
+const layoutOptions = [
+  { value: 'combined' as const, label: '合图' },
+  { value: 'split' as const, label: '分图' },
+]
+
+function metricButtonClass(active: boolean) {
+  if (!props.detailInteractions) {
+    return [
+      'h-7 px-3 transition-colors duration-100 motion-reduce:transition-none',
+      active && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white',
+    ]
+  }
+  return [
+    'group/metric h-11 min-h-11 bg-transparent px-0.5 transition-none hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-7 sm:min-h-0 sm:px-3',
+    active
+      ? 'sm:bg-emerald-700 sm:font-semibold sm:text-white sm:hover:bg-emerald-700 sm:hover:text-white dark:sm:hover:bg-emerald-700 dark:sm:hover:text-white'
+      : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
+  ]
+}
+
+function presetButtonClass(active: boolean) {
+  if (!props.detailInteractions) {
+    return [
+      'h-8 px-3',
+      active && 'bg-background text-emerald-700 dark:text-emerald-400',
+    ]
+  }
+  return [
+    'group/preset h-11 min-h-11 bg-transparent px-0.5 transition-none hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-8 sm:min-h-0 sm:px-3',
+    active
+      ? 'sm:bg-background sm:font-semibold sm:text-emerald-700 sm:shadow-xs sm:hover:bg-background sm:hover:text-emerald-700 dark:sm:bg-input/40 dark:sm:text-emerald-400 dark:sm:hover:bg-input/40 dark:sm:hover:text-emerald-400'
+      : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
+  ]
+}
+
+function layoutButtonClass(active: boolean) {
+  if (!props.detailInteractions)
+    return active && 'bg-background text-emerald-700 dark:text-emerald-400'
+  return [
+    'transition-none active:not-aria-[haspopup]:translate-y-0',
+    active
+      ? 'bg-background font-semibold text-emerald-700 shadow-xs hover:bg-background hover:text-emerald-700 dark:bg-input/40 dark:text-emerald-400 dark:hover:bg-input/40 dark:hover:text-emerald-400'
+      : 'text-foreground/75 hover:bg-background/55 hover:text-foreground',
+  ]
+}
 
 const analysisTask = computed(() => tasks.value.find(task => task.id === analysisTaskId.value))
 const analysisSummary = computed(() => summaryByTask.value.get(analysisTaskId.value))
@@ -352,6 +460,8 @@ function toggleTask(id: string): void {
   selectedTaskIds.value = selectedTaskIds.value.includes(id)
     ? selectedTaskIds.value.filter(selected => selected !== id)
     : [...selectedTaskIds.value, id]
+  if (props.detailInteractions)
+    clearChartInteraction()
 }
 
 type ChartSeries = Array<[number, number | null]>
@@ -803,13 +913,25 @@ function exportPng(): void {
   <div class="flex min-w-0 flex-col gap-4">
     <div class="flex min-w-0 flex-wrap items-center justify-between gap-2">
       <Tabs v-if="selectedHours === undefined" class="min-w-0 max-w-full flex-1" :model-value="String(hours)" @update:model-value="hours = Number($event)">
-        <div class="min-w-0 overflow-x-auto">
-          <TabsList :class="pickSurfaceClass('w-max h-8 bg-background/60 rounded-md', 'w-max h-8 bg-background/50 backdrop-blur-xl rounded-md')" aria-label="探测历史时间范围">
+        <div class="min-w-0 overflow-x-auto" :class="detailInteractions && 'px-0.5 py-0.5'">
+          <TabsList
+            :class="detailInteractions
+              ? pickSurfaceClass(DETAIL_RANGE_TABS_LIST_PLAIN, DETAIL_RANGE_TABS_LIST_BLUR)
+              : pickSurfaceClass('w-max h-8 bg-background/60 rounded-md', 'w-max h-8 bg-background/50 backdrop-blur-xl rounded-md')"
+            aria-label="探测历史时间范围"
+          >
             <TabsTrigger
               v-for="range in availableRanges" :key="range" :value="String(range)"
-              class="h-6.5 shrink-0 rounded-sm border-none text-xs shadow-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400"
+              :class="detailInteractions
+                ? DETAIL_RANGE_TAB_TRIGGER
+                : 'h-6.5 shrink-0 rounded-sm border-none text-xs shadow-none data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400'"
             >
-              {{ rangeLabel(range) }}
+              <span v-if="detailInteractions" data-testid="probe-tab-pill" :class="DETAIL_RANGE_TAB_PILL">
+                {{ rangeLabel(range) }}
+              </span>
+              <template v-else>
+                {{ rangeLabel(range) }}
+              </template>
             </TabsTrigger>
           </TabsList>
         </div>
@@ -837,7 +959,12 @@ function exportPng(): void {
       <Empty v-else-if="!loading && (!data || !tasks.length)" description="暂无延迟数据" />
       <template v-else-if="data && tasks.length">
         <div class="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_23rem]">
-          <section aria-label="线路趋势" class="min-w-0 rounded-xl border border-border/60" :class="pickSurfaceClass('bg-background/70', 'bg-background/50 backdrop-blur-xl')">
+          <section
+            aria-label="线路趋势"
+            :data-highlighted-task="highlightedTaskId || undefined"
+            class="min-w-0 rounded-xl border border-border/60"
+            :class="pickSurfaceClass('bg-background/70', 'bg-background/50 backdrop-blur-xl')"
+          >
             <div class="flex min-w-0 flex-wrap items-center gap-3 px-4 pt-4 pb-2">
               <div class="min-w-0 flex-1">
                 <h3 class="text-sm font-semibold">
@@ -847,20 +974,66 @@ function exportPng(): void {
                   悬停对比同一时刻的线路数据
                 </p>
               </div>
-              <div role="group" aria-label="趋势指标" class="flex items-center rounded-lg bg-muted/70 p-1">
-                <Button variant="ghost" size="xs" class="h-7 cursor-pointer rounded-md px-3 text-xs transition-colors duration-100 motion-reduce:transition-none" :class="chartMetric === 'latency' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white'" :aria-pressed="chartMetric === 'latency'" @click="chartMetric = 'latency'">
-                  {{ chartLatencyLabel }}
-                </Button>
-                <Button variant="ghost" size="xs" class="h-7 cursor-pointer rounded-md px-3 text-xs transition-colors duration-100 motion-reduce:transition-none" :class="chartMetric === 'failure' && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white'" :aria-pressed="chartMetric === 'failure'" @click="chartMetric = 'failure'">
-                  {{ failureRateLabelForKinds(tasks.map(task => task.kind), true) }}
+              <div
+                role="group"
+                aria-label="趋势指标"
+                class="flex items-center rounded-lg"
+                :class="detailInteractions
+                  ? 'relative isolate bg-transparent p-0 before:pointer-events-none before:absolute before:inset-x-0 before:top-1/2 before:-z-10 before:h-9 before:-translate-y-1/2 before:rounded-lg before:bg-muted/70 sm:bg-muted/70 sm:p-1 sm:before:hidden'
+                  : 'bg-muted/70 p-1'"
+              >
+                <Button
+                  v-for="option in metricOptions" :key="option.value" variant="ghost" size="xs"
+                  class="cursor-pointer rounded-md text-xs"
+                  :class="metricButtonClass(chartMetric === option.value)"
+                  :aria-pressed="chartMetric === option.value"
+                  @click="chartMetric = option.value"
+                >
+                  <span
+                    v-if="detailInteractions"
+                    class="inline-flex h-8 items-center justify-center rounded-md px-3 transition-colors motion-reduce:transition-none sm:h-auto sm:bg-transparent sm:px-0"
+                    :class="chartMetric === option.value
+                      ? 'bg-emerald-700 font-semibold text-white sm:bg-transparent'
+                      : 'text-foreground/75 group-hover/metric:bg-background/55 group-hover/metric:text-foreground sm:bg-transparent sm:group-hover/metric:bg-transparent'"
+                  >
+                    {{ option.label }}
+                  </span>
+                  <template v-else>
+                    {{ option.label }}
+                  </template>
                 </Button>
               </div>
               <Button variant="outline" size="xs" class="h-8 cursor-pointer rounded-lg px-3 transition-colors duration-100 motion-reduce:transition-none" :class="cutPeak && 'border-emerald-600/30 text-emerald-700 dark:text-emerald-400'" aria-label="平滑峰值" :aria-pressed="cutPeak" :disabled="!showDelay" title="仅平滑 RTT 曲线显示，汇总和丢包率仍按原始样本计算" @click="cutPeak = !cutPeak">
                 平滑
               </Button>
-              <div v-if="tasks.length > 1" role="group" aria-label="线路快捷筛选" class="flex items-center rounded-lg bg-muted/70 p-1">
-                <Button v-for="preset in linePresets" :key="preset.label" variant="ghost" size="xs" class="h-8 cursor-pointer rounded-md px-3 text-xs" :class="isLinePresetSelected(preset.ids) && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="isLinePresetSelected(preset.ids)" @click="selectLines(preset.ids)">
-                  {{ preset.label }}
+              <div
+                v-if="tasks.length > 1"
+                role="group"
+                aria-label="线路快捷筛选"
+                class="flex items-center rounded-lg"
+                :class="detailInteractions
+                  ? 'relative isolate bg-transparent p-0 before:pointer-events-none before:absolute before:inset-x-0 before:top-1/2 before:-z-10 before:h-9 before:-translate-y-1/2 before:rounded-lg before:bg-muted/70 sm:bg-muted/70 sm:p-1 sm:before:hidden'
+                  : 'bg-muted/70 p-1'"
+              >
+                <Button
+                  v-for="preset in linePresets" :key="preset.label" variant="ghost" size="xs"
+                  class="cursor-pointer rounded-md text-xs"
+                  :class="presetButtonClass(isLinePresetSelected(preset.ids))"
+                  :aria-pressed="isLinePresetSelected(preset.ids)"
+                  @click="selectLines(preset.ids)"
+                >
+                  <span
+                    v-if="detailInteractions"
+                    class="inline-flex h-8 items-center justify-center rounded-md px-3 transition-colors motion-reduce:transition-none sm:h-auto sm:bg-transparent sm:px-0 sm:shadow-none"
+                    :class="isLinePresetSelected(preset.ids)
+                      ? 'bg-background font-semibold text-emerald-700 shadow-xs dark:bg-input/40 dark:text-emerald-400 sm:bg-transparent sm:shadow-none'
+                      : 'text-foreground/75 group-hover/preset:bg-background/55 group-hover/preset:text-foreground sm:bg-transparent sm:group-hover/preset:bg-transparent'"
+                  >
+                    {{ preset.label }}
+                  </span>
+                  <template v-else>
+                    {{ preset.label }}
+                  </template>
                 </Button>
               </div>
               <span aria-live="polite" aria-atomic="true" class="text-xs tabular-nums text-muted-foreground">
@@ -897,8 +1070,14 @@ function exportPng(): void {
                 <Button variant="outline" size="xs" :aria-pressed="showThresholds" @click="showThresholds = !showThresholds">阈值线</Button>
                 <Button variant="outline" size="xs" :aria-pressed="showPeaks" @click="showPeaks = !showPeaks">峰值标记</Button>
                 <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-muted/60 p-1">
-                  <Button variant="ghost" size="xs" :class="chartLayout === 'combined' && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="chartLayout === 'combined'" @click="chartLayout = 'combined'">合图</Button>
-                  <Button variant="ghost" size="xs" :class="chartLayout === 'split' && 'bg-background text-emerald-700 dark:text-emerald-400'" :aria-pressed="chartLayout === 'split'" @click="chartLayout = 'split'">分图</Button>
+                  <Button
+                    v-for="option in layoutOptions" :key="option.value" variant="ghost" size="xs"
+                    :class="layoutButtonClass(chartLayout === option.value)"
+                    :aria-pressed="chartLayout === option.value"
+                    @click="chartLayout = option.value"
+                  >
+                    {{ option.label }}
+                  </Button>
                 </div>
                 <Button variant="outline" size="xs" :disabled="!data.chart.length || !selectedTasks.length" @click="exportPng">
                   <Icon icon="lucide:image-down" :width="13" :height="13" aria-hidden="true" />PNG
@@ -925,7 +1104,7 @@ function exportPng(): void {
                 class="grid min-w-0 grid-cols-[minmax(0,1fr)_4.5rem_3rem_2.75rem] items-center sm:grid-cols-[minmax(0,1fr)_4.5rem_3rem_3rem_2.75rem] gap-1 rounded-lg border-t border-border/40 px-3 py-2 transition-colors"
                 :class="[!selectedTaskIds.includes(task.id) && 'opacity-40', analysisTaskId === task.id && 'bg-emerald-500/5']"
               >
-                <button type="button" class="min-w-0 cursor-pointer rounded-md py-1 text-left focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`仅看 ${task.name}`" :aria-pressed="focusedTaskId === task.id" :title="focusedTaskId === task.id ? '再次点击恢复先前选择' : '点击只看此线路，再次点击恢复先前选择'" @click="focusTask(task.id)" @mouseenter="highlightTask(task.id)" @mouseleave="highlightTask()" @focus="highlightTask(task.id)" @blur="highlightTask()">
+                <button type="button" class="min-w-0 cursor-pointer rounded-md py-1 text-left focus-visible:outline-2 focus-visible:outline-emerald-600" :aria-label="`仅看 ${task.name}`" :aria-pressed="focusedTaskId === task.id" :title="focusedTaskId === task.id ? '再次点击恢复先前选择' : '点击只看此线路，再次点击恢复先前选择'" @click="focusTask(task.id)" @mouseenter="!detailInteractions && highlightTask(task.id)" @mouseleave="!detailInteractions && highlightTask()" @pointerenter="detailInteractions && onTaskPointerEnter(task.id, $event)" @pointerleave="detailInteractions && onTaskPointerLeave($event)" @focus="onTaskFocus(task.id, $event)" @blur="highlightTask()">
                   <span class="flex min-w-0 items-center gap-1.5">
                     <span class="size-1.5 shrink-0 rounded-full" :style="{ backgroundColor: taskColor(task.id) }" aria-hidden="true" />
                     <span class="min-w-0 text-xs font-semibold break-words sm:truncate" :title="task.name">{{ task.name.replace(/ipv6/gi, 'V6') }}</span>

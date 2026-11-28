@@ -163,6 +163,47 @@ export function getUnlockServiceDisplay(service: UnlockServiceStatus | undefined
   }
 }
 
+export interface UnlockPanelState {
+  status: 'ready' | 'address_changed' | 'empty'
+  badgeLabel: string
+  badgeTone: string
+  title: string
+  description: string
+}
+
+const unlockNeutralBadge = 'border-border/70 bg-background/80 text-foreground/80'
+
+export function getUnlockPanelState(
+  report: IpUnlockReport | undefined,
+  family: 4 | 6,
+): UnlockPanelState {
+  if (report && !report.address_changed) {
+    return {
+      status: 'ready',
+      badgeLabel: '',
+      badgeTone: '',
+      title: '',
+      description: '',
+    }
+  }
+  if (report?.address_changed) {
+    return {
+      status: 'address_changed',
+      badgeLabel: '地址已变更',
+      badgeTone: unlockAmber,
+      title: `当前 IPv${family} 地址已变更，旧的流媒体与 AI 解锁结果不再适用于当前地址。`,
+      description: '旧结果已失效，待针对当前地址重新完成解锁检测后更新。',
+    }
+  }
+  return {
+    status: 'empty',
+    badgeLabel: '暂无记录',
+    badgeTone: unlockNeutralBadge,
+    title: `暂无 IPv${family} 流媒体与 AI 解锁记录。`,
+    description: '当前网络版本尚未有流媒体与 AI 解锁检测结果。',
+  }
+}
+
 export function getOrderedUnlockServices(report: IpUnlockReport | undefined, family?: 4 | 6) {
   const activeFamily = family ?? report?.family ?? 4
   const order = activeFamily === 6

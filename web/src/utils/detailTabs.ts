@@ -1,0 +1,9 @@
+export const DETAIL_RANGE_TABS_LIST_BASE = 'relative isolate inline-flex h-auto w-max min-w-fit items-center gap-0.5 rounded-md bg-transparent p-0 group-data-horizontal/tabs:h-auto before:pointer-events-none before:absolute before:inset-x-0 before:top-1/2 before:-z-10 before:h-9 before:-translate-y-1/2 before:rounded-md sm:gap-0 sm:p-[3px] sm:before:hidden sm:group-data-horizontal/tabs:h-8'
+
+export const DETAIL_RANGE_TABS_LIST_PLAIN = `${DETAIL_RANGE_TABS_LIST_BASE} before:bg-background/60 sm:bg-background/60`
+
+export const DETAIL_RANGE_TABS_LIST_BLUR = `${DETAIL_RANGE_TABS_LIST_BASE} before:bg-background/50 before:backdrop-blur-xl sm:bg-background/50 sm:backdrop-blur-xl`
+
+export const DETAIL_RANGE_TAB_TRIGGER = 'group/detail-tab h-11 min-h-11 min-w-11 flex-none shrink-0 rounded-sm border-none bg-transparent px-0.5 text-xs text-foreground/75 shadow-none transition-none hover:text-foreground data-[state=active]:font-semibold data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-400 sm:h-6.5 sm:min-h-0 sm:min-w-0 sm:px-2 sm:hover:bg-background/55 sm:data-[state=active]:bg-background sm:data-[state=active]:shadow-xs dark:sm:hover:bg-background/25 dark:sm:data-[state=active]:bg-input/40'
+
+export const DETAIL_RANGE_TAB_PILL = 'inline-flex h-8 w-full items-center justify-center rounded-sm px-2.5 transition-colors motion-reduce:transition-none group-hover/detail-tab:bg-background/55 group-data-[state=active]/detail-tab:bg-background group-data-[state=active]/detail-tab:shadow-xs dark:group-hover/detail-tab:bg-background/25 dark:group-data-[state=active]/detail-tab:bg-input/40 sm:h-auto sm:bg-transparent sm:px-0 sm:shadow-none sm:group-hover/detail-tab:bg-transparent sm:group-data-[state=active]/detail-tab:bg-transparent sm:group-data-[state=active]/detail-tab:shadow-none'
