@@ -50,7 +50,7 @@ const { versions, version } = useNodeIpVersion(() => props.node)
     >
       <span
         v-if="mobileTouchTarget"
-        class="inline-flex h-[22px] w-full items-center justify-center rounded-full px-1 text-[11px] leading-none transition-colors motion-reduce:transition-none sm:h-full sm:px-2.5 sm:text-[10px]"
+        class="inline-flex h-[22px] w-full items-center justify-center rounded-full px-1 text-[11px] max-sm:leading-none transition-colors motion-reduce:transition-none sm:h-full sm:px-2.5 sm:text-[10px] sm:leading-4"
         :class="version === item
           ? 'font-semibold text-emerald-700 dark:text-emerald-300'
           : 'text-foreground/75 group-hover/ip-option:bg-background/55 group-hover/ip-option:text-foreground dark:group-hover/ip-option:bg-background/35 dark:group-hover/ip-option:text-foreground'"
