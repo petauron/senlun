@@ -528,7 +528,6 @@ mod tests {
         let mut options = NodeOptions {
             id: enrolled.node_id.clone(),
             name: "Route Lease QA".to_owned(),
-            ipv4: "198.51.100.10".to_owned(),
             currency: "CNY".to_owned(),
             traffic_limit_type: "sum".to_owned(),
             traffic_reset_day: 1,
@@ -536,6 +535,16 @@ mod tests {
         };
         storage
             .save_node_options(&enrolled.node_id, &mut options)
+            .unwrap();
+        // Seed a synthetic RFC 5737 documentation IPv4 in the temp DB
+        // so the test never embeds a routable public IP address.
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE node_options SET data=json_set(data, '$.ipv4', ?2) WHERE node_id=?1",
+                params![enrolled.node_id, "198.51.100.10"],
+            )
             .unwrap();
 
         let claim = ReturnRouteClaim {
