@@ -1232,18 +1232,94 @@ mod tests {
         Some((headers, body))
     }
 
+    #[derive(Default)]
+    struct MockRecoveryState {
+        disabled_a: bool,
+        rejected_sibling_sample: Option<String>,
+        recovered_sibling_sample: Option<String>,
+    }
+
+    struct MockRecoveryService {
+        state: std::sync::Arc<std::sync::Mutex<MockRecoveryState>>,
+        recovered: std::sync::Arc<tokio::sync::Notify>,
+        initial_config: String,
+        updated_config: String,
+        id_a: String,
+        id_b: String,
+    }
+
+    impl MockRecoveryService {
+        async fn serve_connection(self: std::sync::Arc<Self>, mut stream: tokio::net::TcpStream) {
+            use tokio::io::AsyncWriteExt;
+
+            let Some((headers, body)) = read_http_request(&mut stream).await else {
+                return;
+            };
+            let (status, response_body, hold) = self.classify_request(&headers, &body);
+            if hold {
+                // Hold a single-sample initial delivery until the next 5s cycle
+                // queues both tasks together into one mixed batch.
+                tokio::time::sleep(Duration::from_millis(5500)).await;
+            }
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+
+        fn classify_request(&self, headers: &[u8], body: &[u8]) -> (&'static str, String, bool) {
+            if headers.starts_with(b"GET /api/v1/agents/config ") {
+                let cfg = if self.state.lock().unwrap().disabled_a {
+                    self.updated_config.clone()
+                } else {
+                    self.initial_config.clone()
+                };
+                return ("200 OK", cfg, false);
+            }
+            if !headers.starts_with(b"POST /api/v1/agents/probes ") {
+                return ("404 Not Found", "{}".to_owned(), false);
+            }
+            let batch: ProbeBatch = serde_json::from_slice(body).unwrap();
+            let has_a = batch.results.iter().any(|item| item.task_id == self.id_a);
+            let sibling = batch
+                .results
+                .iter()
+                .find(|item| item.task_id == self.id_b)
+                .map(|item| item.sample_id.clone());
+            let mut guard = self.state.lock().unwrap();
+            if !guard.disabled_a && has_a && sibling.is_some() {
+                guard.disabled_a = true;
+                guard.rejected_sibling_sample = sibling;
+                return (
+                    "400 Bad Request",
+                    "{\"error\":\"probe not assigned\"}".to_owned(),
+                    false,
+                );
+            }
+            if guard.disabled_a && has_a {
+                return (
+                    "400 Bad Request",
+                    "{\"error\":\"probe not assigned\"}".to_owned(),
+                    false,
+                );
+            }
+            if guard.disabled_a
+                && let Some(sample_id) = sibling
+                && guard.rejected_sibling_sample.as_deref() == Some(sample_id.as_str())
+            {
+                guard.recovered_sibling_sample = Some(sample_id);
+                self.recovered.notify_one();
+            }
+            let hold = !guard.disabled_a && batch.results.len() < 2;
+            ("200 OK", "{\"accepted\":true}".to_owned(), hold)
+        }
+    }
+
     #[tokio::test]
     async fn admin_disabled_task_recovers_valid_sibling_sample_after_config_refresh() {
         use std::sync::{Arc, Mutex};
-        use tokio::io::AsyncWriteExt;
         use tokio::sync::Notify;
-
-        #[derive(Default)]
-        struct MockState {
-            disabled_a: bool,
-            rejected_sibling_sample: Option<String>,
-            recovered_sibling_sample: Option<String>,
-        }
 
         let target_a = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let target_b = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1251,101 +1327,33 @@ mod tests {
         probe_a.interval_seconds = 5;
         let mut probe_b = task(ProbeKind::Tcp, &target_b.local_addr().unwrap().to_string());
         probe_b.interval_seconds = 5;
-        let id_a = probe_a.id.clone();
-        let id_b = probe_b.id.clone();
 
-        let initial_config = serde_json::to_string(&AgentRuntimeConfig {
-            schema_version: AGENT_CONFIG_SCHEMA_VERSION,
-            interval_seconds: 3,
-            probes: vec![probe_a, probe_b.clone()],
-        })
-        .unwrap();
-        let updated_config = serde_json::to_string(&AgentRuntimeConfig {
-            schema_version: AGENT_CONFIG_SCHEMA_VERSION,
-            interval_seconds: 3,
-            probes: vec![probe_b],
-        })
-        .unwrap();
+        let mock = Arc::new(MockRecoveryService {
+            state: Arc::new(Mutex::new(MockRecoveryState::default())),
+            recovered: Arc::new(Notify::new()),
+            id_a: probe_a.id.clone(),
+            id_b: probe_b.id.clone(),
+            initial_config: serde_json::to_string(&AgentRuntimeConfig {
+                schema_version: AGENT_CONFIG_SCHEMA_VERSION,
+                interval_seconds: 3,
+                probes: vec![probe_a, probe_b.clone()],
+            })
+            .unwrap(),
+            updated_config: serde_json::to_string(&AgentRuntimeConfig {
+                schema_version: AGENT_CONFIG_SCHEMA_VERSION,
+                interval_seconds: 3,
+                probes: vec![probe_b],
+            })
+            .unwrap(),
+        });
 
-        let state = Arc::new(Mutex::new(MockState::default()));
-        let recovered = Arc::new(Notify::new());
         let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = Url::parse(&format!("http://{}/", service.local_addr().unwrap())).unwrap();
         let server = tokio::spawn({
-            let state = Arc::clone(&state);
-            let recovered = Arc::clone(&recovered);
+            let mock = Arc::clone(&mock);
             async move {
-                loop {
-                    let Ok((mut stream, _)) = service.accept().await else {
-                        return;
-                    };
-                    let state = Arc::clone(&state);
-                    let recovered = Arc::clone(&recovered);
-                    let initial_config = initial_config.clone();
-                    let updated_config = updated_config.clone();
-                    let id_a = id_a.clone();
-                    let id_b = id_b.clone();
-                    tokio::spawn(async move {
-                        let Some((headers, body)) = read_http_request(&mut stream).await else {
-                            return;
-                        };
-                        let (status, response_body, hold) =
-                            if headers.starts_with(b"GET /api/v1/agents/config ") {
-                                let cfg = if state.lock().unwrap().disabled_a {
-                                    updated_config
-                                } else {
-                                    initial_config
-                                };
-                                ("200 OK", cfg, false)
-                            } else if headers.starts_with(b"POST /api/v1/agents/probes ") {
-                                let batch: ProbeBatch = serde_json::from_slice(&body).unwrap();
-                                let has_a = batch.results.iter().any(|item| item.task_id == id_a);
-                                let sibling = batch
-                                    .results
-                                    .iter()
-                                    .find(|item| item.task_id == id_b)
-                                    .map(|item| item.sample_id.clone());
-                                let mut guard = state.lock().unwrap();
-                                if !guard.disabled_a && has_a && sibling.is_some() {
-                                    guard.disabled_a = true;
-                                    guard.rejected_sibling_sample = sibling;
-                                    (
-                                        "400 Bad Request",
-                                        "{\"error\":\"probe not assigned\"}".to_owned(),
-                                        false,
-                                    )
-                                } else if guard.disabled_a && has_a {
-                                    (
-                                        "400 Bad Request",
-                                        "{\"error\":\"probe not assigned\"}".to_owned(),
-                                        false,
-                                    )
-                                } else {
-                                    if guard.disabled_a
-                                        && let Some(sample_id) = sibling
-                                        && guard.rejected_sibling_sample.as_deref()
-                                            == Some(sample_id.as_str())
-                                    {
-                                        guard.recovered_sibling_sample = Some(sample_id);
-                                        recovered.notify_one();
-                                    }
-                                    let hold = !guard.disabled_a && batch.results.len() < 2;
-                                    ("200 OK", "{\"accepted\":true}".to_owned(), hold)
-                                }
-                            } else {
-                                ("404 Not Found", "{}".to_owned(), false)
-                            };
-                        if hold {
-                            // Hold a single-sample initial delivery until the next 5s cycle
-                            // queues both tasks together into one mixed batch.
-                            tokio::time::sleep(Duration::from_millis(5500)).await;
-                        }
-                        let response = format!(
-                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
-                            response_body.len()
-                        );
-                        let _ = stream.write_all(response.as_bytes()).await;
-                    });
+                while let Ok((stream, _)) = service.accept().await {
+                    tokio::spawn(Arc::clone(&mock).serve_connection(stream));
                 }
             }
         });
@@ -1358,10 +1366,10 @@ mod tests {
         )
         .unwrap();
         // Must recover well before the routine 30s CONFIG_REFRESH window.
-        tokio::time::timeout(Duration::from_secs(15), recovered.notified())
+        tokio::time::timeout(Duration::from_secs(15), mock.recovered.notified())
             .await
             .expect("valid sibling sample should be re-delivered after 400 rejection");
-        let guard = state.lock().unwrap();
+        let guard = mock.state.lock().unwrap();
         assert!(guard.disabled_a);
         assert!(guard.rejected_sibling_sample.is_some());
         assert_eq!(
