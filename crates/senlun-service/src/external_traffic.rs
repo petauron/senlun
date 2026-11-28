@@ -811,7 +811,14 @@ where
         Value::String(credential.password.clone()),
     );
     let body = Value::Object(fields);
-    let value = request(url, reqwest::Method::POST, Some(body), None).await?;
+    let value = request(url, reqwest::Method::POST, Some(body), None)
+        .await
+        .map_err(|status| match status {
+            // A non-JSON challenge or changed login response pauses password retries
+            // until an administrator updates the source configuration or credentials.
+            "invalid_data" => "authentication_required",
+            status => status,
+        })?;
     let access = match token_field(&value, &config.access_pointer) {
         TokenField::Value(token) => token,
         TokenField::Oversized => return Err("invalid_data"),
@@ -1545,5 +1552,124 @@ mod tests {
             };
             assert_eq!(status, "private_address_rejected");
         }
+    }
+
+    #[tokio::test]
+    async fn non_json_login_response_pauses_polling_and_preserves_last_snapshot() {
+        let (_dir, state, key) = state_with_key();
+        let node_id = enroll_synthetic_node(&state, "synthetic-login-nonjson");
+        let input = SourceInput {
+            config: login_refresh_config(),
+            username: "synthetic-user".to_owned(),
+            password: "synthetic-password".to_owned(),
+            bearer_token: String::new(),
+        };
+        state
+            .storage
+            .save_traffic_source(&node_id, input, &key)
+            .unwrap();
+
+        let prior_snapshot = TrafficSnapshot {
+            up_bytes: 10,
+            down_bytes: 20,
+            used_bytes: 30,
+            limit_bytes: Some(1_000),
+            reset_at: Some("2026-12-01".to_owned()),
+            fetched_at_unix_ms: 1_000,
+        };
+        let encoded_prior = serde_json::to_string(&prior_snapshot).unwrap();
+        {
+            let db = state.storage.connection().unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources
+                 SET snapshot=?2,last_success_ms=1000,last_attempt_ms=1,status='ok'
+                 WHERE node_id=?1",
+                params![node_id, encoded_prior],
+            )
+            .unwrap();
+        }
+
+        let first_now = u64::try_from(POLL_INTERVAL_MS).unwrap() + 10_000;
+        let claimed = state.storage.claim_due_traffic_sources(first_now).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].node_id, node_id);
+
+        let poll = |cfg: SourceConfig, mut credential: Credential, ts: u64| async move {
+            let result = poll_source_with(&cfg, &mut credential, ts, |url, _, _, _| async move {
+                assert_eq!(url.path(), "/login");
+                // request_json returns "invalid_data" for a 2xx non-JSON response.
+                Err("invalid_data")
+            })
+            .await;
+            (credential, result)
+        };
+        state.sync_claimed_sources(claimed, first_now, poll).await;
+
+        let listed = state.storage.list_traffic_sources().unwrap();
+        let source = listed.iter().find(|item| item.node_id == node_id).unwrap();
+        assert_eq!(source.status, "authentication_required");
+        assert_eq!(source.last_success_unix_ms, 1_000);
+        assert_eq!(source.snapshot.as_ref().unwrap().used_bytes, 30);
+
+        let later_now = first_now + u64::try_from(POLL_INTERVAL_MS).unwrap() + 10_000;
+        assert!(
+            state
+                .storage
+                .claim_due_traffic_sources(later_now)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn login_preserves_transient_http_auth_and_refresh_error_semantics() {
+        let source = login_refresh_config();
+        let base = Credential {
+            username: "synthetic-user".to_owned(),
+            password: "synthetic-password".to_owned(),
+            access_token: "kept-access".to_owned(),
+            refresh_token: "kept-refresh".to_owned(),
+            ..Credential::default()
+        };
+
+        for (raw_status, expected_status) in [
+            ("invalid_data", "authentication_required"),
+            ("authentication_required", "authentication_required"),
+            ("provider_unavailable", "provider_unavailable"),
+            ("provider_http_error", "provider_http_error"),
+            ("response_too_large", "response_too_large"),
+        ] {
+            let mut credential = base.clone();
+            let mut req = move |_url, _method, _body, _token| async move { Err(raw_status) };
+            let err = authenticate_with(&source, &mut credential, &mut req)
+                .await
+                .unwrap_err();
+            assert_eq!(err, expected_status, "raw_status={raw_status}");
+            assert_eq!(credential.access_token, "kept-access");
+            assert_eq!(credential.refresh_token, "kept-refresh");
+        }
+
+        let mut credential = base;
+        let login_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&login_calls);
+        let request = move |url: Url, _method, _body, _token| {
+            let counter = std::sync::Arc::clone(&counter);
+            async move {
+                match url.path() {
+                    "/usage" => Err("authentication_required"),
+                    "/refresh" => Err("invalid_data"),
+                    "/login" => {
+                        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(json!({"access": "unexpected", "refresh": "unexpected"}))
+                    }
+                    other => panic!("unexpected path: {other}"),
+                }
+            }
+        };
+        let err = poll_source_with(&source, &mut credential, 100, request)
+            .await
+            .unwrap_err();
+        assert_eq!(err, "authentication_required");
+        assert_eq!(login_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
