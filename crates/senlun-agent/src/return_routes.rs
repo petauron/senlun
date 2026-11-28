@@ -261,6 +261,71 @@ fn script_timeout_seconds(remaining: Duration) -> Option<u64> {
         .map(|seconds| seconds.min(MAX_SCRIPT_TIMEOUT_SECONDS))
 }
 
+struct ChildProcessGroup {
+    child: tokio::process::Child,
+    #[cfg(unix)]
+    pgid: Option<rustix::process::Pid>,
+}
+
+impl ChildProcessGroup {
+    fn spawn(command: &mut Command) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.as_std_mut().process_group(0);
+        }
+        let child = command.spawn()?;
+        #[cfg(unix)]
+        let pgid = child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(rustix::process::Pid::from_raw);
+        Ok(Self {
+            child,
+            #[cfg(unix)]
+            pgid,
+        })
+    }
+
+    fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    #[cfg(unix)]
+    fn kill_group(&self) {
+        if let Some(pgid) = self.pgid {
+            let _ = rustix::process::kill_process_group(pgid, rustix::process::Signal::KILL);
+        }
+    }
+
+    async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.wait().await;
+        #[cfg(unix)]
+        if status.is_ok() {
+            // Once wait() reaps the leader PID, disarm immediately so Drop never
+            // signals a potentially reused PID.
+            self.pgid = None;
+        }
+        status
+    }
+
+    async fn terminate(&mut self) {
+        #[cfg(unix)]
+        {
+            self.kill_group();
+            self.pgid = None;
+        }
+        let _ = self.child.kill().await;
+    }
+}
+
+impl Drop for ChildProcessGroup {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        self.kill_group();
+    }
+}
+
 async fn collect(
     task: &ReturnRouteTask,
     lease: TaskLease,
@@ -314,8 +379,8 @@ async fn collect(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|_| "unavailable")?;
-    let output = child.stdout.take().ok_or("unavailable")?;
+    let mut child = ChildProcessGroup::spawn(&mut command).map_err(|_| "unavailable")?;
+    let output = child.take_stdout().ok_or("unavailable")?;
     let mut bytes = Vec::new();
     let result = tokio::time::timeout_at(collection_deadline.into(), async {
         output
@@ -343,11 +408,11 @@ async fn collect(
             parse(&bytes, task, lease.checked_at_unix_ms(Instant::now()))
         }
         Ok(Err(error)) => {
-            let _ = child.kill().await;
+            child.terminate().await;
             Err(error)
         }
         Err(_) => {
-            let _ = child.kill().await;
+            child.terminate().await;
             Err("timeout")
         }
     }
@@ -509,5 +574,120 @@ mod tests {
                 Some("invalid_result")
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn is_pid_running(pid: u32) -> bool {
+        let status_path = Path::new("/proc").join(pid.to_string()).join("status");
+        std::fs::read_to_string(status_path).is_ok_and(|status| {
+            !status
+                .lines()
+                .any(|line| line.starts_with("State:\tZ") || line.starts_with("State:\tX"))
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn wait_for_pid_exit(pid: u32) -> bool {
+        for _ in 0..40 {
+            if !is_pid_running(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn spawn_hanging_subtree(
+        dir: &Path,
+        inner_timeout: &str,
+    ) -> Option<(ChildProcessGroup, u32)> {
+        let bash = ["/usr/bin/bash", "/bin/bash"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())?;
+        let timeout_bin = ["/usr/bin/timeout", "/bin/timeout"]
+            .into_iter()
+            .find(|p| Path::new(p).is_file())?;
+        let pid_file = dir.join("grandchild.pid");
+        let script = dir.join("hang.sh");
+        let body = format!(concat!(
+            "set -eu\n",
+            "{timeout_bin} --foreground -k 1s {inner_timeout} ",
+            "{bash} -c 'sleep 30 & printf \"%s\\n\" \"$!\" > \"$1\"; wait' _ \"$1\" || {{\n",
+            "  kill -KILL 0 2>/dev/null || true\n",
+            "  exit 4\n",
+            "}}\n"
+        ));
+        tokio::fs::write(&script, body).await.unwrap();
+
+        let mut command = Command::new(timeout_bin);
+        command
+            .args(["-k", "1s", "30s", bash])
+            .arg(&script)
+            .arg(&pid_file)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let guard = ChildProcessGroup::spawn(&mut command).unwrap();
+
+        for _ in 0..40 {
+            if let Ok(raw) = tokio::fs::read_to_string(&pid_file).await
+                && let Ok(pid) = raw.trim().parse::<u32>()
+            {
+                return Some((guard, pid));
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("grandchild pid file was not written");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn process_group_drop_cleans_up_hanging_subtree_on_cancellation() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((guard, pid)) = spawn_hanging_subtree(dir.path(), "30s").await else {
+            return;
+        };
+        assert!(is_pid_running(pid));
+        drop(guard);
+        assert!(
+            wait_for_pid_exit(pid).await,
+            "grandchild should exit when ChildProcessGroup is dropped"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn process_group_terminate_cleans_up_hanging_subtree_on_timeout_or_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((mut guard, pid)) = spawn_hanging_subtree(dir.path(), "30s").await else {
+            return;
+        };
+        assert!(is_pid_running(pid));
+        guard.terminate().await;
+        assert!(
+            wait_for_pid_exit(pid).await,
+            "grandchild should exit when ChildProcessGroup::terminate runs"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn inner_foreground_timeout_cleans_up_hanging_grandchild() {
+        let dir = tempfile::tempdir().unwrap();
+        let Some((mut guard, pid)) = spawn_hanging_subtree(dir.path(), "1s").await else {
+            return;
+        };
+        assert!(is_pid_running(pid));
+        let status = tokio::time::timeout(Duration::from_secs(5), guard.wait())
+            .await
+            .expect("inner timeout should terminate hanging script")
+            .unwrap();
+        assert!(!status.success());
+        assert!(
+            wait_for_pid_exit(pid).await,
+            "inner timeout handler should terminate hanging grandchild"
+        );
     }
 }

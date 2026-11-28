@@ -47,8 +47,10 @@ curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 --max-files
 printf '%s  %s\n' '351491ece557ad4c26143b33a38d8b0b50a1872c7b073839e22ee8845771f928' "$work/core.sh" | sha256sum -c - >&2
 # Preflight above prevents the upstream dependency helpers from installing tools.
 # A private HOME/TMPDIR and empty environment prevent inherited credentials/options.
-timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xterm LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
+timeout --foreground -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xterm LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
  tail -c 2048 "$work/run.log" >&2
+ rm -rf -- "$work"
+ kill -KILL 0 2>/dev/null || true
  exit 4
 }
 archive=$(find "$work" -maxdepth 1 -type f -name 'tcpquality-results.*.tar.gz' -print | head -n 1)
