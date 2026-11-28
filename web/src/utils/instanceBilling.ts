@@ -15,8 +15,16 @@ export type InstanceBillingNode = Pick<NodeData, 'price' | 'billing_cycle' | 'cu
 
 const EXPIRES_IN_DAYS = /^(\d+)\s+天$/
 
-function isValidRate(rate: number | undefined): rate is number {
+function validRate(
+  rates: Partial<Record<CurrencyCode, number>>,
+  code: CurrencyCode | null,
+): number | null {
+  if (!code)
+    return null
+  const rate = rates[code]
   return typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+    ? rate
+    : null
 }
 
 function formatAmount(amount: number, symbol: string): string {
@@ -35,22 +43,17 @@ export function buildInstanceBillingCards(
   selectedCurrency: CurrencyCode,
   nowMs: number,
 ): InstanceBillingCard[] {
-  const displayCurrency: CurrencyCode = isValidRate(rates[selectedCurrency])
+  const selectedRate = validRate(rates, selectedCurrency)
+  const displayCurrency: CurrencyCode = selectedRate !== null
     ? selectedCurrency
     : 'CNY'
-  const rawDisplayRate = rates[displayCurrency]
-  const displayRate = isValidRate(rawDisplayRate)
-    ? rawDisplayRate
-    : displayCurrency === 'CNY'
-      ? 1
-      : null
+  const displayRate = selectedRate ?? validRate(rates, 'CNY') ?? 1
 
   const sourceCode = resolveCurrencyCode(node.currency)
   const rawCurrency = String(node.currency || '').trim().toUpperCase()
   const sourceLabel = sourceCode ?? (rawCurrency || 'CNY')
   const sourceSymbol = sourceCode ? CURRENCY_SYMBOLS[sourceCode] : ''
-  const rawSourceRate = sourceCode ? rates[sourceCode] : undefined
-  const sourceRate = isValidRate(rawSourceRate) ? rawSourceRate : null
+  const sourceRate = validRate(rates, sourceCode)
 
   const hasPrice = Number.isFinite(node.price) && node.price > 0
   const hasCycle = Number.isFinite(node.billing_cycle) && node.billing_cycle > 0
@@ -60,10 +63,10 @@ export function buildInstanceBillingCards(
   let cardPrice = 0
 
   if (hasPrice) {
-    if (sourceCode !== null && sourceCode === displayCurrency) {
+    if (sourceCode === displayCurrency) {
       cardPrice = node.price
     }
-    else if (sourceCode !== null && sourceRate !== null && displayRate !== null) {
+    else if (sourceRate !== null) {
       cardPrice = node.price / sourceRate * displayRate
     }
     else {
