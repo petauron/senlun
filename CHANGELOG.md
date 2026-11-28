@@ -4,6 +4,23 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.2.2](https://github.com/petauron/senlun/compare/v0.2.1...v0.2.2) (2026-11-28)
+
+
+### Bug Fixes
+
+* **admin:** handle revoked node targets, stale channels, and multiline remarks ([#316](https://github.com/petauron/senlun/issues/316)) ([a2af28c](https://github.com/petauron/senlun/commit/a2af28c1932d95300441e217873376b74d8b3087)), closes [#312](https://github.com/petauron/senlun/issues/312)
+* **service:** decouple ip_info cache reads from external provider I/O ([#309](https://github.com/petauron/senlun/issues/309)) ([2392df0](https://github.com/petauron/senlun/commit/2392df0f35c6f089fab8b4db7d6f1174c82262f9))
+* **service:** harden auth rate limiting and narrow SessionGate locking ([#305](https://github.com/petauron/senlun/issues/305)) ([150ba84](https://github.com/petauron/senlun/commit/150ba84db9bea2023c057edf223b75d220eabbbf))
+* **service:** isolate alert recovery eligibility and cooldown state ([#315](https://github.com/petauron/senlun/issues/315)) ([e8faa9f](https://github.com/petauron/senlun/commit/e8faa9f5521bcfee959caaeb7024e15029052c81)), closes [#311](https://github.com/petauron/senlun/issues/311)
+* **service:** isolate external traffic per-source sync failures and harden retries ([#314](https://github.com/petauron/senlun/issues/314)) ([f79f535](https://github.com/petauron/senlun/commit/f79f5352909561a08fe3f42451060c3e6480abee)), closes [#300](https://github.com/petauron/senlun/issues/300)
+* **service:** use IMMEDIATE ingestion transactions and isolate out-of-range snapshots ([#313](https://github.com/petauron/senlun/issues/313)) ([245fd00](https://github.com/petauron/senlun/commit/245fd006cddb3be08bc460144a6d961adeac0fc6)), closes [#310](https://github.com/petauron/senlun/issues/310)
+* **web:** allow logout/401 past traffic draft guard and harden auth lifecycle ([#307](https://github.com/petauron/senlun/issues/307)) ([d4eb976](https://github.com/petauron/senlun/commit/d4eb976994ed53a774c4aad3dca46382e7e72a04))
+* **web:** include public remarks in homepage node search ([#319](https://github.com/petauron/senlun/issues/319)) ([b243584](https://github.com/petauron/senlun/commit/b2435845989c566a5e06223db23555706af74ff1)), closes [#317](https://github.com/petauron/senlun/issues/317)
+* **web:** make DataTooltip accessible and keep it within the viewport ([#321](https://github.com/petauron/senlun/issues/321)) ([a6e5f26](https://github.com/petauron/senlun/commit/a6e5f2645d16f12df0c5f0df84c1dfed2c193815)), closes [#318](https://github.com/petauron/senlun/issues/318)
+* **web:** make homepage cards and list keyboard accessible ([#320](https://github.com/petauron/senlun/issues/320)) ([d444505](https://github.com/petauron/senlun/commit/d444505071b60288435001417df65ec5abb83cd3)), closes [#304](https://github.com/petauron/senlun/issues/304)
+* **web:** stabilize NetworkQuality polling and fix sub-byte formatBytes scaling ([#308](https://github.com/petauron/senlun/issues/308)) ([a6801af](https://github.com/petauron/senlun/commit/a6801afff26cb767d6c54df88c4685c5ecea2772))
+
 ## [0.2.1](https://github.com/petauron/senlun/compare/v0.2.0...v0.2.1) (2026-11-24)
 
 
