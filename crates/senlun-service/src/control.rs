@@ -304,6 +304,16 @@ fn text(value: &str, max: usize) -> bool {
     value.len() <= max && !value.chars().any(char::is_control)
 }
 
+fn normalize_multiline_text(value: &mut String) {
+    if value.contains("\r\n") {
+        *value = value.replace("\r\n", "\n");
+    }
+}
+
+fn multiline_text(value: &str, max: usize) -> bool {
+    value.len() <= max && !value.chars().any(|ch| ch.is_control() && ch != '\n')
+}
+
 pub(crate) fn integer(value: u64) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
@@ -492,12 +502,13 @@ impl Storage {
         options: &mut NodeOptions,
     ) -> Result<(), StorageError> {
         id.clone_into(&mut options.id);
+        normalize_multiline_text(&mut options.public_remark);
         if options.name.trim().is_empty()
             || !text(&options.name, 128)
             || !text(&options.region, 16)
             || !text(&options.group, 128)
             || !text(&options.tags, 512)
-            || !text(&options.public_remark, 2048)
+            || !multiline_text(&options.public_remark, 2048)
             || !crate::ip_info::valid_address(&options.ipv4, false)
             || !crate::ip_info::valid_address(&options.ipv6, true)
             || !options.price.is_finite()

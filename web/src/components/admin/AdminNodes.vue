@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { nodeMetadata } from '@/utils/admin'
+import { normalizePublicRemark, validatePublicRemark } from '@/utils/adminEditing'
 import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { parseTags } from '@/utils/tagHelper'
@@ -103,11 +104,30 @@ function choose(id: string): void {
   })
 }
 
+function openConfirm(action: 'rotate' | 'revoke' | 'delete' | 'reset-traffic'): void {
+  error.value = ''
+  confirm.value = action
+}
+
+function closeConfirm(): void {
+  if (busy.value)
+    return
+  confirm.value = null
+  error.value = ''
+}
+
 async function save(): Promise<void> {
   if (!draft.value)
     return
+  const remarkError = validatePublicRemark(draft.value.public_remark)
+  if (remarkError) {
+    error.value = remarkError
+    success.value = ''
+    return
+  }
   const node = {
     ...draft.value,
+    public_remark: normalizePublicRemark(draft.value.public_remark),
     expired_at_unix_ms: expires.value
       ? new Date(expires.value).getTime()
       : null,
@@ -273,19 +293,19 @@ async function execute(): Promise<void> {
       </form>
       <div v-if="draft" class="flex flex-wrap gap-2 border-t pt-4">
         <AdminTrafficCorrection v-if="selected" :node="selected" :disabled="busy" :refresh="props.refresh" />
-        <Button v-for="(label, action) in actionLabels" :key="action" variant="outline" type="button" :disabled="busy" :class="action === 'delete' ? 'text-destructive' : ''" @click="confirm = action">
+        <Button v-for="(label, action) in actionLabels" :key="action" variant="outline" type="button" :disabled="busy" :class="action === 'delete' ? 'text-destructive' : ''" @click="openConfirm(action)">
           {{ label }}
         </Button>
       </div>
     </CardX>
-    <Dialog :open="confirm !== null" @update:open="value => { if (!value && !busy) confirm = null }">
+    <Dialog :open="confirm !== null" @update:open="value => { if (!value) closeConfirm() }">
       <DialogContent :show-close="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
         <DialogHeader><DialogTitle>{{ confirm ? actionLabels[confirm] : '' }}</DialogTitle><DialogDescription>{{ selected?.name }}：{{ confirm ? actionHints[confirm] : '' }}</DialogDescription></DialogHeader>
         <p v-if="error" role="alert" class="text-sm text-destructive">
           {{ error }}
         </p>
         <DialogFooter>
-          <Button variant="outline" :disabled="busy" @click="confirm = null">
+          <Button variant="outline" :disabled="busy" @click="closeConfirm">
             取消
           </Button><Button variant="destructive" :disabled="busy" @click="execute">
             {{ busy ? '正在处理…' : '确认执行' }}
