@@ -1307,41 +1307,10 @@ pub(crate) fn selected_traffic(
         result.down_bytes = Some(down);
         result.status = if limit > 0 { "ready" } else { "unlimited" };
     } else {
-        let row: Option<(Option<String>, String, i64, bool)> = db.query_row(
-            "SELECT snapshot,status,last_success_ms,json_extract(config,'$.enabled') FROM external_traffic_sources WHERE node_id=?1",
-            [node], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        ).optional()?;
-        let Some((raw, status, success, enabled)) = row else {
+        let Some(summary) = crate::external_traffic::read_node_traffic_summary(db, node)? else {
             return Ok(result);
         };
-        result.last_success_unix_ms = (success > 0).then_some(unsigned(success));
-        if let Some(raw) = raw {
-            let snapshot: crate::external_traffic::TrafficSnapshot = decode(&raw)?;
-            result.used_bytes = Some(snapshot.used_bytes);
-            result.limit_bytes = snapshot.limit_bytes;
-            result.up_bytes = Some(snapshot.up_bytes);
-            result.down_bytes = Some(snapshot.down_bytes);
-            result.reset_at = snapshot.reset_at;
-        }
-        result.status = if !enabled {
-            "disabled"
-        } else if status == "authentication_required" || status == "credential_unavailable" {
-            "authentication_required"
-        } else if status != "ok" && status != "pending" {
-            "sync_failed"
-        } else if result.used_bytes.is_none() {
-            "no_data"
-        } else if status != "ok"
-            || success <= 0
-            || unsigned(success) > now
-            || now.saturating_sub(unsigned(success)) > 90 * 60 * 1_000
-        {
-            "stale"
-        } else if result.limit_bytes.is_none_or(|limit| limit == 0) {
-            "quota_missing"
-        } else {
-            "ready"
-        };
+        apply_provider_traffic(&mut result, summary, now);
     }
     if result.status == "ready" {
         result.percentage = result
@@ -1350,6 +1319,48 @@ pub(crate) fn selected_traffic(
             .map(|(used, limit)| used as f64 / limit as f64 * 100.0);
     }
     Ok(result)
+}
+
+fn apply_provider_traffic(
+    result: &mut SelectedTraffic,
+    summary: crate::external_traffic::StoredTrafficSummary,
+    now: u64,
+) {
+    if !summary.snapshot_corrupt {
+        result.last_success_unix_ms =
+            (summary.last_success_ms > 0).then_some(unsigned(summary.last_success_ms));
+        if let Some(snapshot) = summary.snapshot {
+            result.used_bytes = Some(snapshot.used_bytes);
+            result.limit_bytes = snapshot.limit_bytes;
+            result.up_bytes = Some(snapshot.up_bytes);
+            result.down_bytes = Some(snapshot.down_bytes);
+            result.reset_at = snapshot.reset_at;
+        }
+    }
+    let failed_status = summary.status != "ok" && summary.status != "pending";
+    result.status = if summary.config_corrupt {
+        "sync_failed"
+    } else if !summary.enabled {
+        "disabled"
+    } else if summary.status == "authentication_required"
+        || summary.status == "credential_unavailable"
+    {
+        "authentication_required"
+    } else if summary.snapshot_corrupt || failed_status {
+        "sync_failed"
+    } else if result.used_bytes.is_none() {
+        "no_data"
+    } else if summary.status != "ok"
+        || summary.last_success_ms <= 0
+        || unsigned(summary.last_success_ms) > now
+        || now.saturating_sub(unsigned(summary.last_success_ms)) > 90 * 60 * 1_000
+    {
+        "stale"
+    } else if result.limit_bytes.is_none_or(|limit| limit == 0) {
+        "quota_missing"
+    } else {
+        "ready"
+    };
 }
 
 /// Full-window totals plus a bounded ten-bucket trend for the theme-selected tasks.
@@ -1420,22 +1431,19 @@ pub(crate) fn decorate_client(
     node: &str,
     value: &mut Value,
 ) -> Result<(), StorageError> {
-    let external: Option<(String, Option<String>, String, i64)> = db.query_row(
-        "SELECT json_extract(config,'$.name'),snapshot,status,last_success_ms FROM external_traffic_sources WHERE node_id=?1 AND json_extract(config,'$.enabled')=1",
-        [node], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-    ).optional()?;
-    if let Some((name, snapshot, status, last_success)) = external {
-        let snapshot: Option<crate::external_traffic::TrafficSnapshot> = snapshot
-            .map(|raw| {
-                serde_json::from_str(&raw)
-                    .map_err(|_| StorageError::InvalidInput("stored traffic snapshot is invalid"))
-            })
-            .transpose()?;
+    if let Some(summary) = crate::external_traffic::read_node_traffic_summary(db, node)?
+        && summary.enabled
+    {
+        let last_success = if summary.snapshot_corrupt {
+            0
+        } else {
+            unsigned(summary.last_success_ms)
+        };
         value["external_traffic"] = json!({
-            "snapshot": snapshot,
-            "name": name,
-            "status": status,
-            "last_success_unix_ms": unsigned(last_success),
+            "snapshot": summary.snapshot,
+            "name": summary.name,
+            "status": summary.status,
+            "last_success_unix_ms": last_success,
         });
     }
     let options = options_or_none(db, node)?;

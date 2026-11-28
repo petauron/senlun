@@ -1148,6 +1148,9 @@ fn validate_snapshot(snapshot: &SystemSnapshot) -> Result<(), ApiError> {
     if Uuid::parse_str(&snapshot.sample_id).is_err() {
         return Err(ApiError::bad_request("sample_id must be a UUID"));
     }
+    if let Err(error) = storage::validate_snapshot_integers(snapshot) {
+        return Err(map_storage_error(error));
+    }
     validate_text("agent_version", &snapshot.agent_version, 1, 64)?;
     validate_text("operating_system", &snapshot.operating_system, 1, 128)?;
     validate_text("kernel_version", &snapshot.kernel_version, 0, 128)?;
@@ -2226,5 +2229,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn snapshot_boundary_rejects_out_of_range_integers_with_bad_request() {
+        let limit = u64::try_from(i64::MAX).unwrap();
+        let mut valid = control_tests::sample(limit, limit, limit);
+        valid.uptime_seconds = limit;
+        valid.memory_total_bytes = limit;
+        valid.memory_used_bytes = limit;
+        assert!(validate_snapshot(&valid).is_ok());
+
+        let mut bad_time = valid.clone();
+        bad_time.collected_at_unix_ms = limit + 1;
+        assert_eq!(
+            validate_snapshot(&bad_time).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut bad_uptime = valid.clone();
+        bad_uptime.uptime_seconds = u64::MAX;
+        assert_eq!(
+            validate_snapshot(&bad_uptime).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut bad_rx = valid.clone();
+        bad_rx.network_total_received_bytes = limit + 1;
+        assert_eq!(
+            validate_snapshot(&bad_rx).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
+
+        let mut bad_gpu = valid;
+        bad_gpu.gpus.as_mut().unwrap()[0].memory_total_bytes = Some(u64::MAX);
+        assert_eq!(
+            validate_snapshot(&bad_gpu).unwrap_err().status,
+            StatusCode::BAD_REQUEST
+        );
     }
 }
