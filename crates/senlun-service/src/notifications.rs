@@ -61,6 +61,11 @@ enum EnqueueOutcome {
 }
 
 pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
+    // Legacy v10 rows whose outbox entries were already cleared cannot distinguish
+    // an in-app-only alert or suppressed firing from a delivered notification.
+    // Backfill firing_notified only when a durable outbox row proves a current-
+    // episode firing delivery was enqueued; future firing evaluations rebuild
+    // evidence cleanly without emitting phantom recovery notifications.
     db.execute_batch(
         "ALTER TABLE alert_incidents
              ADD COLUMN firing_notified INTEGER NOT NULL DEFAULT 0 CHECK(firing_notified IN (0,1));
@@ -68,10 +73,16 @@ pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
              ADD COLUMN recovery_pending INTEGER NOT NULL DEFAULT 0 CHECK(recovery_pending IN (0,1));
          UPDATE alert_incidents
              SET firing_notified = 1
-             WHERE status = 'firing' AND last_sent_at_ms > 0 AND last_sent_at_ms >= opened_at_ms;
-         UPDATE alert_incidents
-             SET recovery_pending = 1, last_sent_at_ms = 0
-             WHERE status = 'resolved' AND last_sent_at_ms < 0;
+             WHERE status = 'firing'
+               AND EXISTS (
+                   SELECT 1
+                   FROM alert_deliveries d
+                   WHERE d.incident_id = alert_incidents.id
+                     AND json_valid(d.payload)
+                     AND json_extract(d.payload, '$.status') = 'firing'
+                     AND typeof(json_extract(d.payload, '$.occurred_at_unix_ms')) = 'integer'
+                     AND json_extract(d.payload, '$.occurred_at_unix_ms') >= alert_incidents.opened_at_ms
+               );
          UPDATE alert_incidents
              SET last_sent_at_ms = 0
              WHERE last_sent_at_ms < 0;",
@@ -357,10 +368,12 @@ fn pause_evaluation(
                 params![incident.id, integer(now)],
             )?;
         } else if removed > 0 {
+            // A temporary unknown traffic state cancels queued reminders/deliveries,
+            // but keeps firing_notified for an already-firing episode so a later
+            // confirmed healthy sample still sends recovery. Source changes, disables,
+            // and retirements clear firing_notified explicitly.
             tx.execute(
-                "UPDATE alert_incidents
-                 SET last_sent_at_ms=0,firing_notified=0,recovery_pending=0
-                 WHERE id=?1",
+                "UPDATE alert_incidents SET last_sent_at_ms=0 WHERE id=?1",
                 [&incident.id],
             )?;
         }
@@ -412,7 +425,7 @@ fn resolve_incident(
     if needs_recovery {
         let outcome = enqueue(
             tx,
-            &incident.id,
+            incident,
             rule,
             node_id,
             node,
@@ -556,7 +569,7 @@ fn evaluate_node(
     {
         let outcome = enqueue(
             tx,
-            &incident.id,
+            &incident,
             rule,
             node_id,
             node,
@@ -564,10 +577,7 @@ fn evaluate_node(
             &message,
             now,
         )?;
-        if matches!(
-            outcome,
-            EnqueueOutcome::Enqueued | EnqueueOutcome::AlreadyPending
-        ) {
+        if outcome == EnqueueOutcome::Enqueued {
             tx.execute(
                 "UPDATE alert_incidents SET last_sent_at_ms=?2,firing_notified=1 WHERE id=?1",
                 params![incident.id, integer(now)],
@@ -635,7 +645,7 @@ fn reserve_incident(tx: &Transaction<'_>, available: &mut usize) -> Result<bool,
 #[allow(clippy::too_many_arguments)]
 fn enqueue(
     tx: &Transaction<'_>,
-    incident_id: &str,
+    incident: &Incident,
     rule: &AlertRule,
     node_id: &str,
     node: &NodeState,
@@ -645,7 +655,7 @@ fn enqueue(
 ) -> Result<EnqueueOutcome, StorageError> {
     // This is the administrator-approved disclosure: identifiers, names, rule,
     // state, time and a short reason. Never IPs, keys or raw/individual metrics.
-    let payload = json!({ "status":event, "incident_id":incident_id, "node_id":node_id,
+    let payload = json!({ "status":event, "incident_id":incident.id, "node_id":node_id,
         "node_name":node.name, "rule_id":rule.id, "rule_name":rule.name,
         "message":message, "occurred_at_unix_ms":now })
     .to_string();
@@ -675,16 +685,21 @@ fn enqueue(
         let existing: Option<String> = tx
             .query_row(
                 "SELECT payload FROM alert_deliveries WHERE incident_id=?1 AND channel_id=?2",
-                params![incident_id, channel_id],
+                params![incident.id, channel_id],
                 |row| row.get(0),
             )
             .optional()?;
-        // A cooldown reminder must not reset a failing delivery's retry count.
+        // A cooldown reminder must not reset a failing current-episode delivery's
+        // retry count, while stale rows from a previous episode must be replaced.
         if existing
             .as_deref()
-            .map(decode::<serde_json::Value>)
-            .transpose()?
-            .is_some_and(|body| body["status"].as_str() == Some(event))
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+            .is_some_and(|body| {
+                body["status"].as_str() == Some(event)
+                    && body["occurred_at_unix_ms"]
+                        .as_u64()
+                        .is_some_and(|occurred_at| occurred_at >= incident.opened_at)
+            })
         {
             skipped_same_event = true;
             continue;
@@ -709,7 +724,7 @@ fn enqueue(
         return Ok(EnqueueOutcome::OutboxFull);
     }
     for channel_id in channels {
-        tx.execute("INSERT INTO alert_deliveries(id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms) VALUES(?1,?2,?3,?4,0,?5,?5) ON CONFLICT(incident_id,channel_id) DO UPDATE SET id=excluded.id,payload=excluded.payload,attempts=0,next_attempt_ms=excluded.next_attempt_ms,created_at_ms=excluded.created_at_ms", params![Uuid::new_v4().to_string(), incident_id, channel_id, payload, integer(now)])?;
+        tx.execute("INSERT INTO alert_deliveries(id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms) VALUES(?1,?2,?3,?4,0,?5,?5) ON CONFLICT(incident_id,channel_id) DO UPDATE SET id=excluded.id,payload=excluded.payload,attempts=0,next_attempt_ms=excluded.next_attempt_ms,created_at_ms=excluded.created_at_ms", params![Uuid::new_v4().to_string(), incident.id, channel_id, payload, integer(now)])?;
     }
     Ok(EnqueueOutcome::Enqueued)
 }
@@ -1305,10 +1320,7 @@ mod tests {
         storage
             .connection()
             .unwrap()
-            .execute(
-                "DELETE FROM alert_deliveries WHERE id='pad-delivery-0'",
-                [],
-            )
+            .execute("DELETE FROM alert_deliveries WHERE id='pad-delivery-0'", [])
             .unwrap();
         storage.evaluate_alerts(121_000, 90_000).unwrap();
         assert_eq!(
@@ -1352,17 +1364,29 @@ mod tests {
         assert!(storage.pending_deliveries(226_000).unwrap().is_empty());
     }
 
-    #[test]
-    fn schema_v11_migration_backfills_legacy_recovery_and_firing_flags() {
-        let (_directory, path, db) = crate::storage::version_six_store();
+    fn seed_v10_incident_fixture(db: &Connection, channel_id: &str) {
+        let disabled = Channel {
+            id: channel_id.into(),
+            name: "legacy-channel".into(),
+            kind: "webhook".into(),
+            url: "https://example.invalid/legacy".into(),
+            enabled: false,
+        };
+        db.execute(
+            "INSERT INTO alert_channels(id,data) VALUES(?1,?2)",
+            params![channel_id, serde_json::to_string(&disabled).unwrap()],
+        )
+        .unwrap();
         for id in [
-            "rule-fired",
-            "rule-suppressed",
-            "rule-recovery",
-            "rule-pending",
+            "rule-no-channel",
+            "rule-legacy-neg",
+            "rule-bad-payload",
+            "rule-stale-outbox",
+            "rule-live-outbox",
         ] {
             let mut item = rule("offline");
             item.id = id.into();
+            item.channel_ids = vec![channel_id.into()];
             db.execute(
                 "INSERT INTO alert_rules(id,data) VALUES(?1,?2)",
                 params![id, serde_json::to_string(&item).unwrap()],
@@ -1373,12 +1397,27 @@ mod tests {
             "INSERT INTO alert_incidents(
                  id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,last_sent_at_ms
              ) VALUES
-                 ('inc-fired','node-a','rule-fired','firing','m',100,110,110),
-                 ('inc-suppressed','node-a','rule-suppressed','firing','m',200,210,110),
-                 ('inc-recovery','node-a','rule-recovery','resolved','m',100,150,-1),
-                 ('inc-pending','node-a','rule-pending','pending','m',300,300,-1);",
+                 ('inc-no-channel','node-a','rule-no-channel','firing','m',100,110,110),
+                 ('inc-legacy-neg','node-a','rule-legacy-neg','resolved','m',100,150,-1),
+                 ('inc-bad-payload','node-a','rule-bad-payload','firing','m',100,110,110),
+                 ('inc-stale-outbox','node-a','rule-stale-outbox','firing','m',200,210,210),
+                 ('inc-live-outbox','node-a','rule-live-outbox','firing','m',100,110,110);
+             INSERT INTO alert_deliveries(
+                 id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms
+             ) VALUES
+                 ('del-bad','inc-bad-payload','legacy-ch','{broken',0,110,110),
+                 ('del-stale','inc-stale-outbox','legacy-ch',
+                  '{\"status\":\"firing\",\"occurred_at_unix_ms\":110}',0,110,110),
+                 ('del-live','inc-live-outbox','legacy-ch',
+                  '{\"status\":\"firing\",\"occurred_at_unix_ms\":110}',0,110,110);",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn schema_v11_migration_requires_current_episode_outbox_evidence() {
+        let (_directory, path, db) = crate::storage::version_six_store();
+        seed_v10_incident_fixture(&db, "legacy-ch");
         drop(db);
 
         let storage = Storage::open(&path, 64 * 1024 * 1024).unwrap();
@@ -1389,20 +1428,281 @@ mod tests {
             .unwrap();
         assert_eq!(version, crate::storage::SCHEMA_VERSION);
         assert_eq!(
-            incident_flags(&storage, "rule-fired"),
-            ("firing".into(), 110, 1, 0)
-        );
-        assert_eq!(
-            incident_flags(&storage, "rule-suppressed"),
+            incident_flags(&storage, "rule-no-channel"),
             ("firing".into(), 110, 0, 0)
         );
         assert_eq!(
-            incident_flags(&storage, "rule-recovery"),
-            ("resolved".into(), 0, 0, 1)
+            incident_flags(&storage, "rule-legacy-neg"),
+            ("resolved".into(), 0, 0, 0)
         );
         assert_eq!(
-            incident_flags(&storage, "rule-pending"),
-            ("pending".into(), 0, 0, 0)
+            incident_flags(&storage, "rule-bad-payload"),
+            ("firing".into(), 110, 0, 0)
         );
+        assert_eq!(
+            incident_flags(&storage, "rule-stale-outbox"),
+            ("firing".into(), 210, 0, 0)
+        );
+        assert_eq!(
+            incident_flags(&storage, "rule-live-outbox"),
+            ("firing".into(), 110, 1, 0)
+        );
+
+        // Enable the channel after upgrade and recover node-a: only rule-live-outbox
+        // had provable current-episode firing outbox evidence, so only it sends resolved.
+        let enabled = Channel {
+            id: "legacy-ch".into(),
+            name: "legacy-channel".into(),
+            kind: "webhook".into(),
+            url: "https://example.invalid/legacy".into(),
+            enabled: true,
+        };
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE alert_channels SET data=?2 WHERE id=?1",
+                params![&enabled.id, serde_json::to_string(&enabled).unwrap()],
+            )
+            .unwrap();
+        set_node_seen(&storage, "node-a", 300);
+        storage.evaluate_alerts(300, 90_000).unwrap();
+
+        let deliveries = storage.pending_deliveries(300).unwrap();
+        let resolved_rules: Vec<String> = deliveries
+            .iter()
+            .filter_map(|item| {
+                let body: serde_json::Value = serde_json::from_str(&item.payload).ok()?;
+                (body["status"].as_str() == Some("resolved"))
+                    .then(|| body["rule_id"].as_str().unwrap_or_default().to_owned())
+            })
+            .collect();
+        assert_eq!(resolved_rules, vec!["rule-live-outbox".to_owned()]);
+    }
+
+    fn set_provider_traffic(
+        storage: &Storage,
+        node_id: &str,
+        used_bytes: u64,
+        ts: u64,
+        status: &str,
+    ) {
+        let config_json = json!({
+            "name": "provider-a",
+            "enabled": true,
+            "auth_mode": "none",
+            "traffic_url": "https://example.invalid/usage",
+            "login_url": "",
+            "refresh_url": "",
+            "username_field": "",
+            "password_field": "",
+            "refresh_token_field": "",
+            "access_pointer": "",
+            "refresh_pointer": "",
+            "up_pointer": "/up",
+            "down_pointer": "/down",
+            "used_pointer": "/used",
+            "limit_pointer": "/limit",
+            "limit_unit": "bytes",
+            "reset_pointer": "",
+        })
+        .to_string();
+        let snapshot_json = json!({
+            "up_bytes": used_bytes / 2,
+            "down_bytes": used_bytes - used_bytes / 2,
+            "used_bytes": used_bytes,
+            "limit_bytes": 100,
+            "reset_at": null,
+            "fetched_at_unix_ms": ts,
+        })
+        .to_string();
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO external_traffic_sources(
+                     node_id,config,credential,snapshot,last_attempt_ms,last_success_ms,generation,status
+                 ) VALUES(?1,?2,X'',?3,?4,?4,'gen-1',?5)
+                 ON CONFLICT(node_id) DO UPDATE SET
+                     snapshot=excluded.snapshot,last_attempt_ms=excluded.last_attempt_ms,
+                     last_success_ms=excluded.last_success_ms,status=excluded.status",
+                params![node_id, config_json, snapshot_json, integer(ts), status],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn traffic_temporary_unknown_preserves_firing_evidence_for_recovery() {
+        let (_directory, storage, node_id) = configured_storage();
+        let channel_id: String = storage
+            .connection()
+            .unwrap()
+            .query_row("SELECT id FROM alert_channels", [], |row| row.get(0))
+            .unwrap();
+        let mut options = NodeOptions {
+            id: node_id.clone(),
+            name: "traffic-node".into(),
+            currency: "USD".into(),
+            traffic_source: TrafficSource::Provider,
+            traffic_limit_type: "sum".into(),
+            traffic_reset_day: 1,
+            ..NodeOptions::default()
+        };
+        storage.save_node_options(&node_id, &mut options).unwrap();
+        let mut traffic_rule = rule("traffic");
+        traffic_rule.id.clear();
+        traffic_rule.name = "provider-quota".into();
+        traffic_rule.node_ids = vec![node_id.clone()];
+        traffic_rule.threshold = 50.0;
+        traffic_rule.duration_seconds = 0;
+        traffic_rule.cooldown_seconds = 60;
+        traffic_rule.channel_ids = vec![channel_id];
+        storage.save_alert_rule(&mut traffic_rule).unwrap();
+
+        // Fire and deliver initial firing notification, then enqueue a cooldown reminder.
+        set_node_seen(&storage, &node_id, 100_000);
+        set_provider_traffic(&storage, &node_id, 90, 100_000, "ok");
+        storage.evaluate_alerts(100_000, 90_000).unwrap();
+        let first = storage.pending_deliveries(100_000).unwrap().pop().unwrap();
+        storage.delivery_result(&first.id, true, 100_001).unwrap();
+
+        set_node_seen(&storage, &node_id, 161_000);
+        set_provider_traffic(&storage, &node_id, 90, 161_000, "ok");
+        storage.evaluate_alerts(161_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &traffic_rule.id),
+            ("firing".into(), 161_000, 1, 0)
+        );
+
+        // Temporary unknown state cancels the queued reminder but preserves firing_notified.
+        set_provider_traffic(&storage, &node_id, 90, 161_000, "provider_unavailable");
+        storage.evaluate_alerts(162_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &traffic_rule.id),
+            ("firing".into(), 0, 1, 0)
+        );
+        assert!(storage.pending_deliveries(162_000).unwrap().is_empty());
+
+        // Returning to a known healthy percentage must still send recovery.
+        set_provider_traffic(&storage, &node_id, 10, 163_000, "ok");
+        storage.evaluate_alerts(163_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &traffic_rule.id),
+            ("resolved".into(), 0, 0, 0)
+        );
+        let recovery = storage.pending_deliveries(163_000).unwrap().pop().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recovery.payload).unwrap()["status"],
+            "resolved"
+        );
+    }
+
+    #[test]
+    fn stale_prior_episode_delivery_is_replaced_and_already_pending_preserves_cooldown() {
+        let (_directory, storage, node_id) = configured_storage();
+        let (rule_id, mut stored_rule, ch1): (String, AlertRule, Channel) = {
+            let db = storage.connection().unwrap();
+            let (id, raw_rule): (String, String) = db
+                .query_row("SELECT id,data FROM alert_rules", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap();
+            let raw_ch: String = db
+                .query_row("SELECT data FROM alert_channels", [], |row| row.get(0))
+                .unwrap();
+            (
+                id,
+                serde_json::from_str(&raw_rule).unwrap(),
+                serde_json::from_str(&raw_ch).unwrap(),
+            )
+        };
+        let mut ch2 = Channel {
+            id: String::new(),
+            name: "second-channel".into(),
+            kind: "webhook".into(),
+            url: "https://example.invalid/second".into(),
+            enabled: true,
+        };
+        storage.save_channel(&mut ch2).unwrap();
+        stored_rule.channel_ids = vec![ch1.id.clone(), ch2.id.clone()];
+        storage.save_alert_rule(&mut stored_rule).unwrap();
+
+        // Episode 1 fires at 110_000; ch2 succeeds while ch1 stays retrying in the outbox.
+        storage.evaluate_alerts(100_000, 90_000).unwrap();
+        storage.evaluate_alerts(110_000, 90_000).unwrap();
+        let claimed = storage.pending_deliveries(110_000).unwrap();
+        assert_eq!(claimed.len(), 2);
+        for item in claimed {
+            let succeeded = item.url == ch2.url;
+            storage
+                .delivery_result(&item.id, succeeded, 110_001)
+                .unwrap();
+        }
+
+        // While ch1 still has the current episode's pending firing delivery, a cooldown tick
+        // returns AlreadyPending and must neither reset attempts nor advance last_sent_at_ms.
+        ch2.enabled = false;
+        storage.save_channel(&mut ch2).unwrap();
+        storage.evaluate_alerts(175_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("firing".into(), 110_000, 1, 0)
+        );
+        let attempts: u32 = storage
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT attempts FROM alert_deliveries WHERE channel_id=?1",
+                [&ch1.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(attempts, 1);
+
+        // Fill outbox to exact MAX_DELIVERIES (255 pad rows + ch1's row = 256) so Episode 1
+        // recovery fails with OutboxFull for ch2 while leaving ch1's Episode 1 firing row.
+        ch2.enabled = true;
+        storage.save_channel(&mut ch2).unwrap();
+        let incident_id: String = storage
+            .connection()
+            .unwrap()
+            .query_row("SELECT id FROM alert_incidents", [], |row| row.get(0))
+            .unwrap();
+        fill_outbox(&storage, &incident_id);
+        storage
+            .connection()
+            .unwrap()
+            .execute("DELETE FROM alert_deliveries WHERE id='pad-delivery-0'", [])
+            .unwrap();
+        set_node_seen(&storage, &node_id, 180_000);
+        storage.evaluate_alerts(180_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 110_000, 0, 1)
+        );
+
+        // Episode 2 opens at 200_000 and fires at 210_000 targeting only ch1 (0 new slots).
+        // Stale Episode 1 firing row must be replaced, not treated as AlreadyPending.
+        ch2.enabled = false;
+        storage.save_channel(&mut ch2).unwrap();
+        set_node_seen(&storage, &node_id, 50_000);
+        storage.evaluate_alerts(200_000, 90_000).unwrap();
+        storage.evaluate_alerts(210_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("firing".into(), 210_000, 1, 0)
+        );
+        let payload: String = storage
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT payload FROM alert_deliveries WHERE channel_id=?1",
+                [&ch1.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(body["status"], "firing");
+        assert_eq!(body["occurred_at_unix_ms"], 210_000);
     }
 }
