@@ -4,6 +4,18 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.4.0](https://github.com/petauron/senlun/compare/v0.3.0...v0.4.0) (2026-11-28)
+
+
+### Features
+
+* **web:** refine admin configuration interactions ([#333](https://github.com/petauron/senlun/issues/333)) ([1e1b71c](https://github.com/petauron/senlun/commit/1e1b71cb629d3f13cbfe675a6effb5aa9a0c6b91)), closes [#332](https://github.com/petauron/senlun/issues/332)
+
+
+### Bug Fixes
+
+* **web:** keep header tooltips clear of adjacent buttons ([#330](https://github.com/petauron/senlun/issues/330)) ([0e2f489](https://github.com/petauron/senlun/commit/0e2f489fa416fed5f96f1f3ca227644327211748)), closes [#329](https://github.com/petauron/senlun/issues/329)
+
 ## [0.3.0](https://github.com/petauron/senlun/compare/v0.2.2...v0.3.0) (2026-11-28)
 
 
