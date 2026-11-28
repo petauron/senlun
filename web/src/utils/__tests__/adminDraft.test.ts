@@ -2,6 +2,7 @@ import type { ManagedNode, SiteSettings } from '../admin'
 import { describe, expect, it } from 'vitest'
 import {
   createNodeDraftSnapshot,
+  formatNodeDraftBackup,
   isNodeDraftDirty,
   isSiteSettingsDirty,
   normalizeSiteSettings,
@@ -79,6 +80,33 @@ describe('admin draft comparison and server sync helpers', () => {
       quotaGiB: snapshot.quotaGiB,
       newTagText: '新标签',
     }, snapshot)).toBe(true)
+  })
+
+  it('formats a complete read-only backup snapshot including billing, expiry, traffic, peer probe, IP, remark, and unadded tag text', () => {
+    const snapshot = createNodeDraftSnapshot(nodeFixture({
+      ipv4: '203.0.113.10',
+      ipv6: '2001:db8::1',
+      price: 88.5,
+      currency: 'EUR',
+      billing_cycle_days: 90,
+      auto_renewal: true,
+    }))
+    const backup = formatNodeDraftBackup({
+      draft: snapshot.draft,
+      expires: '2026-12-31T23:59',
+      quotaGiB: '512',
+      newTagText: 'PendingTag',
+    }, 'violet')
+    expect(backup).toContain('名称：Node One')
+    expect(backup).toContain('待添加标签（尚未点击添加）：PendingTag<violet>')
+    expect(backup).toContain('公网 IPv4：203.0.113.10')
+    expect(backup).toContain('公网 IPv6：2001:db8::1')
+    expect(backup).toContain('节点互测：TCP / auto')
+    expect(backup).toContain('费用与周期：88.5 EUR / 90 天')
+    expect(backup).toContain('到期时间（本地时间）：2026-12-31T23:59')
+    expect(backup).toContain('自动续费标记：是')
+    expect(backup).toContain('每周期额度（GiB）：512')
+    expect(backup).toContain('公开备注：Line 1\nLine 2')
   })
 
   it('preserves dirty drafts on background refreshes of the same node but syncs on switch or explicit reset', () => {

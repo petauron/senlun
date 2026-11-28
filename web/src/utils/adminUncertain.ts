@@ -1,3 +1,4 @@
+import type { NodeListFilter } from './adminNodes'
 import { ref } from 'vue'
 import { getSessionGeneration } from './session'
 
@@ -20,10 +21,29 @@ export interface PendingUncertainTrafficRemoveLock {
   resyncError: string
 }
 
+export interface AdminNodesViewState {
+  searchQuery: string
+  statusFilter: NodeListFilter
+  listScrollY: number | null
+  listScrollTop: number | null
+  lastNodeId: string | null
+}
+
+function defaultAdminNodesViewState(): AdminNodesViewState {
+  return {
+    searchQuery: '',
+    statusFilter: 'all',
+    listScrollY: null,
+    listScrollTop: null,
+    lastNodeId: null,
+  }
+}
+
 // Session-scoped in-memory metadata only (never stores tokens, passwords, form drafts, or localStorage).
 export const enrollUncertainLock = ref<string | null>(null)
 export const nodeDangerUncertainLocks = ref<Record<string, PendingUncertainDangerLock>>({})
 export const trafficRemoveUncertainLocks = ref<Record<string, PendingUncertainTrafficRemoveLock>>({})
+export const adminNodesViewState = ref<AdminNodesViewState>(defaultAdminNodesViewState())
 
 export function isSameActiveSession(startGeneration: number, loggedIn: boolean): boolean {
   return loggedIn && getSessionGeneration() === startGeneration
@@ -68,4 +88,5 @@ export function clearAdminUncertainLocks(): void {
   enrollUncertainLock.value = null
   nodeDangerUncertainLocks.value = {}
   trafficRemoveUncertainLocks.value = {}
+  adminNodesViewState.value = defaultAdminNodesViewState()
 }

@@ -7,6 +7,7 @@ export interface RunAdminActionOptions {
   message?: string
   reload?: boolean
   riskyWrite?: boolean
+  isUncertainError?: (cause: unknown) => boolean
   uncertainMessage?: (detail: string) => string
   onCommitted?: () => void
 }
@@ -94,7 +95,7 @@ export function useAdminAction(refresh?: () => Promise<void>) {
     }
     catch (cause) {
       const detail = errorMessage(cause)
-      if (isUncertainWriteError(cause)) {
+      if (isUncertainWriteError(cause) || (options.isUncertainError?.(cause) ?? false)) {
         outcome.value = 'uncertain'
         uncertain.value = true
         needsResync.value = canResync

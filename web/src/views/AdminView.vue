@@ -290,6 +290,17 @@ async function resyncSettings(): Promise<void> {
     pendingUncertainSettings.value.resyncError = settingsResyncError.value
 }
 
+function handleNodeDeleted(deletedId: string): void {
+  if (!state.value)
+    return
+  if (!state.value.nodes.some(node => node.id === deletedId))
+    return
+  state.value = {
+    ...state.value,
+    nodes: state.value.nodes.filter(node => node.id !== deletedId),
+  }
+}
+
 async function logout(): Promise<void> {
   await logoutAction.run(async () => {
     await auth.logout()
@@ -335,7 +346,7 @@ async function logout(): Promise<void> {
       正在读取管理数据…
     </p>
     <template v-if="state">
-      <AdminNodes v-if="section === 'nodes'" :nodes="state.nodes" :refresh="() => refresh(false, false)" />
+      <AdminNodes v-if="section === 'nodes'" :nodes="state.nodes" :refresh="() => refresh(false, false)" @node-deleted="handleNodeDeleted" />
       <AdminTrafficSources v-else-if="section === 'traffic'" :nodes="state.nodes" />
       <AdminProbes v-else-if="section === 'probes'" :nodes="state.nodes" :probes="state.probes" :refresh="() => refresh(false, false)" />
       <AdminAlerts v-else-if="section === 'alerts'" :nodes="state.nodes" :channels="state.channels" :rules="state.alert_rules" :incidents="state.incidents" :failures="state.notification_failures" :refresh="() => refresh(false, false)" />
