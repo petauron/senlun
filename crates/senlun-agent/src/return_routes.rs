@@ -273,6 +273,7 @@ impl ChildProcessGroup {
         {
             use std::os::unix::process::CommandExt;
             command.as_std_mut().process_group(0);
+            command.env("SENLUN_DEDICATED_PGID", "1");
         }
         let child = command.spawn()?;
         #[cfg(unix)]
@@ -612,9 +613,17 @@ mod tests {
         let script = dir.join("hang.sh");
         let body = format!(concat!(
             "set -eu\n",
+            "kill_managed_group() {{\n",
+            "  [ \"${{SENLUN_DEDICATED_PGID:-0}}\" = 1 ] && [ -r /proc/self/stat ] || return 0\n",
+            "  IFS= read -r stat < /proc/self/stat || return 0\n",
+            "  IFS=' ' read -r _ ppid pgrp _ <<< \"${{stat##*) }}\"\n",
+            "  case \"$pgrp\" in ''|*[!0-9]*) return 0 ;; esac\n",
+            "  [ \"$pgrp\" = \"$ppid\" ] && [ \"$pgrp\" -gt 1 ] || return 0\n",
+            "  kill -KILL -- -\"$pgrp\" 2>/dev/null || true\n",
+            "}}\n",
             "{timeout_bin} --foreground -k 1s {inner_timeout} ",
             "{bash} -c 'sleep 30 & printf \"%s\\n\" \"$!\" > \"$1\"; wait' _ \"$1\" || {{\n",
-            "  kill -KILL 0 2>/dev/null || true\n",
+            "  kill_managed_group\n",
             "  exit 4\n",
             "}}\n"
         ));
