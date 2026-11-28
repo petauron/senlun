@@ -147,7 +147,7 @@ mod tests {
                 server_claimed_at + 15_000
             );
             assert_eq!(
-                lease.checked_at_unix_ms(received + Duration::from_secs(900)),
+                lease.checked_at_unix_ms(received + Duration::from_mins(15)),
                 server_claimed_at + lease_ms
             );
             assert_eq!(
@@ -155,7 +155,7 @@ mod tests {
                 (received + Duration::from_secs(35)).min(lease.deadline)
             );
             assert_eq!(
-                lease.collection_deadline(received, Duration::from_secs(900)),
+                lease.collection_deadline(received, Duration::from_mins(15)),
                 lease.deadline
             );
         }
