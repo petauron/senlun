@@ -8,9 +8,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{
-    Connection, OptionalExtension, Row, Transaction, TransactionBehavior, backup::Backup, params,
-};
+use rusqlite::{Connection, OptionalExtension, Row, Transaction, backup::Backup, params};
 use senlun_protocol::{EnrollmentRequest, EnrollmentResponse, SystemSnapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -212,6 +210,11 @@ impl Storage {
         self.connection
             .lock()
             .map_err(|_| StorageError::Database(rusqlite::Error::InvalidQuery))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_connection_busy(&self) -> bool {
+        self.connection.try_lock().is_err()
     }
 
     pub(crate) fn create_enrollment(
@@ -512,7 +515,7 @@ impl Storage {
         include_open: bool,
     ) -> Result<(), StorageError> {
         let mut connection = self.connection()?;
-        let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tx = connection.transaction()?;
         rollups::flush(&tx, now_ms, include_open)?;
         tx.commit()?;
         Ok(())

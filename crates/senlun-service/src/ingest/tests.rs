@@ -296,7 +296,7 @@ fn out_of_range_snapshot_is_isolated_from_valid_samples_in_same_batch() {
 fn ingest_batch_uses_immediate_lock_and_keeps_readonly_paths_nonblocking() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("senlun.db");
-    let storage = Storage::open(&db_path, 64 * 1024 * 1024).unwrap();
+    let storage = Arc::new(Storage::open(&db_path, 64 * 1024 * 1024).unwrap());
     let now = unix_time_ms().unwrap();
     let secret = storage.create_enrollment(600, now).unwrap();
     let node = storage
@@ -314,20 +314,24 @@ fn ingest_batch_uses_immediate_lock_and_keeps_readonly_paths_nonblocking() {
         )
         .unwrap();
 
-    // A concurrent SQLite writer holding BEGIN IMMEDIATE must not block read-only
-    // inspection and must not trigger SQLITE_BUSY_SNAPSHOT on ingest_batch.
+    // A concurrent SQLite writer holding BEGIN IMMEDIATE with a real write must not
+    // block read-only inspection, and ingest_batch must wait on the write lock rather
+    // than failing read-to-write upgrade with SQLITE_BUSY_SNAPSHOT.
     let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
     let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let writer_now = i64::try_from(now).unwrap();
     let writer = std::thread::spawn(move || {
         let mut conn = rusqlite::Connection::open(&db_path).unwrap();
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .unwrap();
-        tx.execute("UPDATE monitoring_settings SET data=data WHERE id=1", [])
-            .unwrap();
+        tx.execute(
+            "INSERT INTO audit_events(happened_at_ms, action, subject) VALUES(?1, 'test.writer', 'synthetic')",
+            [writer_now],
+        )
+        .unwrap();
         locked_tx.send(()).unwrap();
         let _ = release_rx.recv_timeout(Duration::from_secs(5));
-        std::thread::sleep(Duration::from_millis(50));
         tx.commit().unwrap();
     });
     locked_rx.recv().unwrap();
@@ -337,10 +341,35 @@ fn ingest_batch_uses_immediate_lock_and_keeps_readonly_paths_nonblocking() {
         .unwrap();
     assert_eq!(reporting.node_id, node.node_id);
 
-    release_tx.send(()).unwrap();
+    let ingest_storage = Arc::clone(&storage);
     let sample_input = input(&node.agent_token, now, 100, 200);
-    let results = storage.ingest_batch(&[&sample_input]).unwrap();
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    let ingester = std::thread::spawn(move || {
+        let outcome = ingest_storage.ingest_batch(&[&sample_input]);
+        let _ = done_tx.send(outcome);
+    });
+
+    // Positively observe that ingest_batch acquired the connection mutex and is waiting
+    // on the held SQLite write reservation before allowing the writer to commit.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !storage.is_connection_busy() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(storage.is_connection_busy());
+    assert!(
+        done_rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "IMMEDIATE ingest_batch must wait for active writer instead of failing early"
+    );
+
+    release_tx.send(()).unwrap();
     writer.join().unwrap();
+    let results = done_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("ingest_batch must finish once the writer commits")
+        .unwrap();
+    ingester.join().unwrap();
     assert!(results[0].is_ok());
     assert_eq!(count(&storage), 1);
+    let events = storage.audit_events(10).unwrap();
+    assert!(events.iter().any(|event| event.action == "test.writer"));
 }
