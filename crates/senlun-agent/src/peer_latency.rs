@@ -124,15 +124,14 @@ async fn fetch_plan(client: &Client, endpoint: &Url, token: &str, after: String)
         );
         return PlanFetch::Failed;
     }
-    match crate::read_json_with_limit(response, MAX_PLAN_BYTES).await {
-        Ok(plan) => PlanFetch::Plan(plan),
-        Err(_) => {
-            tracing::warn!(
-                reason = "invalid_response",
-                "peer latency plan response was invalid; the next round will sample again"
-            );
-            PlanFetch::Failed
-        }
+    if let Ok(plan) = crate::read_json_with_limit(response, MAX_PLAN_BYTES).await {
+        PlanFetch::Plan(plan)
+    } else {
+        tracing::warn!(
+            reason = "invalid_response",
+            "peer latency plan response was invalid; the next round will sample again"
+        );
+        PlanFetch::Failed
     }
 }
 
