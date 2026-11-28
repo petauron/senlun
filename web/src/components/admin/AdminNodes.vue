@@ -1201,7 +1201,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
           aria-controls="admin-node-enroll-panel"
           @click="enrollExpanded = !enrollExpanded"
         >
-          <Icon :icon="enrollExpanded ? 'lucide:chevron-up' : 'lucide:chevron-down'" class="size-4" aria-hidden="true" />
+          <Icon icon="lucide:chevron-down" class="size-4 transition-transform" :class="enrollExpanded ? 'rotate-180' : ''" aria-hidden="true" />
           {{ enrollExpanded ? '收起接入节点' : '展开接入节点' }}
         </Button>
       </div>
