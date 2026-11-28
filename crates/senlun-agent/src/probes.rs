@@ -90,7 +90,7 @@ struct RejectedBatch {
     required_config_epoch: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeliveryOutcome {
     Accepted,
     Unauthorized,
@@ -316,9 +316,9 @@ fn finish_rejected_after_config(
     pending: &mut BTreeMap<String, VecDeque<QueuedResult>>,
     rejected_batch: &mut Option<RejectedBatch>,
 ) {
-    if !rejected_batch
+    if rejected_batch
         .as_ref()
-        .is_some_and(|rejected| epoch >= rejected.required_config_epoch)
+        .is_none_or(|rejected| epoch < rejected.required_config_epoch)
     {
         return;
     }
@@ -332,6 +332,77 @@ fn finish_rejected_after_config(
                 recovered,
                 "re-queued valid sibling probe samples after configuration refresh"
             );
+        }
+    }
+}
+
+struct WorkerState {
+    schedules: Vec<ScheduledProbe>,
+    active: JoinSet<(ProbeTask, ProbeResult)>,
+    in_flight: HashSet<String>,
+    pending: BTreeMap<String, VecDeque<QueuedResult>>,
+    last_delivery: BTreeMap<String, VecDeque<Instant>>,
+    rejected_batch: Option<RejectedBatch>,
+}
+
+impl WorkerState {
+    fn new() -> Self {
+        Self {
+            schedules: Vec::new(),
+            active: JoinSet::new(),
+            in_flight: HashSet::new(),
+            pending: BTreeMap::new(),
+            last_delivery: BTreeMap::new(),
+            rejected_batch: None,
+        }
+    }
+
+    async fn handle_configuration(
+        &mut self,
+        result: Result<AgentRuntimeConfig, &'static str>,
+        epoch: u64,
+        interval: &watch::Sender<Duration>,
+    ) -> bool {
+        match result {
+            Ok(config) => {
+                apply_configuration(
+                    config,
+                    interval,
+                    &mut self.schedules,
+                    &mut self.active,
+                    &mut self.in_flight,
+                    &mut self.pending,
+                )
+                .await;
+                self.last_delivery.retain(|id, _| {
+                    self.schedules
+                        .iter()
+                        .any(|scheduled| scheduled.task.id == *id)
+                });
+                finish_rejected_after_config(
+                    epoch,
+                    true,
+                    &self.schedules,
+                    &mut self.pending,
+                    &mut self.rejected_batch,
+                );
+                true
+            }
+            Err("unauthorized") => {
+                tracing::warn!("Agent configuration credential rejected; probe worker stopped");
+                false
+            }
+            Err(reason) => {
+                finish_rejected_after_config(
+                    epoch,
+                    false,
+                    &self.schedules,
+                    &mut self.pending,
+                    &mut self.rejected_batch,
+                );
+                tracing::warn!(reason, "Agent configuration refresh failed");
+                true
+            }
         }
     }
 }
@@ -449,18 +520,13 @@ async fn run_worker(
     token: String,
     interval: watch::Sender<Duration>,
 ) {
-    let mut schedules: Vec<ScheduledProbe> = Vec::new();
+    let mut state = WorkerState::new();
     let mut next_config = Instant::now();
-    let mut active = JoinSet::new();
     let mut transport = JoinSet::new();
-    let mut in_flight = HashSet::new();
     let mut completion = None;
-    let mut pending = BTreeMap::<String, VecDeque<QueuedResult>>::new();
-    let mut last_delivery = BTreeMap::<String, VecDeque<Instant>>::new();
     let mut config_pending = false;
     let mut config_epoch = 0_u64;
     let mut delivery_pending = false;
-    let mut rejected_batch: Option<RejectedBatch> = None;
     loop {
         start_configuration(
             &mut next_config,
@@ -474,62 +540,54 @@ async fn run_worker(
 
         collect_completed_probes(
             &mut completion,
-            &mut active,
-            &mut in_flight,
-            &schedules,
-            &mut pending,
+            &mut state.active,
+            &mut state.in_flight,
+            &state.schedules,
+            &mut state.pending,
         )
         .await;
         let mut delivery_wake = None;
-        if !delivery_pending && rejected_batch.is_none() && !pending.is_empty() {
+        if !delivery_pending && state.rejected_batch.is_none() && !state.pending.is_empty() {
             (delivery_pending, delivery_wake) = start_delivery(
-                &mut pending,
-                &schedules,
-                &last_delivery,
+                &mut state.pending,
+                &state.schedules,
+                &state.last_delivery,
                 &mut transport,
                 &service_client,
                 &service_url,
                 &token,
             );
         }
-        launch_due_probes(&mut schedules, &mut in_flight, &mut active, &target_client);
+        launch_due_probes(
+            &mut state.schedules,
+            &mut state.in_flight,
+            &mut state.active,
+            &target_client,
+        );
         // An in-flight task already owns its next run. When every slot is
         // occupied, wait for a completion instead of spinning on overdue work.
         let mut next_wake = next_wake(
-            &schedules,
-            &in_flight,
-            active.len(),
+            &state.schedules,
+            &state.in_flight,
+            state.active.len(),
             config_wake(config_pending, next_config),
         );
         if !delivery_pending
-            && rejected_batch.is_none()
+            && state.rejected_batch.is_none()
             && let Some(delivery_wake) = delivery_wake
         {
             next_wake = next_wake.min(delivery_wake);
         }
         tokio::select! {
-            completed = active.join_next(), if !active.is_empty() => {
+            completed = state.active.join_next(), if !state.active.is_empty() => {
                 completion = completed;
             }
             completed = transport.join_next(), if !transport.is_empty() => {
                 match completed {
                     Some(Ok(TransportResult::Configuration(result, epoch))) => {
                         config_pending = false;
-                        match result {
-                            Ok(config) => {
-                                apply_configuration(config, &interval, &mut schedules, &mut active,
-                                    &mut in_flight, &mut pending).await;
-                                last_delivery.retain(|id, _| schedules.iter().any(|scheduled| scheduled.task.id == *id));
-                                finish_rejected_after_config(epoch, true, &schedules, &mut pending, &mut rejected_batch);
-                            }
-                            Err("unauthorized") => {
-                                tracing::warn!("Agent configuration credential rejected; probe worker stopped");
-                                return;
-                            }
-                            Err(reason) => {
-                                finish_rejected_after_config(epoch, false, &schedules, &mut pending, &mut rejected_batch);
-                                tracing::warn!(reason, "Agent configuration refresh failed");
-                            }
+                        if !state.handle_configuration(result, epoch, &interval).await {
+                            return;
                         }
                     }
                     Some(Ok(TransportResult::Delivery(outcome, submitted))) => {
@@ -537,11 +595,11 @@ async fn run_worker(
                         if !handle_delivery_outcome(
                             outcome,
                             submitted,
-                            &schedules,
-                            &mut last_delivery,
+                            &state.schedules,
+                            &mut state.last_delivery,
                             config_epoch,
                             &mut next_config,
-                            &mut rejected_batch,
+                            &mut state.rejected_batch,
                         ) {
                             return;
                         }
@@ -551,7 +609,7 @@ async fn run_worker(
                         while transport.join_next().await.is_some() {}
                         config_pending = false;
                         delivery_pending = false;
-                        rejected_batch = None;
+                        state.rejected_batch = None;
                         tracing::warn!("probe transport task failed");
                     }
                     None => {}
@@ -1063,7 +1121,7 @@ mod tests {
         assert_eq!(pending["task-kept"][1].result.sample_id, "s-kept-newer");
 
         // Already-retried samples are dropped if rejected again, and Accepted updates throttle.
-        let retried_sample = pending["task-kept"].pop_front().unwrap();
+        let retried_sample = pending.get_mut("task-kept").unwrap().pop_front().unwrap();
         assert!(handle_delivery_outcome(
             DeliveryOutcome::Rejected,
             vec![retried_sample],
