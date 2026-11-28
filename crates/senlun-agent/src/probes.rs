@@ -309,6 +309,33 @@ fn record_deliveries(
     }
 }
 
+fn finish_rejected_after_config(
+    epoch: u64,
+    succeeded: bool,
+    schedules: &[ScheduledProbe],
+    pending: &mut BTreeMap<String, VecDeque<QueuedResult>>,
+    rejected_batch: &mut Option<RejectedBatch>,
+) {
+    if !rejected_batch
+        .as_ref()
+        .is_some_and(|rejected| epoch >= rejected.required_config_epoch)
+    {
+        return;
+    }
+    let Some(rejected) = rejected_batch.take() else {
+        return;
+    };
+    if succeeded {
+        let recovered = recover_rejected_batch(rejected, schedules, pending);
+        if recovered > 0 {
+            tracing::info!(
+                recovered,
+                "re-queued valid sibling probe samples after configuration refresh"
+            );
+        }
+    }
+}
+
 fn handle_delivery_outcome(
     outcome: DeliveryOutcome,
     submitted: Vec<QueuedResult>,
@@ -493,32 +520,14 @@ async fn run_worker(
                                 apply_configuration(config, &interval, &mut schedules, &mut active,
                                     &mut in_flight, &mut pending).await;
                                 last_delivery.retain(|id, _| schedules.iter().any(|scheduled| scheduled.task.id == *id));
-                                if rejected_batch
-                                    .as_ref()
-                                    .is_some_and(|rejected| epoch >= rejected.required_config_epoch)
-                                    && let Some(rejected) = rejected_batch.take()
-                                {
-                                    let recovered =
-                                        recover_rejected_batch(rejected, &schedules, &mut pending);
-                                    if recovered > 0 {
-                                        tracing::info!(
-                                            recovered,
-                                            "re-queued valid sibling probe samples after configuration refresh"
-                                        );
-                                    }
-                                }
+                                finish_rejected_after_config(epoch, true, &schedules, &mut pending, &mut rejected_batch);
                             }
                             Err("unauthorized") => {
                                 tracing::warn!("Agent configuration credential rejected; probe worker stopped");
                                 return;
                             }
                             Err(reason) => {
-                                if rejected_batch
-                                    .as_ref()
-                                    .is_some_and(|rejected| epoch >= rejected.required_config_epoch)
-                                {
-                                    rejected_batch = None;
-                                }
+                                finish_rejected_after_config(epoch, false, &schedules, &mut pending, &mut rejected_batch);
                                 tracing::warn!(reason, "Agent configuration refresh failed");
                             }
                         }
@@ -1084,15 +1093,15 @@ mod tests {
         let a = scheduled("task-a", "127.0.0.1:80", now);
         let b = scheduled("task-b", "127.0.0.1:81", now);
         let rejected = RejectedBatch {
-            samples: vec![
-                queued_sample(&a.task, "s-a"),
-                queued_sample(&b.task, "s-b"),
-            ],
+            samples: vec![queued_sample(&a.task, "s-a"), queued_sample(&b.task, "s-b")],
             required_config_epoch: 2,
         };
         let schedules = vec![a, b];
         let mut pending = BTreeMap::new();
-        assert_eq!(recover_rejected_batch(rejected, &schedules, &mut pending), 0);
+        assert_eq!(
+            recover_rejected_batch(rejected, &schedules, &mut pending),
+            0
+        );
         assert!(pending.is_empty());
     }
 
