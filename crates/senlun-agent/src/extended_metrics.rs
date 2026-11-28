@@ -446,7 +446,10 @@ mod tests {
         let devices = parse_nvidia_metrics(b"NVIDIA Example, 10, 4096, 5000, 50\n").unwrap();
         assert_eq!(devices[0].memory_total_bytes, Some(4096 * 1024 * 1024));
         assert_eq!(devices[0].memory_used_bytes, Some(4096 * 1024 * 1024));
-        assert_eq!(clamp_gpu_memory(Some(100), Some(150)), (Some(100), Some(100)));
+        assert_eq!(
+            clamp_gpu_memory(Some(100), Some(150)),
+            (Some(100), Some(100))
+        );
         assert_eq!(clamp_gpu_memory(None, Some(150)), (None, Some(150)));
         assert_eq!(clamp_gpu_memory(Some(100), None), (Some(100), None));
     }

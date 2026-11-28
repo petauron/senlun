@@ -167,11 +167,13 @@ impl<T: Send + 'static> SingleFlightWorker<T> {
         Work: FnMut() -> Result<T, String> + Send + 'static,
     {
         let (request_tx, request_rx) = mpsc::sync_channel(1);
-        thread::Builder::new().name(name.to_owned()).spawn(move || {
-            while let Ok(reply) = request_rx.recv() {
-                let _ = reply.send(work());
-            }
-        })?;
+        thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                while let Ok(reply) = request_rx.recv() {
+                    let _ = reply.send(work());
+                }
+            })?;
         Ok(Self {
             request_tx,
             in_flight: None,
@@ -1116,10 +1118,22 @@ mod tests {
         assert_eq!(clamp_used_to_total(2048, 1024), 1024);
         assert_eq!(clamp_used_to_total(512, 1024), 512);
 
-        assert!(!is_stale_collection(Duration::from_secs(10), Duration::from_secs(3)));
-        assert!(is_stale_collection(Duration::from_secs(11), Duration::from_secs(3)));
-        assert!(!is_stale_collection(Duration::from_secs(30), Duration::from_secs(30)));
-        assert!(is_stale_collection(Duration::from_secs(31), Duration::from_secs(30)));
+        assert!(!is_stale_collection(
+            Duration::from_secs(10),
+            Duration::from_secs(3)
+        ));
+        assert!(is_stale_collection(
+            Duration::from_secs(11),
+            Duration::from_secs(3)
+        ));
+        assert!(!is_stale_collection(
+            Duration::from_secs(30),
+            Duration::from_secs(30)
+        ));
+        assert!(is_stale_collection(
+            Duration::from_secs(31),
+            Duration::from_secs(30)
+        ));
     }
 
     #[tokio::test(flavor = "current_thread")]
