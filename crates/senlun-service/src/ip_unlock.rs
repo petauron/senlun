@@ -615,6 +615,31 @@ mod tests {
         db.execute_batch(
             "DROP TABLE ip_unlock_checks;
              DROP TABLE ip_unlock_collectors;
+             DROP TABLE alert_deliveries;
+             DROP TABLE alert_incidents;
+             CREATE TABLE alert_incidents (
+                 id TEXT PRIMARY KEY,
+                 node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+                 rule_id TEXT NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+                 status TEXT NOT NULL,
+                 message TEXT NOT NULL,
+                 opened_at_ms INTEGER NOT NULL,
+                 updated_at_ms INTEGER NOT NULL,
+                 last_sent_at_ms INTEGER NOT NULL DEFAULT 0,
+                 UNIQUE(node_id,rule_id)
+             );
+             CREATE INDEX alert_incidents_rule ON alert_incidents(rule_id,node_id);
+             CREATE INDEX alert_incidents_updated ON alert_incidents(updated_at_ms DESC);
+             CREATE TABLE alert_deliveries (
+                 id TEXT PRIMARY KEY,
+                 incident_id TEXT NOT NULL REFERENCES alert_incidents(id) ON DELETE CASCADE,
+                 channel_id TEXT NOT NULL REFERENCES alert_channels(id) ON DELETE CASCADE,
+                 payload TEXT NOT NULL,
+                 attempts INTEGER NOT NULL DEFAULT 0,
+                 next_attempt_ms INTEGER NOT NULL,
+                 created_at_ms INTEGER NOT NULL,
+                 UNIQUE(incident_id,channel_id)
+             );
              PRAGMA user_version=9;",
         )
         .unwrap();

@@ -258,3 +258,108 @@ async fn closing_queue_drains_partial_batch_and_saturated_queue_fails_explicitly
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     );
 }
+
+#[test]
+fn out_of_range_snapshot_is_isolated_from_valid_samples_in_same_batch() {
+    let (_dir, storage, node) = fixture();
+    let now = unix_time_ms().unwrap();
+    let first = input(&node.agent_token, now, 1000, 2000);
+    let mut bad_counter = sample(now + 1500, 1050, u64::MAX);
+    bad_counter.sample_id = uuid::Uuid::new_v4().to_string();
+    let bad_counter = Input::Snapshot {
+        token_hash: hash_token(&node.agent_token),
+        snapshot: Box::new(bad_counter),
+        received_at: now + 1500,
+    };
+    let mut bad_time = sample(u64::MAX, 1060, 2060);
+    bad_time.sample_id = uuid::Uuid::new_v4().to_string();
+    let bad_time = Input::Snapshot {
+        token_hash: hash_token(&node.agent_token),
+        snapshot: Box::new(bad_time),
+        received_at: now + 2000,
+    };
+    let second = input(&node.agent_token, now + 3000, 1100, 2250);
+    let results = storage
+        .ingest_batch(&[&first, &bad_counter, &bad_time, &second])
+        .unwrap();
+    assert!(results[0].is_ok());
+    assert!(matches!(results[1], Err(StorageError::InvalidInput(_))));
+    assert!(matches!(results[2], Err(StorageError::InvalidInput(_))));
+    assert!(results[3].is_ok());
+    assert_eq!(count(&storage), 2);
+    let state = storage.admin_state().unwrap();
+    assert_eq!(state["nodes"][0]["traffic_used_up"], 100);
+    assert_eq!(state["nodes"][0]["traffic_used_down"], 250);
+}
+
+#[test]
+fn ingest_batch_uses_immediate_lock_and_keeps_readonly_paths_nonblocking() {
+    thread_local! {
+        static TEST_BUSY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("senlun.db");
+    let storage = Storage::open(&db_path, 64 * 1024 * 1024).unwrap();
+    let now = unix_time_ms().unwrap();
+    let secret = storage.create_enrollment(600, now).unwrap();
+    let node = storage
+        .enroll(
+            &senlun_protocol::EnrollmentRequest {
+                protocol_version: senlun_protocol::PROTOCOL_VERSION,
+                node_name: "synthetic-ingest".into(),
+                agent_version: "test".into(),
+                region: "SG".into(),
+                group: String::new(),
+            },
+            &hash_token(&secret.token),
+            100,
+            now,
+        )
+        .unwrap();
+
+    // Hold a real BEGIN IMMEDIATE write transaction on a second connection.
+    let mut writer_conn = rusqlite::Connection::open(&db_path).unwrap();
+    let writer_tx = writer_conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    let writer_now = i64::try_from(now).unwrap();
+    writer_tx
+        .execute(
+            "INSERT INTO audit_events(happened_at_ms, action, subject) VALUES(?1, 'test.writer', 'synthetic')",
+            [writer_now],
+        )
+        .unwrap();
+
+    // Read-only inspection stays non-blocking while another connection holds a write lock.
+    let reporting = storage
+        .inspect_node_reporting(&node.node_id, &node.agent_token, now)
+        .unwrap();
+    assert_eq!(reporting.node_id, node.node_id);
+
+    // SQLite invokes busy_handler for BEGIN IMMEDIATE contention, whereas a DEFERRED
+    // read-to-write upgrade against an active writer bypasses busy_handler.
+    TEST_BUSY.with(|called| called.set(false));
+    storage
+        .connection()
+        .unwrap()
+        .busy_handler(Some(|_| {
+            TEST_BUSY.with(|called| called.set(true));
+            false
+        }))
+        .unwrap();
+    let sample_input = input(&node.agent_token, now, 100, 200);
+    let busy = storage.ingest_batch(&[&sample_input]).unwrap_err();
+    assert!(matches!(busy, StorageError::Database(_)));
+    assert!(
+        TEST_BUSY.with(std::cell::Cell::get),
+        "IMMEDIATE ingest_batch must engage SQLite busy_handler under write contention"
+    );
+
+    writer_tx.commit().unwrap();
+    let results = storage.ingest_batch(&[&sample_input]).unwrap();
+    assert!(results[0].is_ok());
+    assert_eq!(count(&storage), 1);
+    let events = storage.audit_events(10).unwrap();
+    assert!(events.iter().any(|event| event.action == "test.writer"));
+}
