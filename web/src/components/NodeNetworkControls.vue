@@ -219,7 +219,7 @@ async function detect() {
           <span
             v-if="mobileTouchTarget"
             data-testid="network-detect-pill"
-            class="inline-flex h-8 items-center justify-center rounded-full bg-muted/60 px-3 text-xs font-medium text-foreground/85 transition-colors motion-reduce:transition-none group-hover/detect:bg-muted group-hover/detect:text-foreground sm:h-auto sm:bg-transparent sm:px-0 sm:text-[10px] sm:font-normal sm:group-hover/detect:bg-transparent"
+            class="inline-flex h-[26px] items-center justify-center whitespace-nowrap rounded-full bg-muted/60 px-2.5 text-[11px] font-medium leading-none text-foreground/85 transition-colors motion-reduce:transition-none group-hover/detect:bg-muted group-hover/detect:text-foreground sm:h-auto sm:bg-transparent sm:px-0 sm:text-[10px] sm:font-normal sm:group-hover/detect:bg-transparent"
           >
             <Icon icon="lucide:refresh-cw" class="mr-1 size-3" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
             {{ busy ? '检测中' : '检测' }}

@@ -381,7 +381,7 @@ test('load chart shows response-driven coverage window and refresh status withou
   await expect(modeBadge).toHaveText('自动刷新中')
 })
 
-test('mobile detail touch targets reach 44px with 32px visual capsules and safe probe separation without leaking to home or modals', async ({ page }, testInfo) => {
+test('mobile detail touch targets reach 44px with compact 26px network pills and safe probe separation without leaking to home or modals', async ({ page }, testInfo) => {
   const hasTouch = testInfo.project.use.hasTouch === true
   await page.setViewportSize({ width: 375, height: 812 })
   const checkedAt = Date.UTC(2026, 4, 10, 11, 30, 0)
@@ -572,16 +572,25 @@ test('mobile detail touch targets reach 44px with 32px visual capsules and safe 
   const detailDetectPillBox = await detailDetectPill.boundingBox()
 
   expect(detailV4Box?.height ?? 0).toBeGreaterThanOrEqual(44)
+  expect(detailV4Box?.width ?? 0).toBeGreaterThanOrEqual(44)
+  expect(detailV4Box?.width ?? 999).toBeLessThanOrEqual(48)
   expect(detailV6Box?.height ?? 0).toBeGreaterThanOrEqual(44)
+  expect(detailV6Box?.width ?? 0).toBeGreaterThanOrEqual(44)
+  expect(detailV6Box?.width ?? 999).toBeLessThanOrEqual(48)
   expect(Math.abs((detailV4Box?.width ?? 0) - (detailV6Box?.width ?? 0))).toBeLessThanOrEqual(2)
   expect((detailV4Box?.x ?? 0) + (detailV4Box?.width ?? 0)).toBeLessThanOrEqual((detailV6Box?.x ?? 0) + 1)
-  expect(detailTrackBox?.height ?? 0).toBeGreaterThanOrEqual(30)
-  expect(detailTrackBox?.height ?? 999).toBeLessThanOrEqual(34)
-  expect(detailIndicatorBox?.height ?? 0).toBeGreaterThanOrEqual(26)
-  expect(detailIndicatorBox?.height ?? 999).toBeLessThanOrEqual(30)
+  expect(detailTrackBox?.height ?? 0).toBeGreaterThanOrEqual(24)
+  expect(detailTrackBox?.height ?? 999).toBeLessThanOrEqual(28)
+  expect(detailTrackBox?.width ?? 0).toBeGreaterThanOrEqual(84)
+  expect(detailTrackBox?.width ?? 999).toBeLessThanOrEqual(94)
+  expect(detailIndicatorBox?.height ?? 0).toBeGreaterThanOrEqual(20)
+  expect(detailIndicatorBox?.height ?? 999).toBeLessThanOrEqual(24)
   expect(detailDetectBox?.height ?? 0).toBeGreaterThanOrEqual(44)
-  expect(detailDetectPillBox?.height ?? 0).toBeGreaterThanOrEqual(30)
-  expect(detailDetectPillBox?.height ?? 999).toBeLessThanOrEqual(34)
+  expect(detailDetectBox?.width ?? 0).toBeGreaterThanOrEqual(44)
+  expect(detailDetectPillBox?.height ?? 0).toBeGreaterThanOrEqual(24)
+  expect(detailDetectPillBox?.height ?? 999).toBeLessThanOrEqual(28)
+  expect(detailDetectPillBox?.width ?? 999).toBeLessThanOrEqual(80)
+  expect(Math.abs((detailTrackBox?.height ?? 0) - (detailDetectPillBox?.height ?? 0))).toBeLessThanOrEqual(1)
   expect((detailDetectBox?.x ?? 0) - ((detailV6Box?.x ?? 0) + (detailV6Box?.width ?? 0))).toBeGreaterThanOrEqual(12)
 
   // Rapid IPv6 -> IPv4 switching keeps single active selection and synced family data without triggering probes.

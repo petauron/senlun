@@ -22,7 +22,7 @@ const { versions, version } = useNodeIpVersion(() => props.node)
       data-testid="ip-version-track"
       class="pointer-events-none absolute -z-10"
       :class="mobileTouchTarget
-        ? 'inset-x-0 top-1/2 h-8 -translate-y-1/2 rounded-full bg-muted/60 p-0.5 sm:inset-0.5 sm:top-0.5 sm:h-auto sm:translate-y-0 sm:bg-transparent sm:p-0'
+        ? 'inset-x-0 top-1/2 h-[26px] -translate-y-1/2 rounded-full bg-muted/60 p-0.5 sm:inset-0.5 sm:top-0.5 sm:h-auto sm:translate-y-0 sm:bg-transparent sm:p-0'
         : 'inset-0.5'"
     >
       <span
@@ -38,7 +38,7 @@ const { versions, version } = useNodeIpVersion(() => props.node)
       :aria-label="`${node.name} 显示 ${item === 'ipv4' ? 'IPv4' : 'IPv6'}`"
       :class="[
         mobileTouchTarget
-          ? 'group/ip-option h-11 min-h-11 min-w-14 bg-transparent px-0.5 hover:bg-transparent hover:text-inherit dark:hover:bg-transparent sm:h-6 sm:min-h-6 sm:min-w-0 sm:px-0'
+          ? 'group/ip-option h-11 min-h-11 w-11 min-w-11 bg-transparent px-0.5 hover:bg-transparent hover:text-inherit dark:hover:bg-transparent sm:h-6 sm:min-h-6 sm:w-auto sm:min-w-0 sm:px-0'
           : 'min-h-6 px-2.5 text-[10px]',
         !mobileTouchTarget && (
           version === item
@@ -50,7 +50,7 @@ const { versions, version } = useNodeIpVersion(() => props.node)
     >
       <span
         v-if="mobileTouchTarget"
-        class="inline-flex h-7 w-full items-center justify-center rounded-full px-3 text-xs transition-colors motion-reduce:transition-none sm:h-full sm:px-2.5 sm:text-[10px]"
+        class="inline-flex h-[22px] w-full items-center justify-center rounded-full px-1 text-[11px] leading-none transition-colors motion-reduce:transition-none sm:h-full sm:px-2.5 sm:text-[10px]"
         :class="version === item
           ? 'font-semibold text-emerald-700 dark:text-emerald-300'
           : 'text-foreground/75 group-hover/ip-option:bg-background/55 group-hover/ip-option:text-foreground dark:group-hover/ip-option:bg-background/35 dark:group-hover/ip-option:text-foreground'"
