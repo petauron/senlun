@@ -258,3 +258,89 @@ async fn closing_queue_drains_partial_batch_and_saturated_queue_fails_explicitly
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     );
 }
+
+#[test]
+fn out_of_range_snapshot_is_isolated_from_valid_samples_in_same_batch() {
+    let (_dir, storage, node) = fixture();
+    let now = unix_time_ms().unwrap();
+    let first = input(&node.agent_token, now, 1000, 2000);
+    let mut bad_counter = sample(now + 1500, 1050, u64::MAX);
+    bad_counter.sample_id = uuid::Uuid::new_v4().to_string();
+    let bad_counter = Input::Snapshot {
+        token_hash: hash_token(&node.agent_token),
+        snapshot: Box::new(bad_counter),
+        received_at: now + 1500,
+    };
+    let mut bad_time = sample(u64::MAX, 1060, 2060);
+    bad_time.sample_id = uuid::Uuid::new_v4().to_string();
+    let bad_time = Input::Snapshot {
+        token_hash: hash_token(&node.agent_token),
+        snapshot: Box::new(bad_time),
+        received_at: now + 2000,
+    };
+    let second = input(&node.agent_token, now + 3000, 1100, 2250);
+    let results = storage
+        .ingest_batch(&[&first, &bad_counter, &bad_time, &second])
+        .unwrap();
+    assert!(results[0].is_ok());
+    assert!(matches!(results[1], Err(StorageError::InvalidInput(_))));
+    assert!(matches!(results[2], Err(StorageError::InvalidInput(_))));
+    assert!(results[3].is_ok());
+    assert_eq!(count(&storage), 2);
+    let state = storage.admin_state().unwrap();
+    assert_eq!(state["nodes"][0]["traffic_used_up"], 100);
+    assert_eq!(state["nodes"][0]["traffic_used_down"], 250);
+}
+
+#[test]
+fn ingest_batch_uses_immediate_lock_and_keeps_readonly_paths_nonblocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("senlun.db");
+    let storage = Storage::open(&db_path, 64 * 1024 * 1024).unwrap();
+    let now = unix_time_ms().unwrap();
+    let secret = storage.create_enrollment(600, now).unwrap();
+    let node = storage
+        .enroll(
+            &senlun_protocol::EnrollmentRequest {
+                protocol_version: senlun_protocol::PROTOCOL_VERSION,
+                node_name: "synthetic-ingest".into(),
+                agent_version: "test".into(),
+                region: "SG".into(),
+                group: String::new(),
+            },
+            &hash_token(&secret.token),
+            100,
+            now,
+        )
+        .unwrap();
+
+    // A concurrent SQLite writer holding BEGIN IMMEDIATE must not block read-only
+    // inspection and must not trigger SQLITE_BUSY_SNAPSHOT on ingest_batch.
+    let (locked_tx, locked_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let writer = std::thread::spawn(move || {
+        let mut conn = rusqlite::Connection::open(&db_path).unwrap();
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .unwrap();
+        tx.execute("UPDATE monitoring_settings SET data=data WHERE id=1", [])
+            .unwrap();
+        locked_tx.send(()).unwrap();
+        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(50));
+        tx.commit().unwrap();
+    });
+    locked_rx.recv().unwrap();
+
+    let reporting = storage
+        .inspect_node_reporting(&node.node_id, &node.agent_token, now)
+        .unwrap();
+    assert_eq!(reporting.node_id, node.node_id);
+
+    release_tx.send(()).unwrap();
+    let sample_input = input(&node.agent_token, now, 100, 200);
+    let results = storage.ingest_batch(&[&sample_input]).unwrap();
+    writer.join().unwrap();
+    assert!(results[0].is_ok());
+    assert_eq!(count(&storage), 1);
+}
