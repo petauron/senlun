@@ -4,7 +4,7 @@
 
 use std::{
     collections::{BTreeMap, HashSet, VecDeque},
-    net::IpAddr,
+    net::{IpAddr, SocketAddr},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -29,6 +29,7 @@ const TCP_HIGH_LATENCY_MS: f64 = 1000.0;
 const TCP_RETRANSMISSION_DROP_MS: f64 = 800.0;
 const TCP_HIGH_LATENCY_RETRIES: usize = 3;
 const MAX_PENDING_RESULTS_PER_TASK: usize = 4;
+const MAX_PROBE_LATENCY_MS: f64 = 30_000.0;
 
 pub struct ProbeRunner {
     pub interval: watch::Receiver<Duration>,
@@ -580,15 +581,34 @@ fn target_client() -> Result<Client, reqwest::Error> {
         .build()
 }
 
+fn clamp_probe_latency_ms(latency_ms: f64) -> Option<f64> {
+    if latency_ms.is_finite() && latency_ms >= 0.0 {
+        Some(latency_ms.min(MAX_PROBE_LATENCY_MS))
+    } else {
+        None
+    }
+}
+
+fn finalize_probe_outcome(
+    outcome: Result<f64, &'static str>,
+) -> (bool, Option<f64>, Option<String>) {
+    match outcome {
+        Ok(latency) => match clamp_probe_latency_ms(latency) {
+            Some(clamped) => (true, Some(clamped), None),
+            None => (false, None, Some("probe_failed".to_owned())),
+        },
+        Err(reason) => (false, None, Some(reason.to_owned())),
+    }
+}
+
 pub(crate) async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
     let started = Instant::now();
     let deadline = Duration::from_secs(task.timeout_seconds);
     let outcome = if task.kind == ProbeKind::Tcp {
         // Komari measures only the TCP handshake, then retries suspiciously
-        // slow handshakes. Each attempt has its own timeout.
-        run_tcp_probe(&task.target, deadline.min(TCP_CONNECT_TIMEOUT))
-            .await
-            .map(Some)
+        // slow handshakes. DNS, connect, and retries share the task deadline
+        // while each individual attempt stays <= 3s.
+        run_tcp_probe(&task.target, deadline).await
     } else {
         tokio::time::timeout(deadline, async {
             match task.kind {
@@ -601,9 +621,7 @@ pub(crate) async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
                         .ip();
                     let output =
                         system_command::run(SystemCommand::Ping(address), deadline).await?;
-                    parse_ping_latency(&output)
-                        .map(Some)
-                        .ok_or("response_parse")
+                    parse_ping_latency(&output).ok_or("response_parse")
                 }
                 ProbeKind::Tcp => unreachable!("TCP probes use run_tcp_probe"),
                 ProbeKind::Http => {
@@ -635,17 +653,14 @@ pub(crate) async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
                             return Err("response_too_large");
                         }
                     }
-                    Ok(Some(started.elapsed().as_secs_f64() * 1000.0))
+                    Ok(started.elapsed().as_secs_f64() * 1000.0)
                 }
             }
         })
         .await
         .unwrap_or(Err("timeout"))
     };
-    let (success, latency_ms, error) = match outcome {
-        Ok(latency) => (true, latency, None),
-        Err(reason) => (false, None, Some(reason.to_owned())),
-    };
+    let (success, latency_ms, error) = finalize_probe_outcome(outcome);
     ProbeResult {
         task_id: task.id,
         sample_id: Uuid::new_v4().to_string(),
@@ -660,23 +675,45 @@ pub(crate) async fn run_probe(client: Client, task: ProbeTask) -> ProbeResult {
     }
 }
 
-async fn measure_tcp(target: &str, timeout: Duration) -> Result<f64, &'static str> {
+async fn measure_tcp_with<Resolve, ResolveFut, Connect, ConnectFut>(
+    timeout: Duration,
+    resolve: Resolve,
+    connect: Connect,
+) -> Result<f64, &'static str>
+where
+    Resolve: FnOnce() -> ResolveFut,
+    ResolveFut: Future<Output = Result<SocketAddr, &'static str>>,
+    Connect: FnOnce(SocketAddr) -> ConnectFut,
+    ConnectFut: Future<Output = Result<f64, &'static str>>,
+{
+    tokio::time::timeout(timeout, async {
+        let address = resolve().await?;
+        connect(address).await
+    })
+    .await
+    .unwrap_or(Err("timeout"))
+}
+
+pub(crate) async fn measure_tcp(target: &str, timeout: Duration) -> Result<f64, &'static str> {
     let (host, port) = parse_tcp_target(target)?;
     // Match Komari's first-address choice and exclude name resolution from
-    // the measured latency. Bound DNS separately so a stalled resolver cannot
-    // hold a probe slot indefinitely.
-    let address = tokio::time::timeout(timeout, lookup_host((host.as_str(), port)))
-        .await
-        .map_err(|_| "timeout")?
-        .map_err(|_| "dns")?
-        .next()
-        .ok_or("dns")?;
-    let started = Instant::now();
-    tokio::time::timeout(timeout, TcpStream::connect(address))
-        .await
-        .map_err(|_| "timeout")?
-        .map_err(|_| "connect")?;
-    Ok((started.elapsed().as_secs_f64() * 1000.0).floor())
+    // the measured latency. Bound DNS and connect together per attempt.
+    measure_tcp_with(
+        timeout,
+        || async {
+            lookup_host((host.as_str(), port))
+                .await
+                .map_err(|_| "dns")?
+                .next()
+                .ok_or("dns")
+        },
+        |address| async move {
+            let started = Instant::now();
+            TcpStream::connect(address).await.map_err(|_| "connect")?;
+            Ok((started.elapsed().as_secs_f64() * 1000.0).floor())
+        },
+    )
+    .await
 }
 
 fn tcp_retry_candidate(first: f64, retry: f64) -> Result<Option<f64>, &'static str> {
@@ -689,17 +726,37 @@ fn tcp_retry_candidate(first: f64, retry: f64) -> Result<Option<f64>, &'static s
     Ok(Some(retry))
 }
 
-async fn run_tcp_probe(target: &str, timeout: Duration) -> Result<f64, &'static str> {
-    let first = measure_tcp(target, timeout).await?;
-    if first <= TCP_HIGH_LATENCY_MS {
-        return Ok(first);
-    }
-    for _ in 0..TCP_HIGH_LATENCY_RETRIES {
-        if let Some(latency) = tcp_retry_candidate(first, measure_tcp(target, timeout).await?)? {
-            return Ok(latency);
+async fn run_tcp_probe_with<F, Fut>(
+    total_timeout: Duration,
+    attempt_limit: Duration,
+    mut measure: F,
+) -> Result<f64, &'static str>
+where
+    F: FnMut(Duration) -> Fut,
+    Fut: Future<Output = Result<f64, &'static str>>,
+{
+    let attempt_timeout = total_timeout.min(attempt_limit);
+    tokio::time::timeout(total_timeout, async {
+        let first = measure(attempt_timeout).await?;
+        if first <= TCP_HIGH_LATENCY_MS {
+            return Ok(first);
         }
-    }
-    Err("probe_failed")
+        for _ in 0..TCP_HIGH_LATENCY_RETRIES {
+            if let Some(latency) = tcp_retry_candidate(first, measure(attempt_timeout).await?)? {
+                return Ok(latency);
+            }
+        }
+        Err("probe_failed")
+    })
+    .await
+    .unwrap_or(Err("timeout"))
+}
+
+async fn run_tcp_probe(target: &str, total_timeout: Duration) -> Result<f64, &'static str> {
+    run_tcp_probe_with(total_timeout, TCP_CONNECT_TIMEOUT, |timeout| {
+        measure_tcp(target, timeout)
+    })
+    .await
 }
 
 fn parse_ping_latency(output: &[u8]) -> Option<f64> {
@@ -966,6 +1023,132 @@ mod tests {
         assert_eq!(tcp_retry_candidate(1001.0, 1000.0), Ok(Some(1000.0)));
         assert_eq!(tcp_retry_candidate(1800.0, 1000.0), Ok(Some(1000.0)));
         assert_eq!(tcp_retry_candidate(1801.0, 1000.0), Err("probe_failed"));
+    }
+
+    #[tokio::test]
+    async fn tcp_attempt_timeout_bounds_dns_and_connect_together() {
+        let mut connect_called = false;
+        let dns_timeout = tokio::time::timeout(
+            Duration::from_secs(2),
+            measure_tcp_with(
+                Duration::from_millis(30),
+                std::future::pending::<Result<SocketAddr, &'static str>>,
+                |_| {
+                    connect_called = true;
+                    std::future::ready(Ok(1.0))
+                },
+            ),
+        )
+        .await
+        .expect("attempt timeout should bound stalled DNS");
+        assert_eq!(dns_timeout, Err("timeout"));
+        assert!(!connect_called);
+
+        let connect_timeout = tokio::time::timeout(
+            Duration::from_secs(2),
+            measure_tcp_with(
+                Duration::from_millis(30),
+                || std::future::ready(Ok(SocketAddr::from(([127, 0, 0, 1], 443)))),
+                |_| std::future::pending::<Result<f64, &'static str>>(),
+            ),
+        )
+        .await
+        .expect("attempt timeout should bound stalled connect");
+        assert_eq!(connect_timeout, Err("timeout"));
+    }
+
+    #[tokio::test]
+    async fn tcp_probe_shares_total_deadline_and_caps_each_attempt() {
+        let mut seen_timeout = None;
+        let fast = run_tcp_probe_with(
+            Duration::from_secs(10),
+            TCP_CONNECT_TIMEOUT,
+            |attempt_timeout| {
+                seen_timeout = Some(attempt_timeout);
+                std::future::ready(Ok(42.0))
+            },
+        )
+        .await;
+        assert_eq!(fast, Ok(42.0));
+        assert_eq!(seen_timeout, Some(TCP_CONNECT_TIMEOUT));
+
+        let mut calls = 0_usize;
+        let mut retry_timeout = None;
+        let shared = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_tcp_probe_with(
+                Duration::from_millis(40),
+                TCP_CONNECT_TIMEOUT,
+                |attempt_timeout| {
+                    calls += 1;
+                    retry_timeout = Some(attempt_timeout);
+                    let call = calls;
+                    async move {
+                        if call == 1 {
+                            Ok(1200.0)
+                        } else {
+                            std::future::pending().await
+                        }
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("overall deadline should bound high-latency retries");
+        assert_eq!(shared, Err("timeout"));
+        assert_eq!(calls, 2);
+        assert_eq!(retry_timeout, Some(Duration::from_millis(40)));
+    }
+
+    #[tokio::test]
+    async fn tcp_probe_preserves_high_latency_retry_outcomes() {
+        let cases: &[(&[f64], Result<f64, &'static str>, usize)] = &[
+            (&[250.0], Ok(250.0), 1),
+            (&[1200.0, 1100.0, 900.0], Ok(900.0), 3),
+            (&[1850.0, 900.0], Err("probe_failed"), 2),
+            (&[1200.0, 1100.0, 1050.0, 1001.0], Err("probe_failed"), 4),
+        ];
+        for (samples, expected, expected_calls) in cases {
+            let mut index = 0_usize;
+            let result = run_tcp_probe_with(Duration::from_secs(5), TCP_CONNECT_TIMEOUT, |_| {
+                let sample = samples[index];
+                index += 1;
+                std::future::ready(Ok(sample))
+            })
+            .await;
+            assert_eq!(result, *expected);
+            assert_eq!(index, *expected_calls);
+        }
+    }
+
+    #[test]
+    fn probe_outcome_clamps_latency_to_service_bounds() {
+        assert_eq!(finalize_probe_outcome(Ok(0.0)), (true, Some(0.0), None));
+        assert_eq!(finalize_probe_outcome(Ok(42.5)), (true, Some(42.5), None));
+        assert_eq!(
+            finalize_probe_outcome(Ok(30_000.0)),
+            (true, Some(30_000.0), None)
+        );
+        assert_eq!(
+            finalize_probe_outcome(Ok(30_000.5)),
+            (true, Some(30_000.0), None)
+        );
+        assert_eq!(
+            finalize_probe_outcome(Ok(-1.0)),
+            (false, None, Some("probe_failed".to_owned()))
+        );
+        assert_eq!(
+            finalize_probe_outcome(Ok(f64::NAN)),
+            (false, None, Some("probe_failed".to_owned()))
+        );
+        assert_eq!(
+            finalize_probe_outcome(Ok(f64::INFINITY)),
+            (false, None, Some("probe_failed".to_owned()))
+        );
+        assert_eq!(
+            finalize_probe_outcome(Err("timeout")),
+            (false, None, Some("timeout".to_owned()))
+        );
     }
 
     async fn http_fixture(response: String) -> (String, JoinHandle<String>) {
