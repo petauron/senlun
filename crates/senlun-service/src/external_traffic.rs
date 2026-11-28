@@ -20,7 +20,7 @@ use ring::{
     aead,
     rand::{SecureRandom, SystemRandom},
 };
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::net::lookup_host;
@@ -110,6 +110,93 @@ struct AdminSource {
     last_attempt_unix_ms: u64,
     last_success_unix_ms: u64,
     status: String,
+}
+
+pub(crate) struct StoredTrafficSummary {
+    pub name: String,
+    pub enabled: bool,
+    pub snapshot: Option<TrafficSnapshot>,
+    pub status: String,
+    pub last_success_ms: i64,
+    pub config_corrupt: bool,
+    pub snapshot_corrupt: bool,
+}
+
+fn fallback_source_config() -> SourceConfig {
+    SourceConfig {
+        name: String::new(),
+        enabled: false,
+        auth_mode: AuthMode::None,
+        traffic_url: String::new(),
+        login_url: String::new(),
+        refresh_url: String::new(),
+        username_field: "email".to_owned(),
+        password_field: "password".to_owned(),
+        refresh_token_field: "refresh_token".to_owned(),
+        access_pointer: "/data/access_token".to_owned(),
+        refresh_pointer: "/data/refresh_token".to_owned(),
+        up_pointer: String::new(),
+        down_pointer: String::new(),
+        used_pointer: String::new(),
+        limit_pointer: String::new(),
+        limit_unit: "bytes".to_owned(),
+        reset_pointer: String::new(),
+    }
+}
+
+fn parse_stored_source(
+    raw_config: &str,
+    raw_snapshot: Option<&str>,
+    status: String,
+) -> (SourceConfig, Option<TrafficSnapshot>, String, bool, bool) {
+    let (config, mut status, config_corrupt) =
+        match serde_json::from_str::<SourceConfig>(raw_config) {
+        Ok(parsed) => (parsed, status, false),
+        Err(_) => (
+            fallback_source_config(),
+            "invalid_configuration".to_owned(),
+            true,
+        ),
+    };
+    let (snapshot, snapshot_corrupt) = match raw_snapshot {
+        Some(raw) => match serde_json::from_str::<TrafficSnapshot>(raw) {
+            Ok(parsed) => (Some(parsed), false),
+            Err(_) => (None, true),
+        },
+        None => (None, false),
+    };
+    if !config_corrupt && snapshot_corrupt && matches!(status.as_str(), "ok" | "pending") {
+        status = "sync_failed".to_owned();
+    }
+    (config, snapshot, status, config_corrupt, snapshot_corrupt)
+}
+
+pub(crate) fn read_node_traffic_summary(
+    db: &Connection,
+    node_id: &str,
+) -> Result<Option<StoredTrafficSummary>, StorageError> {
+    let row: Option<(String, Option<String>, String, i64)> = db
+        .query_row(
+            "SELECT config,snapshot,status,last_success_ms
+             FROM external_traffic_sources WHERE node_id=?1",
+            [node_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    let Some((raw_config, raw_snapshot, status, last_success_ms)) = row else {
+        return Ok(None);
+    };
+    let (config, snapshot, status, config_corrupt, snapshot_corrupt) =
+        parse_stored_source(&raw_config, raw_snapshot.as_deref(), status);
+    Ok(Some(StoredTrafficSummary {
+        name: config.name,
+        enabled: config.enabled,
+        snapshot,
+        status,
+        last_success_ms,
+        config_corrupt,
+        snapshot_corrupt,
+    }))
 }
 
 struct DueSource {
@@ -313,38 +400,19 @@ impl Storage {
         })?;
         rows.map(|row| {
             let (node_id, config, credential, snapshot, attempt, success, status) = row?;
-            let (config, status) = match serde_json::from_str::<SourceConfig>(&config) {
-                Ok(parsed) => (parsed, status),
-                Err(_) => (
-                    SourceConfig {
-                        name: String::new(),
-                        enabled: false,
-                        auth_mode: AuthMode::None,
-                        traffic_url: String::new(),
-                        login_url: String::new(),
-                        refresh_url: String::new(),
-                        username_field: "email".to_owned(),
-                        password_field: "password".to_owned(),
-                        refresh_token_field: "refresh_token".to_owned(),
-                        access_pointer: "/data/access_token".to_owned(),
-                        refresh_pointer: "/data/refresh_token".to_owned(),
-                        up_pointer: String::new(),
-                        down_pointer: String::new(),
-                        used_pointer: String::new(),
-                        limit_pointer: String::new(),
-                        limit_unit: "bytes".to_owned(),
-                        reset_pointer: String::new(),
-                    },
-                    "invalid_configuration".to_owned(),
-                ),
-            };
+            let (config, snapshot, status, _config_corrupt, snapshot_corrupt) =
+                parse_stored_source(&config, snapshot.as_deref(), status);
             Ok(AdminSource {
                 node_id,
                 has_credential: config.auth_mode != AuthMode::None && !credential.is_empty(),
                 config,
-                snapshot: snapshot.and_then(|value| serde_json::from_str(&value).ok()),
+                snapshot,
                 last_attempt_unix_ms: u64::try_from(attempt).unwrap_or(0),
-                last_success_unix_ms: u64::try_from(success).unwrap_or(0),
+                last_success_unix_ms: if snapshot_corrupt {
+                    0
+                } else {
+                    u64::try_from(success).unwrap_or(0)
+                },
                 status,
             })
         })
@@ -692,8 +760,13 @@ where
             Some(credential.access_token.clone())
         }
     };
-    let mut response =
-        request(traffic_url.clone(), reqwest::Method::GET, None, token.clone()).await;
+    let mut response = request(
+        traffic_url.clone(),
+        reqwest::Method::GET,
+        None,
+        token.clone(),
+    )
+    .await;
     if matches!(response, Err("authentication_required"))
         && config.auth_mode == AuthMode::LoginRefresh
         && !freshly_authenticated
@@ -1129,19 +1202,37 @@ mod tests {
             fetched_at_unix_ms: 1_000,
         };
         let encoded_prior = serde_json::to_string(&prior_snapshot).unwrap();
-        state
-            .storage
-            .connection()
-            .unwrap()
-            .execute(
-                "UPDATE external_traffic_sources SET snapshot=?2,last_success_ms=1000,status='ok' WHERE node_id=?1",
+        {
+            let db = state.storage.connection().unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources
+                 SET snapshot=?2,last_success_ms=1000,last_attempt_ms=1,status='ok'
+                 WHERE node_id=?1",
                 params![node_a, encoded_prior],
             )
             .unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources SET last_attempt_ms=2 WHERE node_id=?1",
+                [&node_b],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources SET last_attempt_ms=3 WHERE node_id=?1",
+                [&node_c],
+            )
+            .unwrap();
+        }
 
         let now = u64::try_from(POLL_INTERVAL_MS).unwrap() + 10_000;
         let claimed = state.storage.claim_due_traffic_sources(now).unwrap();
-        assert_eq!(claimed.len(), 3);
+        let claimed_ids: Vec<&str> = claimed
+            .iter()
+            .map(|source| source.node_id.as_str())
+            .collect();
+        assert_eq!(
+            claimed_ids,
+            vec![node_a.as_str(), node_b.as_str(), node_c.as_str()]
+        );
 
         // Fail persistence only for node_b; node_a fails encryption; node_c must still finish.
         let trigger = format!(
@@ -1177,10 +1268,126 @@ mod tests {
         assert_eq!(result_a.last_success_unix_ms, 1_000);
         assert_eq!(result_a.snapshot.as_ref().unwrap().used_bytes, 30);
 
+        let result_b = listed.iter().find(|item| item.node_id == node_b).unwrap();
+        assert_eq!(result_b.status, "pending");
+        assert_eq!(result_b.last_success_unix_ms, 0);
+        assert!(result_b.snapshot.is_none());
+
         let result_c = listed.iter().find(|item| item.node_id == node_c).unwrap();
         assert_eq!(result_c.status, "ok");
         assert_eq!(result_c.last_success_unix_ms, now);
         assert_eq!(result_c.snapshot.as_ref().unwrap().used_bytes, 300);
+    }
+
+    fn save_provider_node(state: &AppState, key: &CredentialKey, name: &str) -> String {
+        let node_id = enroll_synthetic_node(state, name);
+        let mut options = crate::control::NodeOptions {
+            id: node_id.clone(),
+            name: name.to_owned(),
+            currency: "USD".to_owned(),
+            traffic_source: TrafficSource::Provider,
+            traffic_limit_type: "sum".to_owned(),
+            traffic_reset_day: 1,
+            ..crate::control::NodeOptions::default()
+        };
+        state
+            .storage
+            .save_node_options(&node_id, &mut options)
+            .unwrap();
+        save_enabled_source(state, key, &node_id, name);
+        node_id
+    }
+
+    #[test]
+    fn corrupt_source_or_snapshot_degrades_single_node_in_admin_state_and_dashboard() {
+        let (_dir, state, key) = state_with_key();
+        let bad_config = save_provider_node(&state, &key, "synthetic-bad-config");
+        let bad_snapshot = save_provider_node(&state, &key, "synthetic-bad-snapshot");
+        let healthy = save_provider_node(&state, &key, "synthetic-healthy");
+
+        let now = crate::storage::unix_time_ms().unwrap();
+        let healthy_snapshot = TrafficSnapshot {
+            up_bytes: 200,
+            down_bytes: 300,
+            used_bytes: 500,
+            limit_bytes: Some(1_000),
+            reset_at: Some("2026-12-01".to_owned()),
+            fetched_at_unix_ms: now,
+        };
+        let encoded_healthy = serde_json::to_string(&healthy_snapshot).unwrap();
+        {
+            let db = state.storage.connection().unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources
+                 SET snapshot=?2,last_success_ms=?3,status='ok' WHERE node_id=?1",
+                params![healthy, encoded_healthy, i64::try_from(now).unwrap()],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources SET config='{broken json' WHERE node_id=?1",
+                [&bad_config],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources
+                 SET snapshot='{broken snapshot',last_success_ms=?2,status='ok' WHERE node_id=?1",
+                params![bad_snapshot, i64::try_from(now).unwrap()],
+            )
+            .unwrap();
+        }
+
+        let admin = state.storage.admin_state().unwrap();
+        let admin_nodes = admin["nodes"].as_array().unwrap();
+        assert_eq!(admin_nodes.len(), 3);
+        let admin_for = |id: &str| {
+            admin_nodes
+                .iter()
+                .find(|item| item["id"].as_str() == Some(id))
+                .unwrap()
+        };
+        assert_eq!(admin_for(&healthy)["selected_traffic"]["status"], "ready");
+        assert_eq!(admin_for(&healthy)["selected_traffic"]["used_bytes"], 500);
+        assert_eq!(
+            admin_for(&bad_config)["selected_traffic"]["status"],
+            "sync_failed"
+        );
+        assert!(admin_for(&bad_config)["selected_traffic"]["percentage"].is_null());
+        assert_eq!(
+            admin_for(&bad_snapshot)["selected_traffic"]["status"],
+            "sync_failed"
+        );
+        assert!(admin_for(&bad_snapshot)["selected_traffic"]["used_bytes"].is_null());
+        assert!(admin_for(&bad_snapshot)["selected_traffic"]["last_success_unix_ms"].is_null());
+
+        let dashboard = state
+            .storage
+            .emerald_dashboard(90, 100, &crate::control::DashboardProbeConfig::default())
+            .unwrap();
+        let clients = dashboard["clients"].as_object().unwrap();
+        assert_eq!(clients.len(), 3);
+        assert_eq!(clients[&healthy]["selected_traffic"]["status"], "ready");
+        assert_eq!(
+            clients[&healthy]["external_traffic"]["snapshot"]["used_bytes"],
+            500
+        );
+        assert_eq!(
+            clients[&bad_config]["selected_traffic"]["status"],
+            "sync_failed"
+        );
+        assert!(clients[&bad_config].get("external_traffic").is_none());
+        assert_eq!(
+            clients[&bad_snapshot]["selected_traffic"]["status"],
+            "sync_failed"
+        );
+        assert!(clients[&bad_snapshot]["external_traffic"]["snapshot"].is_null());
+        assert_eq!(
+            clients[&bad_snapshot]["external_traffic"]["status"],
+            "sync_failed"
+        );
+
+        let (total, native) = state.storage.native_nodes(0, 10, 90).unwrap();
+        assert_eq!(total, 3);
+        assert_eq!(native.len(), 3);
     }
 
     #[test]
