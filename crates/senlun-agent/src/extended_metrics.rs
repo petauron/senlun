@@ -30,6 +30,7 @@ pub struct ExtendedSnapshot {
     pub gpus: Option<Vec<GpuSnapshot>>,
 }
 
+#[derive(Clone, Copy)]
 pub struct ExtendedCollector {
     enabled: bool,
     amd_enabled: bool,
@@ -50,26 +51,24 @@ impl ExtendedCollector {
         }
     }
 
-    pub async fn collect(&self) -> ExtendedSnapshot {
+    pub fn collect_local_sync(self) -> ExtendedSnapshot {
         if !self.enabled {
             return ExtendedSnapshot::default();
         }
-        // The host loop awaits this one job: no independent timer, cached
-        // stale sample, or accumulating blocking work.
-        let amd_enabled = self.amd_enabled;
-        let mut sample = tokio::task::spawn_blocking(move || collect_local(amd_enabled))
-            .await
-            .unwrap_or_default();
-        if self.nvidia_enabled
+        collect_local(self.amd_enabled)
+    }
+
+    pub async fn attach_nvidia(self, snapshot: &mut senlun_protocol::SystemSnapshot) {
+        if self.enabled
+            && self.nvidia_enabled
             && let Ok(body) =
                 system_command::run(SystemCommand::NvidiaMetrics, Duration::from_secs(2)).await
             && let Some(mut nvidia) = parse_nvidia_metrics(&body)
         {
-            let devices = sample.gpus.get_or_insert_with(Vec::new);
+            let devices = snapshot.gpus.get_or_insert_with(Vec::new);
             nvidia.truncate(MAX_GPU_DEVICES.saturating_sub(devices.len()));
             devices.extend(nvidia);
         }
-        sample
     }
 }
 
@@ -239,6 +238,14 @@ fn finite_range(value: &str, minimum: f32, maximum: f32) -> Option<f32> {
         .filter(|number| number.is_finite() && (minimum..=maximum).contains(number))
 }
 
+fn clamp_gpu_memory(total: Option<u64>, used: Option<u64>) -> (Option<u64>, Option<u64>) {
+    let clamped_used = match (total, used) {
+        (Some(total), Some(used)) => Some(used.min(total)),
+        (_, used) => used,
+    };
+    (total, clamped_used)
+}
+
 #[cfg(target_os = "linux")]
 fn collect_amd_gpus() -> Option<Vec<GpuSnapshot>> {
     let mut devices = Vec::new();
@@ -259,10 +266,10 @@ fn collect_amd_gpus() -> Option<Vec<GpuSnapshot>> {
         }
         let usage_percent = small_file(path.join("gpu_busy_percent"))
             .and_then(|value| finite_range(&value, 0.0, 100.0));
-        let memory_total_bytes =
-            small_file(path.join("mem_info_vram_total")).and_then(|value| value.parse().ok());
-        let memory_used_bytes =
-            small_file(path.join("mem_info_vram_used")).and_then(|value| value.parse().ok());
+        let (memory_total_bytes, memory_used_bytes) = clamp_gpu_memory(
+            small_file(path.join("mem_info_vram_total")).and_then(|value| value.parse().ok()),
+            small_file(path.join("mem_info_vram_used")).and_then(|value| value.parse().ok()),
+        );
         let temperature_celsius = fs::read_dir(path.join("hwmon")).ok().and_then(|sensors| {
             sensors.take(16).find_map(|sensor| {
                 small_file(sensor.ok()?.path().join("temp1_input"))
@@ -304,11 +311,13 @@ fn parse_nvidia_metrics(body: &[u8]) -> Option<Vec<GpuSnapshot>> {
             return None;
         }
         let memory = |value: &str| value.parse::<u64>().ok()?.checked_mul(1024 * 1024);
+        let (memory_total_bytes, memory_used_bytes) =
+            clamp_gpu_memory(memory(fields[2]), memory(fields[3]));
         devices.push(GpuSnapshot {
             name: fields[0].to_owned(),
             usage_percent: finite_range(fields[1], 0.0, 100.0),
-            memory_total_bytes: memory(fields[2]),
-            memory_used_bytes: memory(fields[3]),
+            memory_total_bytes,
+            memory_used_bytes,
             temperature_celsius: finite_range(fields[4], -100.0, 200.0),
         });
     }
@@ -430,6 +439,19 @@ mod tests {
         assert_eq!(devices[1].temperature_celsius, None);
         assert!(parse_nvidia_metrics(b"bad row").is_none());
         assert_eq!(finite_range("NaN", 0.0, 100.0), None);
+    }
+
+    #[test]
+    fn gpu_memory_used_is_clamped_to_total() {
+        let devices = parse_nvidia_metrics(b"NVIDIA Example, 10, 4096, 5000, 50\n").unwrap();
+        assert_eq!(devices[0].memory_total_bytes, Some(4096 * 1024 * 1024));
+        assert_eq!(devices[0].memory_used_bytes, Some(4096 * 1024 * 1024));
+        assert_eq!(
+            clamp_gpu_memory(Some(100), Some(150)),
+            (Some(100), Some(100))
+        );
+        assert_eq!(clamp_gpu_memory(None, Some(150)), (None, Some(150)));
+        assert_eq!(clamp_gpu_memory(Some(100), None), (Some(100), None));
     }
 
     #[test]
