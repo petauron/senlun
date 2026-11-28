@@ -34,9 +34,10 @@ const rateLabel = computed(() => failureRateLabelForKinds(props.node.probes?.map
   <div>
     <div
       v-if="compact" role="button" tabindex="0" class="block w-full rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      :aria-label="`${node.name} 延迟 / ${rateLabel}详情`" @click.stop="open = true" @keydown.enter.self.stop.prevent="open = true" @keydown.space.self.stop.prevent="open = true"
+      @click.stop="open = true" @keydown.enter.self.stop.prevent="open = true" @keydown.space.self.stop.prevent="open = true"
     >
       <NodeProbeSummary :probes="node.probes" compact :node-uuid="node.uuid" :ip-version="probeIPVersion" />
+      <span class="sr-only">{{ node.name }} 延迟 / {{ rateLabel }}详情</span>
     </div>
     <NodeProbeSummary v-else :probes="node.probes" :node-uuid="node.uuid" :ip-version="probeIPVersion" :node-name="node.name" interactive @open="open = true" />
     <div v-if="!compact" class="mt-2 grid grid-cols-[minmax(64px,0.75fr)_minmax(0,2fr)] items-center gap-2 text-[11px]">

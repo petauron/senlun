@@ -144,9 +144,9 @@ function onMetricKeydown(event: KeyboardEvent) {
     <span v-if="!rows.length" class="text-muted-foreground">未配置探测</span>
   </div>
   <!-- On touch, the list cell opens details on the first tap instead of opening a bar tooltip. -->
-  <div v-else role="group" class="grid h-8 w-full grid-cols-3 items-center gap-1.5" aria-label="电信、联通、移动的延迟与探测结果概览，点击查看详情" @pointerdown.capture.stop>
+  <div v-else class="grid h-8 w-full grid-cols-3 items-center gap-1.5" @pointerdown.capture.stop>
     <div v-for="(row, index) in rows" :key="index" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-px">
-      <span aria-hidden="true" class="row-span-2 text-[11px] text-muted-foreground">{{ ['电', '联', '移'][index] }}</span>
+      <span class="row-span-2 text-[11px] text-muted-foreground">{{ ['电', '联', '移'][index] }}</span>
       <div v-for="metric in metrics" :key="metric" class="group/panel relative opacity-80 hover:opacity-100" :title="panelTooltip(row, metric)">
         <div :data-probe-metric="metric" class="grid h-1 grid-cols-10 items-end gap-px transition-all hover:h-2.5 motion-reduce:transition-none">
           <DataTooltip
