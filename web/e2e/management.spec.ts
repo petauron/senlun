@@ -147,9 +147,20 @@ test('probe CRUD executes on the local Agent and exposes real result history', a
     await expect(latencyPanel).toHaveAttribute('title', new RegExp(`${name} · 最近 1 小时平均延迟 \\d+ ms`))
     await expect(page.getByRole('button', { name: `e2e-node ${name} 失败率` })).toHaveAttribute('title', new RegExp(`${name} · 最近 1 小时平均失败率 [\\d.]+%`))
     const latencySample = latencyPanel.locator('[data-slot="data-tooltip"]').last()
-    await latencySample.dispatchEvent('pointerenter')
-    await expect(latencySample.getByRole('tooltip', { includeHidden: true })).toContainText(new RegExp(`${name}\\s+\\d{2}:\\d{2}:\\d{2}\\s+\\d+ ms`))
-    await expect(latencySample.getByRole('tooltip', { includeHidden: true })).not.toContainText('次成功探测')
+    await latencySample.scrollIntoViewIfNeeded()
+    if (await page.evaluate(() => innerWidth > 640))
+      await latencySample.hover()
+    else
+      await latencySample.dispatchEvent('pointerenter')
+    const tooltipId = await latencySample.getAttribute('aria-describedby')
+    expect(tooltipId).toBeTruthy()
+    const latencyTooltip = page.locator(`[id="${tooltipId}"]`)
+    await expect(latencyTooltip).toHaveAttribute('role', 'tooltip')
+    await expect(latencyTooltip).toBeVisible()
+    await expect(latencyTooltip).toContainText(new RegExp(`${name}\\s+\\d{2}:\\d{2}:\\d{2}\\s+\\d+ ms`))
+    await expect(latencyTooltip).not.toContainText('次成功探测')
+    await page.keyboard.press('Escape')
+    await expect(latencyTooltip).toBeHidden()
     await latencyPanel.focus()
     await latencyPanel.press('Enter')
     await expect(page.getByRole('dialog', { name: 'e2e-node 延迟 / 失败率' })).toBeVisible()
@@ -279,4 +290,143 @@ test('notification channels require an explicit opt-in and remain disabled when 
     if (channelId)
       await mutation(page.request, `/api/admin/channels/${channelId}/delete`)
   }
+})
+
+test('DataTooltip portals above overflow containers, supports pointer bridge hover, Escape, keyboard, and touch', async ({ page }) => {
+  await login(page)
+  const cardLink = page.getByRole('link', { name: '查看 e2e-node 节点详情' })
+  await expect(cardLink).toBeVisible({ timeout: 20_000 })
+
+  const qualityButton = page.getByRole('banner').getByRole('button', { name: '网络质量', exact: true })
+  const headerTooltipId = await qualityButton.getAttribute('aria-describedby')
+  expect(headerTooltipId).toBeTruthy()
+  const headerTooltip = page.locator(`[id="${headerTooltipId}"]`)
+  await expect(headerTooltip).toHaveAttribute('role', 'tooltip')
+  await expect(headerTooltip).toBeHidden()
+  await qualityButton.focus()
+  await expect(headerTooltip).toBeVisible()
+  await expect(headerTooltip).toContainText('网络质量')
+  await page.keyboard.press('Escape')
+  await expect(headerTooltip).toBeHidden()
+  await expect(qualityButton).toBeFocused()
+
+  const footerLink = page.getByRole('contentinfo').getByRole('link', { name: 'Senlun', exact: true })
+  await expect(footerLink).toHaveAttribute('href', 'https://github.com/petauron/senlun')
+  await expect(footerLink).toHaveAttribute('aria-describedby', /.+/)
+  const footerTooltipId = await footerLink.getAttribute('aria-describedby')
+  await expect(page.locator(`[id="${footerTooltipId}"]`)).toHaveAttribute('role', 'tooltip')
+
+  const card = page.getByTestId('node-card').filter({ has: cardLink })
+  const trafficTrigger = card.locator('[data-slot="data-tooltip"][role="group"]').first()
+  const trafficTooltipId = await trafficTrigger.getAttribute('aria-describedby')
+  expect(trafficTooltipId).toBeTruthy()
+  const trafficTooltip = page.locator(`[id="${trafficTooltipId}"]`)
+  await trafficTrigger.focus()
+  await expect(trafficTooltip).toBeVisible()
+  expect(await trafficTooltip.evaluate(el => el.parentElement === document.body)).toBe(true)
+  expect(await trafficTooltip.evaluate(el => Number(getComputedStyle(el).zIndex))).toBeLessThan(50)
+
+  const viewport = page.viewportSize()
+  expect(viewport).not.toBeNull()
+  const focusedBox = await trafficTooltip.boundingBox()
+  expect(focusedBox).not.toBeNull()
+  if (focusedBox && viewport) {
+    expect(focusedBox.x).toBeGreaterThanOrEqual(0)
+    expect(focusedBox.y).toBeGreaterThanOrEqual(0)
+    expect(focusedBox.x + focusedBox.width).toBeLessThanOrEqual(viewport.width)
+    expect(focusedBox.y + focusedBox.height).toBeLessThanOrEqual(viewport.height)
+  }
+
+  await page.keyboard.press('Escape')
+  await expect(trafficTooltip).toBeHidden()
+  await expect(trafficTrigger).toBeFocused()
+  await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
+
+  // Scrolling a focused trigger completely outside the viewport hides the floating tooltip while preserving its description node.
+  await trafficTrigger.focus()
+  await expect(trafficTooltip).toBeVisible()
+  try {
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px'
+    })
+    const scrollTargetY = await trafficTrigger.evaluate(el => Math.ceil(el.getBoundingClientRect().bottom + window.scrollY + 120))
+    await page.evaluate(y => window.scrollTo(0, y), scrollTargetY)
+    await expect(trafficTooltip).toBeHidden()
+    await expect(trafficTrigger).toHaveAttribute('aria-describedby', String(trafficTooltipId))
+    await expect(trafficTooltip).toHaveCount(1)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await expect(trafficTooltip).toBeVisible()
+  }
+  finally {
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = ''
+      window.scrollTo(0, 0)
+    })
+  }
+  await page.keyboard.press('Escape')
+  await expect(trafficTooltip).toBeHidden()
+  await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
+
+  const compact = await page.evaluate(() => innerWidth <= 640)
+  if (!compact) {
+    await trafficTrigger.hover()
+    await expect(trafficTooltip).toBeVisible()
+    const placement = await trafficTooltip.getAttribute('data-placement')
+    const tooltipBox = await trafficTooltip.boundingBox()
+    expect(tooltipBox).not.toBeNull()
+    if (tooltipBox) {
+      const gapX = tooltipBox.x + tooltipBox.width / 2
+      const gapY = placement === 'bottom'
+        ? tooltipBox.y - 4
+        : tooltipBox.y + tooltipBox.height + 4
+      await page.mouse.move(gapX, gapY)
+      await page.waitForTimeout(250)
+      await expect(trafficTooltip).toBeVisible()
+
+      await page.mouse.move(tooltipBox.x + tooltipBox.width / 2, tooltipBox.y + tooltipBox.height / 2)
+      await page.waitForTimeout(180)
+      await expect(trafficTooltip).toBeVisible()
+
+      await trafficTooltip.click()
+      await expect(page).toHaveURL('/')
+      await page.keyboard.press('Escape')
+      await expect(trafficTooltip).toBeHidden()
+    }
+
+    // Hover -> leave -> focus before close timer expires -> blur must still close cleanly.
+    await trafficTrigger.hover()
+    await expect(trafficTooltip).toBeVisible()
+    await page.mouse.move(8, 8)
+    await trafficTrigger.focus()
+    await page.waitForTimeout(180)
+    await expect(trafficTooltip).toBeVisible()
+    await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
+    await expect(trafficTooltip).toBeHidden()
+  }
+  else {
+    await page.getByRole('button', { name: /资源与费用/ }).click()
+    const cumulativeButton = page.getByRole('button', { name: /累计流量/ })
+    const cumulativeTooltipId = await cumulativeButton.getAttribute('aria-describedby')
+    expect(cumulativeTooltipId).toBeTruthy()
+    const cumulativeTooltip = page.locator(`[id="${cumulativeTooltipId}"]`)
+    await cumulativeButton.tap()
+    await expect(cumulativeTooltip).toBeVisible()
+    const mobileBox = await cumulativeTooltip.boundingBox()
+    expect(mobileBox).not.toBeNull()
+    if (mobileBox && viewport) {
+      expect(mobileBox.x).toBeGreaterThanOrEqual(0)
+      expect(mobileBox.x + mobileBox.width).toBeLessThanOrEqual(viewport.width)
+    }
+    await expect(page).toHaveURL('/')
+    await page.getByText('在线节点', { exact: true }).tap()
+    await expect(cumulativeTooltip).toBeHidden()
+  }
+
+  await card.getByRole('button', { name: /^e2e-node .+ 延迟$/ }).first().click()
+  const dialog = page.getByRole('dialog', { name: /e2e-node 延迟/ })
+  await expect(dialog).toBeVisible()
+  expect(await dialog.evaluate(el => Number(getComputedStyle(el).zIndex))).toBeGreaterThanOrEqual(50)
+  await expect(trafficTooltip).toBeHidden()
+  await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
 })

@@ -83,13 +83,19 @@ const sitename = computed(() => appStore.publicSettings?.sitename || 'Senlun')
         </span>
       </RouterLink>
       <div class="flex items-center gap-2">
-        <DataTooltip v-for="button in actionButtons" :key="button.action" :content="button.title" placement="left" content-class="whitespace-nowrap text-[11px] px-2">
-          <Button
-            variant="ghost" size="icon-sm" :aria-label="button.title"
-            @click="handleButtonClick(button.action)"
-          >
-            <Icon aria-hidden="true" :icon="button.icon" :width="18" :height="18" />
-          </Button>
+        <DataTooltip
+          v-for="button in actionButtons" :key="button.action" :content="button.title" placement="left"
+          content-class="whitespace-nowrap text-[11px] px-2" describe-target="slot" persist-description
+        >
+          <template #default="{ describedBy }">
+            <Button
+              variant="ghost" size="icon-sm" :aria-label="button.title"
+              :aria-describedby="describedBy"
+              @click="handleButtonClick(button.action)"
+            >
+              <Icon aria-hidden="true" :icon="button.icon" :width="18" :height="18" />
+            </Button>
+          </template>
         </DataTooltip>
       </div>
     </div>

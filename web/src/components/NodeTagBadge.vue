@@ -52,7 +52,10 @@ const toneClass = computed(() => {
 </script>
 
 <template>
-  <DataTooltip as="span" :content="text" placement="top" class="inline-flex max-w-full min-w-0" tabindex="0" :aria-label="text">
+  <DataTooltip
+    as="span" :content="text" placement="top" class="inline-flex max-w-full min-w-0" tabindex="0"
+    :aria-label="text" persist-description
+  >
     <Badge variant="outline" class="max-w-full min-w-0 rounded-full px-2.5 py-0.5 text-xs font-semibold" :class="toneClass">
       <span class="min-w-0 truncate">{{ text }}</span>
     </Badge>

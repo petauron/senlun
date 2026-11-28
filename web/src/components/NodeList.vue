@@ -327,7 +327,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
               <div class="flex flex-row text-[11px] text-muted-foreground/70" :class="[!node.online && 'blur-sm opacity-30']">
                 <DataTooltip
                   v-if="node.online" :content="formatUptime(node.uptime ?? 0)" class="relative z-10 shrink-0" placement="right"
-                  content-class="whitespace-pre-wrap left-0 ml-0 w-max"
+                  content-class="whitespace-pre-wrap"
                 >
                   <span>
                     {{ formatUptime(node.uptime ?? 0, 'day') }}
@@ -336,7 +336,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
                 <DataTooltip
                   v-if="getPriceTags(node, appStore.lang, 'list').length" placement="left"
                   :content="node.expired_at && Number.isFinite(Date.parse(node.expired_at)) ? formatDateTime(node.expired_at, 'YYYY-MM-DD') : ''"
-                  content-class="whitespace-nowrap right-0 mr-0"
+                  content-class="whitespace-nowrap"
                   class="relative z-10 min-w-0"
                 >
                   <div class="truncate">
@@ -390,7 +390,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 
             <!-- 内存 -->
             <div v-else-if="col.key === 'mem'" role="cell" class="group relative z-10">
-              <DataTooltip placement="top" class="block" :content-class="[!node.swap && '!hidden']">
+              <DataTooltip placement="top" class="block" :disabled="!node.swap">
                 <div class="space-y-1">
                   <div class="text-[10px] text-muted-foreground truncate">
                     <span class="inline group-hover:hidden">
@@ -434,7 +434,7 @@ function getRowTransitionStyle(index: number): Record<string, string> {
 
             <!-- 所选来源的用量与告警使用同一服务端结果。 -->
             <div v-else-if="col.key === 'traffic'" role="cell" class="relative z-10 min-w-0">
-              <DataTooltip placement="top" class="block" content-class="mb-1.5">
+              <DataTooltip placement="top" class="block">
                 <div class="space-y-1 w-full">
                   <div class="text-[10px] text-muted-foreground truncate">
                     {{ trafficSourceLabel(node.selected_traffic) }}
