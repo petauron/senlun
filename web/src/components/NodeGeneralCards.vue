@@ -180,12 +180,11 @@ const financeDisclosure = computed(() =>
         <button
           :id="`${financeId}-trigger`"
           type="button"
-          aria-label="查看剩余价值详情"
           :aria-expanded="openFinanceCard"
           :aria-controls="`${financeId}-panel`"
           @click="toggleFinanceCard"
         >
-          <span class="stat-label">剩余价值 ›</span><b>{{ formattedRemainingValue.value }} {{ formattedRemainingValue.unit }}</b>
+          <span class="stat-label">剩余价值<span aria-hidden="true"> ›</span></span><b>{{ formattedRemainingValue.value }} {{ formattedRemainingValue.unit }}</b><span class="sr-only">，查看剩余价值详情</span>
         </button>
       </div>
       <section
