@@ -21,6 +21,17 @@ export interface PendingUncertainTrafficRemoveLock {
   resyncError: string
 }
 
+export type MonitoringConfigDeleteKind = 'probes' | 'channels' | 'alert-rules'
+
+export interface PendingUncertainConfigDeleteLock {
+  key: string
+  kind: MonitoringConfigDeleteKind
+  id: string
+  name: string
+  message: string
+  resyncError: string
+}
+
 export interface AdminNodesViewState {
   searchQuery: string
   statusFilter: NodeListFilter
@@ -39,10 +50,12 @@ function defaultAdminNodesViewState(): AdminNodesViewState {
   }
 }
 
-// Session-scoped in-memory metadata only (never stores tokens, passwords, form drafts, or localStorage).
+// Session-scoped in-memory metadata only (never stores tokens, passwords, webhook URLs, form drafts, or localStorage).
 export const enrollUncertainLock = ref<string | null>(null)
 export const nodeDangerUncertainLocks = ref<Record<string, PendingUncertainDangerLock>>({})
 export const trafficRemoveUncertainLocks = ref<Record<string, PendingUncertainTrafficRemoveLock>>({})
+export const probeDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock>>({})
+export const alertConfigDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock>>({})
 export const adminNodesViewState = ref<AdminNodesViewState>(defaultAdminNodesViewState())
 
 export function isSameActiveSession(startGeneration: number, loggedIn: boolean): boolean {
@@ -84,9 +97,39 @@ export function setTrafficRemoveUncertainLock(
   return true
 }
 
+export function setProbeDeleteUncertainLock(
+  startGeneration: number,
+  loggedIn: boolean,
+  entry: PendingUncertainConfigDeleteLock,
+): boolean {
+  if (!isSameActiveSession(startGeneration, loggedIn))
+    return false
+  probeDeleteUncertainLocks.value = {
+    ...probeDeleteUncertainLocks.value,
+    [entry.key]: entry,
+  }
+  return true
+}
+
+export function setAlertConfigDeleteUncertainLock(
+  startGeneration: number,
+  loggedIn: boolean,
+  entry: PendingUncertainConfigDeleteLock,
+): boolean {
+  if (!isSameActiveSession(startGeneration, loggedIn))
+    return false
+  alertConfigDeleteUncertainLocks.value = {
+    ...alertConfigDeleteUncertainLocks.value,
+    [entry.key]: entry,
+  }
+  return true
+}
+
 export function clearAdminUncertainLocks(): void {
   enrollUncertainLock.value = null
   nodeDangerUncertainLocks.value = {}
   trafficRemoveUncertainLocks.value = {}
+  probeDeleteUncertainLocks.value = {}
+  alertConfigDeleteUncertainLocks.value = {}
   adminNodesViewState.value = defaultAdminNodesViewState()
 }

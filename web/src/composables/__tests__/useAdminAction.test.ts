@@ -2,11 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { createSerializedRefresh } from '@/utils/adminRefresh'
 import {
   adminNodesViewState,
+  alertConfigDeleteUncertainLocks,
   clearAdminUncertainLocks,
   enrollUncertainLock,
   nodeDangerUncertainLocks,
+  probeDeleteUncertainLocks,
+  setAlertConfigDeleteUncertainLock,
   setEnrollUncertainLock,
   setNodeDangerUncertainLock,
+  setProbeDeleteUncertainLock,
   setTrafficRemoveUncertainLock,
   trafficRemoveUncertainLocks,
 } from '@/utils/adminUncertain'
@@ -222,18 +226,56 @@ describe('useAdminAction submission outcome classification', () => {
       message: 'stale remove',
       resyncError: '',
     })).toBe(false)
+    expect(setProbeDeleteUncertainLock(oldSessionGen, true, {
+      key: 'probes:probe-1',
+      kind: 'probes',
+      id: 'probe-1',
+      name: 'Probe 1',
+      message: 'stale probe delete',
+      resyncError: '',
+    })).toBe(false)
+    expect(setAlertConfigDeleteUncertainLock(oldSessionGen, true, {
+      key: 'channels:ch-1',
+      kind: 'channels',
+      id: 'ch-1',
+      name: 'Channel 1',
+      message: 'stale channel delete',
+      resyncError: '',
+    })).toBe(false)
 
     expect(enrollUncertainLock.value).toBeNull()
     expect(nodeDangerUncertainLocks.value).toEqual({})
     expect(trafficRemoveUncertainLocks.value).toEqual({})
+    expect(probeDeleteUncertainLocks.value).toEqual({})
+    expect(alertConfigDeleteUncertainLocks.value).toEqual({})
 
     const activeGen = getSessionGeneration()
     expect(setEnrollUncertainLock(activeGen, false, 'logged out')).toBe(false)
     expect(setEnrollUncertainLock(activeGen, true, 'current enroll')).toBe(true)
+    expect(setProbeDeleteUncertainLock(activeGen, true, {
+      key: 'probes:probe-1',
+      kind: 'probes',
+      id: 'probe-1',
+      name: 'Probe 1',
+      message: 'current probe delete',
+      resyncError: '',
+    })).toBe(true)
+    expect(setAlertConfigDeleteUncertainLock(activeGen, true, {
+      key: 'alert-rules:rule-1',
+      kind: 'alert-rules',
+      id: 'rule-1',
+      name: 'Rule 1',
+      message: 'current rule delete',
+      resyncError: '',
+    })).toBe(true)
     expect(enrollUncertainLock.value).toBe('current enroll')
+    expect(probeDeleteUncertainLocks.value['probes:probe-1']?.name).toBe('Probe 1')
+    expect(alertConfigDeleteUncertainLocks.value['alert-rules:rule-1']?.name).toBe('Rule 1')
 
     clearAdminUncertainLocks()
     expect(enrollUncertainLock.value).toBeNull()
+    expect(probeDeleteUncertainLocks.value).toEqual({})
+    expect(alertConfigDeleteUncertainLocks.value).toEqual({})
   })
 })
 
