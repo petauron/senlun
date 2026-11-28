@@ -157,6 +157,26 @@ describe('adminNodes search, filter, selection, and danger action helpers', () =
       mode: 'selected',
       node: nodes[0],
     })
+
+    // A previously pinned node that disappears from refreshed nodes must enter explicit removed state rather than silently switching to another node.
+    expect(resolveNodeSelection({
+      nodes: [nodes[1]!, nodes[2]!],
+      queryNodeId: null,
+      pinnedNodeId: nodes[0]!.id,
+      isDesktop: true,
+    })).toEqual({
+      mode: 'removed',
+      removedId: nodes[0]!.id,
+    })
+    expect(resolveNodeSelection({
+      nodes: [nodes[1]!, nodes[2]!],
+      queryNodeId: null,
+      pinnedNodeId: nodes[0]!.id,
+      isDesktop: false,
+    })).toEqual({
+      mode: 'removed',
+      removedId: nodes[0]!.id,
+    })
   })
 
   it('provides explicit target node names, concrete confirm verbs, and accurate revoke re-enrollment copy', () => {

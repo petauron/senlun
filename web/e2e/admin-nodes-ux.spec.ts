@@ -268,7 +268,7 @@ test('node management supports searchable/filterable workflows, context restorat
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 
-test('dirty default desktop edit survives viewport narrowing across 1024px and slow GET removal invalidates an open delete dialog', async ({ page }) => {
+test('dirty default desktop edit survives viewport narrowing across 1024px and slow GET removal preserves draft without switching target', async ({ page }) => {
   await login(page, '/admin')
   await waitForNode(page.request)
   const initialState = await (await page.request.get('/api/admin/state')).json()
@@ -283,7 +283,7 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
       await new Promise<void>((resolve) => {
         releaseHeldGet = resolve
       })
-      // Remove Alpha SG and reorder remaining nodes while the delete dialog for Alpha SG is open.
+      // Remove Alpha SG while slow GET is in flight.
       nodes = nodes.filter(item => item.id !== 'aa112233-0000-0000-0000-000000000001')
     }
     await route.fulfill({
@@ -295,7 +295,9 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
   })
   await page.route('**/api/admin/nodes/*/delete', async (route) => {
     deleteCalls++
-    await route.fulfill({ json: { ok: true } })
+    await route.fulfill({
+      json: { ok: true },
+    })
   })
 
   const originalViewport = page.viewportSize()
@@ -323,12 +325,14 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
     await discardDialog.getByRole('button', { name: '放弃修改并刷新' }).click()
     await expect(remarkInput).toHaveValue('Primary Singapore edge')
 
-    // Start a slow top GET, open Delete dialog for Alpha SG, then let GET remove Alpha SG:
-    // dialog must stay bound to Alpha SG, show stale invalidation alert, disable confirm, and never target Beta JP.
+    // Start a slow top GET while clean, edit Alpha SG and open Delete dialog while GET is pending, then let GET remove Alpha SG:
+    // 1) Delete dialog stays bound to Alpha SG, shows invalidation alert, disables confirm, and never targets Beta JP.
+    // 2) Editor enters explicit removed state for Alpha SG (does NOT silently switch to Beta JP), disables saving, and keeps unsaved text read-only until user explicitly switches.
     holdNextGet = true
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect.poll(() => releaseHeldGet !== null).toBe(true)
 
+    await remarkInput.fill('Concurrent edit preserved after Alpha removal')
     await page.getByRole('button', { name: '删除节点' }).click()
     const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
     await expect(deleteDialog).toContainText('Alpha SG')
@@ -340,6 +344,19 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
     expect(deleteCalls).toBe(0)
     await deleteDialog.getByRole('button', { name: '取消' }).click()
     await expect(deleteDialog).toBeHidden()
+
+    await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('alert')).toContainText('节点「Alpha SG」')
+    await expect(page.getByRole('button', { name: '保存节点' })).toHaveCount(0)
+    await expect(page.getByLabel('公开备注')).toHaveValue('Concurrent edit preserved after Alpha removal')
+    await expect(page.getByLabel('公开备注')).toHaveAttribute('readonly', '')
+
+    // Explicitly switching to Beta JP protects the preserved removed-node draft behind the discard prompt before switching.
+    await page.getByRole('list', { name: '可管理节点' }).getByRole('button', { name: /Beta JP/ }).click()
+    await expect(discardDialog).toBeVisible()
+    await discardDialog.getByRole('button', { name: '放弃修改并切换' }).click()
+    await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toBeVisible()
+    await expect(page.getByLabel('公开备注')).toHaveValue('Hidden Tokyo staging')
   }
   finally {
     if (originalViewport)
@@ -347,12 +364,13 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
   }
 })
 
-test('explicit invalid node deep link shows not-found, revoked node disables rotate/revoke, and delete with refresh failure returns to list with resync', async ({ page }) => {
+test('explicit invalid node deep link shows not-found, revoked node disables rotate/revoke, and deleting first node with refresh failure hides it immediately', async ({ page }) => {
   await login(page, '/admin')
   await waitForNode(page.request)
   const initialState = await (await page.request.get('/api/admin/state')).json()
   let nodes = buildSyntheticNodes(initialState.nodes[0])
   let failRefreshAfterDelete = false
+  let deleteCalls = 0
 
   await page.route('**/api/admin/state', async (route) => {
     if (failRefreshAfterDelete) {
@@ -370,21 +388,34 @@ test('explicit invalid node deep link shows not-found, revoked node disables rot
     })
   })
   await page.route('**/api/admin/nodes/*/delete', async (route) => {
-    nodes = nodes.filter(item => item.id !== 'bb445566-0000-0000-0000-000000000002')
+    deleteCalls++
+    nodes = nodes.filter(item => item.id !== 'aa112233-0000-0000-0000-000000000001')
     failRefreshAfterDelete = true
-    await route.fulfill({ json: { ok: true } })
+    await route.fulfill({
+      json: { ok: true },
+    })
   })
 
-  // Revoked node disables rotate & revoke and explains re-enrollment creates a new independent node.
+  const isDesktop = await page.evaluate(() => innerWidth >= 1024)
+
+  // Revoked node disables rotate & revoke, scopes guidance to danger region, and offers direct enroll access on mobile.
   await page.goto('/admin?section=nodes&node=cc778899-0000-0000-0000-000000000003')
   await expect(page.getByRole('heading', { name: 'Gamma US', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '轮换 Agent 凭据' })).toBeDisabled()
-  await expect(page.getByRole('button', { name: '撤销 Agent 凭据' })).toBeDisabled()
-  await expect(page.getByText('独立新节点')).toBeVisible()
+  const dangerRegion = page.getByRole('region', { name: '危险操作' })
+  await expect(dangerRegion.getByRole('button', { name: '轮换 Agent 凭据' })).toBeDisabled()
+  await expect(dangerRegion.getByRole('button', { name: '撤销 Agent 凭据' })).toBeDisabled()
+  await expect(dangerRegion.getByText('独立新节点')).toBeVisible()
+  if (!isDesktop) {
+    await dangerRegion.getByRole('button', { name: '打开接入节点面板' }).click()
+    await expect(page.getByRole('button', { name: '生成一次性注册令牌' })).toBeVisible()
+    await page.getByRole('button', { name: '收起接入节点' }).click()
+  }
 
-  // Confirmed delete with post-delete refresh failure closes dialog, returns cleanly to /admin?section=nodes (not "not found"), and exposes read-only resync.
-  await page.goto('/admin?section=nodes&node=bb445566-0000-0000-0000-000000000002')
-  await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toBeVisible()
+  // Confirmed delete of the FIRST node (Alpha SG) with post-delete GET 503 immediately hides Alpha SG from list & editor while refresh is still failed, exposes read-only resync, and never replays DELETE.
+  await page.goto('/admin?section=nodes')
+  if (!isDesktop)
+    await page.getByRole('list', { name: '可管理节点' }).getByRole('button', { name: /Alpha SG/ }).click()
+  await expect(page.getByRole('heading', { name: 'Alpha SG', exact: true })).toBeVisible()
   await page.getByRole('button', { name: '删除节点' }).click()
   const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
   await deleteDialog.getByRole('button', { name: '确认删除节点' }).click()
@@ -392,10 +423,21 @@ test('explicit invalid node deep link shows not-found, revoked node disables rot
   await expect(page).toHaveURL('/admin?section=nodes')
   await expect(page.getByText('未找到该节点')).toHaveCount(0)
   await expect(page.getByRole('alert')).toContainText('Post-delete state refresh failed')
+
+  const list = page.getByRole('list', { name: '可管理节点' })
+  await expect(list).toBeVisible()
+  await expect(list.getByRole('button', { name: /Alpha SG/ })).toHaveCount(0)
+  await expect(list.getByRole('button', { name: /Beta JP/ })).toBeVisible()
+  if (isDesktop)
+    await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toBeVisible()
+  else
+    await expect(page.getByRole('button', { name: '保存节点' })).toHaveCount(0)
+
   failRefreshAfterDelete = false
   await page.getByRole('button', { name: '重新同步', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: '已重新同步最新状态' })).toBeVisible()
-  await expect(page.getByRole('list', { name: '可管理节点' })).toBeVisible()
+  await expect(list.getByRole('button', { name: /Alpha SG/ })).toHaveCount(0)
+  expect(deleteCalls).toBe(1)
 
   // Explicit invalid deep link MUST show not-found and MUST NOT render an editable form for Alpha SG.
   await page.goto('/admin?section=nodes&node=nonexistent-node-404')

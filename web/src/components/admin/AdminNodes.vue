@@ -64,6 +64,7 @@ interface IssuedSecretNotice {
 }
 
 const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }>()
+const emit = defineEmits<{ nodeDeleted: [id: string] }>()
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
@@ -151,6 +152,26 @@ const selected = computed(() => selection.value.mode === 'selected'
 const missingRequestedId = computed(() => selection.value.mode === 'missing'
   ? selection.value.requestedId
   : '')
+
+const disappearedNode = computed<{ id: string, name: string } | null>(() => {
+  if (selection.value.mode === 'removed') {
+    const id = selection.value.removedId
+    const name = loadedNodeId.value === id && draft.value?.name
+      ? draft.value.name
+      : id
+    return { id, name }
+  }
+  if (selection.value.mode === 'missing' && loadedNodeId.value === selection.value.requestedId) {
+    const id = selection.value.requestedId
+    const name = draft.value?.name || id
+    return { id, name }
+  }
+  return null
+})
+
+const revokedGuidanceText = computed(() => isDesktop.value
+  ? '此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，请展开上方“接入节点”生成一次性注册令牌以注册独立新节点。'
+  : '此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，可点击下方按钮打开接入节点面板，或返回节点列表展开“接入节点”生成一次性注册令牌以注册独立新节点。')
 
 const filteredNodes = computed(() => filterManagedNodes(props.nodes, searchQuery.value, statusFilter.value))
 
@@ -405,6 +426,9 @@ watch(selected, (node, prevNode) => {
         dangerAction.clearFeedback()
     }
   }
+  // Preserve draft snapshot read-only when the currently loaded/pinned node disappears concurrently.
+  if (!node && disappearedNode.value)
+    return
   const shouldSync = shouldSyncNodeDraftFromServer({
     incomingNodeId: nextId,
     loadedNodeId: loadedNodeId.value,
@@ -454,7 +478,7 @@ watch(
   async (mode, prevMode) => {
     if (isDesktop.value)
       return
-    if (mode === 'list' && (prevMode === 'selected' || prevMode === 'missing')) {
+    if (mode === 'list' && (prevMode === 'selected' || prevMode === 'missing' || prevMode === 'removed')) {
       await restoreListScrollAndFocus()
       return
     }
@@ -709,6 +733,37 @@ function requestBackToList(event?: MouseEvent): void {
   void clearNodeQuery()
 }
 
+function dismissRemovedNode(event?: MouseEvent): void {
+  if (busy.value)
+    return
+  const triggerEl = event?.currentTarget instanceof HTMLElement
+    ? event.currentTarget
+    : null
+  if (triggerEl)
+    triggerEl.focus()
+  const targetLabel = isDesktop.value
+    ? '当前可用节点'
+    : '节点列表'
+  draftGuard.requestSwitch(
+    '__dismiss_removed__',
+    targetLabel,
+    () => {
+      pinnedNodeId.value = null
+      loadDraftFromNode(undefined)
+      if (queryNodeId.value)
+        void clearNodeQuery()
+    },
+    triggerEl,
+  )
+}
+
+async function openEnrollFromEditor(): Promise<void> {
+  enrollExpanded.value = true
+  await nextTick()
+  if (typeof document !== 'undefined')
+    document.getElementById('admin-node-enroll-panel')?.scrollIntoView({ behavior: 'auto', block: 'nearest' })
+}
+
 function viewMonitor(): void {
   if (!draft.value || selected.value?.hidden)
     return
@@ -783,6 +838,7 @@ async function finishDeletedNodeNavigation(deletedId: string, bannerMessage?: st
       lastNodeId: null,
     }
   }
+  emit('nodeDeleted', deletedId)
   if (queryNodeId.value === deletedId)
     await clearNodeQuery()
 }
@@ -1269,7 +1325,25 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       </CardX>
 
       <div v-if="showEditorPane" class="space-y-4">
-        <CardX v-if="selection.mode === 'missing'" title="未找到该节点" content-class="space-y-4">
+        <CardX v-if="disappearedNode" title="节点已被移除" content-class="space-y-4">
+          <p role="alert" class="text-sm text-destructive">
+            节点「{{ disappearedNode.name }}」（ID：{{ disappearedNode.id }}）在最新同步中已不存在，无法继续保存。为避免误改其他节点，已暂停自动切换编辑对象{{ hasUnsavedChanges ? '；下方已以只读方式保留您的未保存输入供复制。' : '。' }}
+          </p>
+          <div v-if="hasUnsavedChanges && draft" class="grid gap-3 rounded-lg border border-border/80 bg-muted/20 p-4 sm:grid-cols-2">
+            <label class="grid gap-1.5 text-sm">名称（只读保留）<Input :model-value="draft.name" readonly class="h-11" /></label>
+            <label class="grid gap-1.5 text-sm">分组（只读保留）<Input :model-value="draft.group" readonly class="h-11" /></label>
+            <label class="grid gap-1.5 text-sm">地区代码（只读保留）<Input :model-value="draft.region" readonly class="h-11" /></label>
+            <label class="grid gap-1.5 text-sm">小面板标签（只读保留）<Input :model-value="draft.tags" readonly class="h-11" /></label>
+            <label class="grid gap-1.5 text-sm sm:col-span-2">公开备注<textarea :value="draft.public_remark" readonly rows="3" class="rounded-md border border-input bg-background px-3 py-2" /></label>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" class="min-h-11" :disabled="busy" @click="dismissRemovedNode">
+              {{ isDesktop ? '关闭提示并查看当前节点' : '返回节点列表' }}
+            </Button>
+          </div>
+        </CardX>
+
+        <CardX v-else-if="selection.mode === 'missing'" title="未找到该节点" content-class="space-y-4">
           <p role="alert" class="text-sm text-destructive">
             未找到节点 ID「{{ missingRequestedId }}」，可能已被删除或链接无效。为避免误改其他节点，已暂停加载编辑表单。
           </p>
@@ -1451,9 +1525,14 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
               <p class="text-xs text-muted-foreground">
                 以下操作会立即影响节点「{{ selected.name }}」的凭据、周期统计或节点数据，执行前需二次确认。
               </p>
-              <p v-if="selected.disabled" class="text-xs text-muted-foreground">
-                此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，请展开“接入节点”生成一次性注册令牌以注册独立新节点。
-              </p>
+              <div v-if="selected.disabled" class="space-y-2 text-xs text-muted-foreground">
+                <p>
+                  {{ revokedGuidanceText }}
+                </p>
+                <Button v-if="!isDesktop && !enrollExpanded" type="button" variant="outline" class="min-h-11" :disabled="busy" @click="openEnrollFromEditor">
+                  打开接入节点面板
+                </Button>
+              </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <Button

@@ -19,6 +19,7 @@ export type NodeSelectionResolution
   = | { mode: 'empty' }
     | { mode: 'list' }
     | { mode: 'missing', requestedId: string }
+    | { mode: 'removed', removedId: string }
     | { mode: 'selected', node: ManagedNode }
 
 export interface NodeSelectionContext {
@@ -116,8 +117,6 @@ export function resolveNodeSelection(context: NodeSelectionContext): NodeSelecti
       requestedId,
     }
   }
-  if (context.nodes.length === 0)
-    return { mode: 'empty' }
   const pinnedId = context.pinnedNodeId?.trim() ?? ''
   if (pinnedId) {
     const pinnedMatch = context.nodes.find(node => node.id === pinnedId)
@@ -127,7 +126,13 @@ export function resolveNodeSelection(context: NodeSelectionContext): NodeSelecti
         node: pinnedMatch,
       }
     }
+    return {
+      mode: 'removed',
+      removedId: pinnedId,
+    }
   }
+  if (context.nodes.length === 0)
+    return { mode: 'empty' }
   if (context.isDesktop) {
     return {
       mode: 'selected',
