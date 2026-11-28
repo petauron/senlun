@@ -41,11 +41,13 @@ export interface VersionInfo {
 
 export class ApiError extends Error {
   readonly statusCode?: number
+  readonly unreadable: boolean
 
-  constructor(message: string, statusCode?: number) {
+  constructor(message: string, statusCode?: number, unreadable = false) {
     super(message)
     this.name = 'ApiError'
     this.statusCode = statusCode
+    this.unreadable = unreadable
   }
 }
 
@@ -121,7 +123,7 @@ export class SenlunApi {
           : null
       }
       catch {
-        throw new ApiError(`服务返回了无法读取的响应（HTTP ${response.status}）`, response.status)
+        throw new ApiError(`服务返回了无法读取的响应（HTTP ${response.status}）`, response.status, true)
       }
       if (!response.ok) {
         if (response.status === 401 && !path.startsWith('auth/'))
@@ -130,7 +132,9 @@ export class SenlunApi {
         const message = typeof failure?.error === 'string'
           ? failure.error
           : failure?.error?.message
-        throw new ApiError(message || failure?.message || `请求失败（HTTP ${response.status}）`, response.status)
+        const detail = message || failure?.message
+        const unreadableServerError = response.status >= 500 && !detail
+        throw new ApiError(detail || `请求失败（HTTP ${response.status}）`, response.status, unreadableServerError)
       }
       if (!wrapped)
         return payload as T

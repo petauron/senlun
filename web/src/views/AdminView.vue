@@ -2,7 +2,7 @@
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ActiveSectionDraft } from '@/composables/useAdminDraftGuard'
 import type { AdminState, SiteSettings } from '@/utils/admin'
-import { computed, onBeforeUnmount, onMounted, provide, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AccountSecurity from '@/components/admin/AccountSecurity.vue'
 import AdminAlerts from '@/components/admin/AdminAlerts.vue'
@@ -20,8 +20,19 @@ import { ADMIN_DRAFT_REGISTRY_KEY, useAdminDraftGuard } from '@/composables/useA
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { isSiteSettingsDirty, normalizeSiteSettings } from '@/utils/adminDraft'
-import { getSharedApi } from '@/utils/api'
+import { createSerializedRefresh } from '@/utils/adminRefresh'
+import { ApiError, getSharedApi } from '@/utils/api'
 import { destroyInitManager } from '@/utils/init'
+
+interface RegisteredSectionDraft extends ActiveSectionDraft {
+  id: number
+}
+
+interface PendingUncertainSiteSave {
+  submitted: SiteSettings
+  message: string
+  resyncError: string
+}
 
 const route = useRoute()
 const router = useRouter()
@@ -36,17 +47,23 @@ const settings = ref<SiteSettings>(normalizeSiteSettings({
   earth_view_mode: 'maps',
 }))
 const savedSettings = ref<SiteSettings | null>(null)
+const pendingUncertainSettings = ref<PendingUncertainSiteSave | null>(null)
 const loading = ref(false)
 const loadError = ref('')
-const activeSectionDraft = ref<ActiveSectionDraft | null>(null)
+const activeSectionDraft = shallowRef<RegisteredSectionDraft | null>(null)
+let nextDraftRegistrationId = 0
 let controller: AbortController | null = null
 let disposed = false
 
 provide(ADMIN_DRAFT_REGISTRY_KEY, {
   register(entry: ActiveSectionDraft) {
-    activeSectionDraft.value = entry
+    const registered: RegisteredSectionDraft = {
+      ...entry,
+      id: ++nextDraftRegistrationId,
+    }
+    activeSectionDraft.value = registered
     return () => {
-      if (activeSectionDraft.value === entry)
+      if (activeSectionDraft.value?.id === registered.id)
         activeSectionDraft.value = null
     }
   },
@@ -65,55 +82,98 @@ const section = computed(() => sections.some(item => item.id === route.query.sec
   ? String(route.query.section)
   : 'nodes')
 const hasUnsavedSettings = computed(() => isSiteSettingsDirty(settings.value, savedSettings.value))
+const currentSectionDraft = computed(() => {
+  const registered = activeSectionDraft.value
+  if (!registered || registered.section !== section.value)
+    return null
+  return registered
+})
+
+const stateRefresher = createSerializedRefresh<void, { forceResetSite: boolean, surfaceLoadError: boolean }>(
+  async (options, isLatest) => {
+    if (disposed)
+      return
+    if (!auth.loggedIn)
+      throw new ApiError('登录状态已失效，无法同步最新状态', 401)
+    if (options.surfaceLoadError)
+      loadError.value = ''
+    controller = new AbortController()
+    try {
+      const response = await getSharedApi().get<AdminState>('admin/state', controller.signal)
+      if (!disposed && isLatest()) {
+        loadError.value = ''
+        state.value = response
+        const normalized = normalizeSiteSettings(response.settings)
+        if (options.forceResetSite || !savedSettings.value || !hasUnsavedSettings.value) {
+          settings.value = { ...normalized }
+          savedSettings.value = { ...normalized }
+        }
+        else if (!isSiteSettingsDirty(settings.value, normalized)) {
+          savedSettings.value = { ...normalized }
+        }
+        if (app.publicSettings) {
+          app.publicSettings = {
+            ...app.publicSettings,
+            sitename: response.settings.site_name,
+            private_site: response.settings.private_site,
+            theme_settings: {
+              ...app.publicSettings.theme_settings,
+              dataUpdateInterval: response.settings.agent_interval_seconds,
+              dailyExchangeRates: response.settings.daily_exchange_rates,
+              earthViewMode: normalized.earth_view_mode,
+            },
+          }
+        }
+        await nextTick()
+      }
+    }
+    catch (cause) {
+      if (!disposed && options.surfaceLoadError && isLatest() && auth.loggedIn) {
+        loadError.value = cause instanceof Error
+          ? cause.message
+          : String(cause)
+      }
+      throw cause
+    }
+  },
+  (nextLoading) => {
+    loading.value = nextLoading
+  },
+)
 
 async function refresh(forceResetSite = false, surfaceLoadError = true): Promise<void> {
-  if (!auth.loggedIn || loading.value)
-    return
-  loading.value = true
-  loadError.value = ''
-  controller = new AbortController()
-  try {
-    const response = await getSharedApi().get<AdminState>('admin/state', controller.signal)
-    if (!disposed) {
-      state.value = response
-      const normalized = normalizeSiteSettings(response.settings)
-      if (forceResetSite || !savedSettings.value || !hasUnsavedSettings.value) {
-        settings.value = { ...normalized }
-        savedSettings.value = { ...normalized }
-      }
-      else if (!isSiteSettingsDirty(settings.value, normalized)) {
-        savedSettings.value = { ...normalized }
-      }
-      if (app.publicSettings) {
-        app.publicSettings = {
-          ...app.publicSettings,
-          sitename: response.settings.site_name,
-          private_site: response.settings.private_site,
-          theme_settings: {
-            ...app.publicSettings.theme_settings,
-            dataUpdateInterval: response.settings.agent_interval_seconds,
-            dailyExchangeRates: response.settings.daily_exchange_rates,
-            earthViewMode: normalized.earth_view_mode,
-          },
-        }
-      }
-    }
-  }
-  catch (cause) {
-    if (!disposed && surfaceLoadError) {
-      loadError.value = cause instanceof Error
-        ? cause.message
-        : String(cause)
-    }
-    throw cause
-  }
-  finally { loading.value = false }
+  await stateRefresher.refresh({
+    forceResetSite,
+    surfaceLoadError,
+  })
 }
 
 const settingsAction = useAdminAction(() => refresh(false, false))
 const logoutAction = useAdminAction()
-const busy = computed(() => settingsAction.busy.value || logoutAction.busy.value)
-const topRefreshDisabled = computed(() => loading.value || busy.value || (activeSectionDraft.value?.isBusy() ?? false))
+const {
+  busy: settingsBusy,
+  error: settingsError,
+  resyncError: settingsResyncError,
+  success: settingsSuccess,
+  needsResync: settingsNeedsResync,
+} = settingsAction
+const {
+  busy: logoutBusy,
+  error: logoutError,
+} = logoutAction
+
+const busy = computed(() => settingsBusy.value || logoutBusy.value)
+const topRefreshDisabled = computed(() => loading.value || busy.value || (currentSectionDraft.value?.isBusy() ?? false))
+const settingsAlert = computed(() => {
+  const pending = pendingUncertainSettings.value
+  if (pending) {
+    return pending.resyncError
+      ? `${pending.message}（重新同步失败：${pending.resyncError}）`
+      : pending.message
+  }
+  return settingsError.value
+})
+const showSettingsResync = computed(() => settingsNeedsResync.value || Boolean(pendingUncertainSettings.value))
 
 function isStayingOnSiteSection(to: RouteLocationNormalized): boolean {
   if (section.value !== 'site')
@@ -124,8 +184,27 @@ function isStayingOnSiteSection(to: RouteLocationNormalized): boolean {
 const siteDraftGuard = useAdminDraftGuard({
   isLoggedIn: () => auth.loggedIn,
   isDirty: () => section.value === 'site' && hasUnsavedSettings.value,
-  isBusy: () => settingsAction.busy.value,
+  isBusy: () => settingsBusy.value,
   isStayingInSameContext: isStayingOnSiteSection,
+})
+const {
+  pending: siteGuardPending,
+  isOpen: siteGuardOpen,
+  cancel: cancelSiteGuard,
+  confirm: confirmSiteGuard,
+  restoreFocus: restoreSiteGuardFocus,
+} = siteDraftGuard
+
+function resetSiteDraftToSaved(): void {
+  if (savedSettings.value)
+    settings.value = { ...savedSettings.value }
+  settingsAction.clearFeedback()
+  pendingUncertainSettings.value = null
+}
+
+watch(section, (nextSection, prevSection) => {
+  if (prevSection === 'site' && nextSection !== 'site')
+    resetSiteDraftToSaved()
 })
 
 function requestTopRefresh(event: MouseEvent): void {
@@ -134,10 +213,11 @@ function requestTopRefresh(event: MouseEvent): void {
   const triggerEl = event.currentTarget instanceof HTMLElement
     ? event.currentTarget
     : null
-  if (activeSectionDraft.value?.requestRefresh?.(triggerEl))
+  if (currentSectionDraft.value?.requestRefresh?.(triggerEl))
     return
   if (section.value === 'site' && siteDraftGuard.requestRefresh(() => {
     settingsAction.clearFeedback()
+    pendingUncertainSettings.value = null
     void refresh(true).catch(() => {})
   }, triggerEl)) {
     return
@@ -154,7 +234,8 @@ onBeforeUnmount(() => {
 
 async function saveSettings(): Promise<void> {
   const submitted = normalizeSiteSettings(settings.value)
-  await settingsAction.run(async () => {
+  pendingUncertainSettings.value = null
+  const result = await settingsAction.run(async () => {
     await getSharedApi().post('admin/settings', submitted)
   }, {
     message: '已保存',
@@ -163,6 +244,47 @@ async function saveSettings(): Promise<void> {
       savedSettings.value = { ...submitted }
     },
   })
+  if (result === 'uncertain') {
+    pendingUncertainSettings.value = {
+      submitted,
+      message: settingsError.value,
+      resyncError: '',
+    }
+  }
+}
+
+async function resyncSettings(): Promise<void> {
+  const pending = pendingUncertainSettings.value
+  if (!pending) {
+    await settingsAction.resync('已重新同步最新状态')
+    return
+  }
+  pending.resyncError = ''
+  const ok = await settingsAction.resync({
+    verify: () => {
+      if (!state.value) {
+        return {
+          resolved: false,
+          error: pending.message,
+        }
+      }
+      const serverSettings = normalizeSiteSettings(state.value.settings)
+      pendingUncertainSettings.value = null
+      if (!isSiteSettingsDirty(pending.submitted, serverSettings)) {
+        savedSettings.value = { ...serverSettings }
+        return {
+          resolved: true,
+          message: '已核实：站点设置已在服务端生效',
+        }
+      }
+      return {
+        resolved: true,
+        message: '已同步最新状态：服务端站点设置与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。',
+      }
+    },
+  })
+  if (!ok && pendingUncertainSettings.value)
+    pendingUncertainSettings.value.resyncError = settingsResyncError.value
 }
 
 async function logout(): Promise<void> {
@@ -190,7 +312,7 @@ async function logout(): Promise<void> {
       </div><div class="flex gap-2">
         <Button variant="outline" :disabled="topRefreshDisabled" @click="requestTopRefresh">
           {{ loading ? '正在刷新…' : '刷新' }}
-        </Button><Button variant="outline" :disabled="logoutAction.busy.value" @click="logout">
+        </Button><Button variant="outline" :disabled="logoutBusy" @click="logout">
           退出登录
         </Button>
       </div>
@@ -203,8 +325,8 @@ async function logout(): Promise<void> {
     <p v-if="loadError" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
       {{ loadError }}
     </p>
-    <p v-if="logoutAction.error.value" role="alert" class="text-sm text-destructive">
-      {{ logoutAction.error.value }}
+    <p v-if="logoutError" role="alert" class="text-sm text-destructive">
+      {{ logoutError }}
     </p>
     <p v-if="!state && loading" role="status" class="text-sm text-muted-foreground">
       正在读取管理数据…
@@ -220,13 +342,13 @@ async function logout(): Promise<void> {
         <p v-if="hasUnsavedSettings" role="status" class="text-sm text-muted-foreground">
           有未保存修改；离开或主动刷新前会提示确认。
         </p>
-        <form class="max-w-xl space-y-4" :aria-busy="settingsAction.busy.value" @submit.prevent="saveSettings">
-          <fieldset :disabled="settingsAction.busy.value" class="space-y-4">
+        <form class="max-w-xl space-y-4" :aria-busy="settingsBusy" @submit.prevent="saveSettings">
+          <fieldset :disabled="settingsBusy" class="space-y-4">
             <label class="grid gap-2 text-sm">站点名称<Input v-model="settings.site_name" required maxlength="128" /></label>
             <label class="grid gap-2 text-sm">Agent 上报间隔（秒）<Input v-model="settings.agent_interval_seconds" type="number" min="1" max="300" step="1" required /></label>
             <label class="grid gap-2 text-sm">节点互测间隔（秒）<Input v-model="settings.peer_probe_interval_seconds" type="number" min="5" max="300" step="1" required /></label>
             <label class="grid gap-2 text-sm">首页头部展示模式
-              <SelectControl aria-label="首页头部展示模式" v-model="settings.earth_view_mode" :disabled="settingsAction.busy.value" :options="[{ value: 'maps', label: '平面地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
+              <SelectControl v-model="settings.earth_view_mode" aria-label="首页头部展示模式" :disabled="settingsBusy" :options="[{ value: 'maps', label: '平面地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
             </label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.private_site" type="checkbox" class="size-4 accent-primary">私有站点：登录后才能查看监控数据</label>
             <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.ip_info_enabled" type="checkbox" class="size-4 accent-primary" aria-describedby="ip-info-privacy">启用 IP 信息查询（仅管理员）</label>
@@ -242,27 +364,27 @@ async function logout(): Promise<void> {
             </p>
           </fieldset>
           <div class="flex flex-wrap items-center gap-2">
-            <Button type="submit" class="min-h-11" :disabled="settingsAction.busy.value">
-              {{ settingsAction.busy.value ? '正在保存…' : '保存设置' }}
+            <Button type="submit" class="min-h-11" :disabled="settingsBusy">
+              {{ settingsBusy ? '正在保存…' : '保存设置' }}
             </Button>
-            <Button v-if="settingsAction.needsResync.value" type="button" variant="outline" class="min-h-11" :disabled="settingsAction.busy.value || loading" @click="settingsAction.resync()">
+            <Button v-if="showSettingsResync" type="button" variant="outline" class="min-h-11" :disabled="settingsBusy" @click="resyncSettings">
               重新同步
             </Button>
           </div>
-          <p v-if="settingsAction.error.value" role="alert" class="text-sm text-destructive">
-            {{ settingsAction.error.value }}
+          <p v-if="settingsAlert" role="alert" class="text-sm text-destructive">
+            {{ settingsAlert }}
           </p>
-          <p v-if="settingsAction.success.value" role="status" class="text-sm text-success">
-            {{ settingsAction.success.value }}
+          <p v-if="settingsSuccess" role="status" class="text-sm text-success">
+            {{ settingsSuccess }}
           </p>
         </form>
       </CardX>
     </template>
-    <Dialog :open="siteDraftGuard.isOpen.value" @update:open="value => { if (!value) siteDraftGuard.cancel() }">
-      <DialogContent @close-auto-focus="siteDraftGuard.restoreFocus">
+    <Dialog :open="siteGuardOpen" @update:open="value => { if (!value) cancelSiteGuard() }">
+      <DialogContent @close-auto-focus="restoreSiteGuardFocus">
         <DialogHeader>
           <DialogTitle>放弃未保存修改？</DialogTitle>
-          <DialogDescription v-if="siteDraftGuard.pending.value?.kind === 'refresh'">
+          <DialogDescription v-if="siteGuardPending?.kind === 'refresh'">
             刷新管理数据会丢弃当前站点设置的未保存修改，不会保存任何更改。
           </DialogDescription>
           <DialogDescription v-else>
@@ -270,11 +392,11 @@ async function logout(): Promise<void> {
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" @click="siteDraftGuard.cancel">
+          <Button variant="outline" @click="cancelSiteGuard">
             取消，继续编辑
           </Button>
-          <Button variant="destructive" @click="siteDraftGuard.confirm">
-            {{ siteDraftGuard.pending.value?.kind === 'refresh' ? '放弃修改并刷新' : '放弃修改并离开' }}
+          <Button variant="destructive" @click="confirmSiteGuard">
+            {{ siteGuardPending?.kind === 'refresh' ? '放弃修改并刷新' : '放弃修改并离开' }}
           </Button>
         </DialogFooter>
       </DialogContent>

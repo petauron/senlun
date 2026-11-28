@@ -21,6 +21,26 @@ import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { parseTags } from '@/utils/tagHelper'
 
+type DangerActionKind = 'rotate' | 'revoke' | 'delete' | 'reset-traffic'
+
+interface PendingUncertainNodeSave {
+  nodeId: string
+  nodeName: string
+  submitted: NodeDraftSnapshot
+  message: string
+  resyncError: string
+}
+
+interface PendingUncertainDanger {
+  key: string
+  action: DangerActionKind
+  nodeId: string
+  nodeName: string
+  verifiable: boolean
+  message: string
+  resyncError: string
+}
+
 const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }>()
 const route = useRoute()
 const router = useRouter()
@@ -35,10 +55,13 @@ const expires = ref('')
 const quotaGiB = ref<number | string>(0)
 const ttlHours = ref(24)
 const secret = ref('')
-const confirm = ref<'rotate' | 'revoke' | 'delete' | 'reset-traffic' | null>(null)
+const confirm = ref<DangerActionKind | null>(null)
 const newTagText = ref('')
 const newTagColor = ref<TagColor>('blue')
 const tagError = ref('')
+const enrollUncertain = ref<string | null>(null)
+const pendingUncertainSaves = ref<Record<string, PendingUncertainNodeSave>>({})
+const pendingUncertainDangers = ref<Record<string, PendingUncertainDanger>>({})
 let forceResetNextSync = false
 
 const tagPreview = computed(() => parseTags(draft.value?.tags))
@@ -54,9 +77,32 @@ const invalidTagPattern = /[;<>]/
 const trailingSemicolonsPattern = /;+$/
 const utcTime = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
 
+const enrollAction = useAdminAction()
 const saveAction = useAdminAction(props.refresh)
 const dangerAction = useAdminAction(props.refresh)
-const busy = computed(() => saveAction.busy.value || dangerAction.busy.value)
+
+const {
+  busy: enrollBusy,
+  error: enrollError,
+  success: enrollSuccess,
+} = enrollAction
+const {
+  busy: saveBusy,
+  error: saveError,
+  resyncError: saveResyncError,
+  success: saveSuccess,
+  needsResync: saveNeedsResync,
+} = saveAction
+const {
+  busy: dangerBusy,
+  error: dangerError,
+  resyncError: dangerResyncError,
+  success: dangerSuccess,
+  outcome: dangerOutcome,
+  needsResync: dangerNeedsResync,
+} = dangerAction
+
+const busy = computed(() => enrollBusy.value || saveBusy.value || dangerBusy.value)
 const hasUnsavedChanges = computed(() => isNodeDraftDirty({
   draft: draft.value,
   expires: expires.value,
@@ -64,21 +110,60 @@ const hasUnsavedChanges = computed(() => isNodeDraftDirty({
   newTagText: newTagText.value,
 }, savedBaseline.value))
 
-const pageError = computed(() => saveAction.error.value || (confirm.value === null ? dangerAction.error.value : ''))
-const pageSuccess = computed(() => saveAction.success.value || dangerAction.success.value)
-const pageNeedsResync = computed(() => saveAction.needsResync.value || (confirm.value === null && dangerAction.needsResync.value))
+const currentPendingSave = computed(() => {
+  const id = selected.value?.id
+  if (!id)
+    return null
+  return pendingUncertainSaves.value[id] ?? null
+})
 
-const actionLabels = {
+const saveAlert = computed(() => {
+  const pending = currentPendingSave.value
+  if (pending) {
+    return pending.resyncError
+      ? `${pending.message}（重新同步失败：${pending.resyncError}）`
+      : pending.message
+  }
+  return saveError.value
+})
+const showSaveResync = computed(() => saveNeedsResync.value || Boolean(currentPendingSave.value))
+
+const activeConfirmUncertain = computed(() => {
+  if (!confirm.value || !selected.value)
+    return null
+  return pendingUncertainDangers.value[`${confirm.value}:${selected.value.id}`] ?? null
+})
+
+const selectedNodePendingDangers = computed(() => {
+  const id = selected.value?.id
+  if (!id)
+    return []
+  return Object.values(pendingUncertainDangers.value).filter(item => item.nodeId === id)
+})
+
+const showInlineDangerRefreshError = computed(() => {
+  if (confirm.value !== null)
+    return false
+  return dangerOutcome.value === 'refresh_failed' && Boolean(dangerError.value)
+})
+
+const actionLabels: Record<DangerActionKind, string> = {
   'rotate': '轮换 Agent 凭据',
   'revoke': '撤销 Agent 凭据',
   'delete': '删除节点',
   'reset-traffic': '重置本周期流量',
 }
-const actionHints = {
+const actionHints: Record<DangerActionKind, string> = {
   'rotate': '旧凭据会立即失效。请保存新凭据并更新对应 Agent，否则节点将停止上报。',
   'revoke': '对应 Agent 将无法继续上报。需要重新注册后才能恢复。',
   'delete': '将删除此节点及相关数据，无法从面板恢复。',
   'reset-traffic': '将本周期流量计数归零，不会重置主机的网络接口计数。',
+}
+
+function formatPendingAlert(message: string, resyncFailure: string): string {
+  return resyncFailure
+    ? `${message}（重新同步失败：${resyncFailure}）`
+    : message
 }
 
 function loadDraftFromNode(node: ManagedNode | undefined): void {
@@ -147,21 +232,33 @@ const draftGuard = useAdminDraftGuard({
   isBusy: () => busy.value,
   isStayingInSameContext: isStayingOnSameNode,
 })
+const {
+  pending: draftGuardPending,
+  isOpen: draftGuardOpen,
+  cancel: cancelDraftGuard,
+  confirm: confirmDraftGuard,
+  restoreFocus: restoreDraftGuardFocus,
+} = draftGuard
 
 const unregisterDraft = draftRegistry?.register({
   section: 'nodes',
   isDirty: () => hasUnsavedChanges.value,
   isBusy: () => busy.value,
   requestRefresh: triggerEl => draftGuard.requestRefresh(async () => {
+    const activeId = selected.value?.id
     forceResetNextSync = true
     saveAction.clearFeedback()
-    dangerAction.clearFeedback()
     try {
       await props.refresh()
+      if (activeId && pendingUncertainSaves.value[activeId]) {
+        const nextSaves = { ...pendingUncertainSaves.value }
+        delete nextSaves[activeId]
+        pendingUncertainSaves.value = nextSaves
+      }
     }
     catch (cause) {
       forceResetNextSync = false
-      saveAction.error.value = cause instanceof Error
+      saveError.value = cause instanceof Error
         ? cause.message
         : String(cause)
     }
@@ -197,7 +294,8 @@ function addTag(): void {
 function applyNodeSwitch(id: string): void {
   secret.value = ''
   saveAction.clearFeedback()
-  dangerAction.clearFeedback()
+  if (dangerOutcome.value !== 'refresh_failed')
+    dangerAction.clearFeedback()
   const targetNode = props.nodes.find(item => item.id === id)
   if (targetNode)
     loadDraftFromNode(targetNode)
@@ -218,8 +316,9 @@ function choose(id: string): void {
   )
 }
 
-function openConfirm(action: 'rotate' | 'revoke' | 'delete' | 'reset-traffic'): void {
-  dangerAction.clearFeedback()
+function openConfirm(action: DangerActionKind): void {
+  if (dangerOutcome.value === 'failed' || dangerOutcome.value === 'saved')
+    dangerAction.clearFeedback()
   confirm.value = action
 }
 
@@ -227,7 +326,29 @@ function closeConfirm(): void {
   if (busy.value)
     return
   confirm.value = null
-  dangerAction.clearFeedback()
+  if (dangerOutcome.value === 'failed')
+    dangerAction.clearFeedback()
+}
+
+function acknowledgeEnrollUncertain(): void {
+  enrollUncertain.value = null
+  enrollAction.clearFeedback()
+}
+
+function unlockUncertainDanger(key: string): void {
+  const next = { ...pendingUncertainDangers.value }
+  delete next[key]
+  pendingUncertainDangers.value = next
+  if (dangerOutcome.value === 'uncertain')
+    dangerAction.clearFeedback()
+}
+
+function clearPendingSave(nodeId: string): void {
+  if (!pendingUncertainSaves.value[nodeId])
+    return
+  const next = { ...pendingUncertainSaves.value }
+  delete next[nodeId]
+  pendingUncertainSaves.value = next
 }
 
 async function save(): Promise<void> {
@@ -235,14 +356,14 @@ async function save(): Promise<void> {
     return
   const remarkError = validatePublicRemark(draft.value.public_remark)
   if (remarkError) {
-    saveAction.error.value = remarkError
-    saveAction.success.value = ''
+    saveError.value = remarkError
+    saveSuccess.value = ''
     return
   }
   const normalizedRemark = normalizePublicRemark(draft.value.public_remark)
   const numericQuota = Number(quotaGiB.value) || 0
-  const node = {
-    ...draft.value,
+  const node: NodeDraftForm = {
+    ...cloneNodeDraft(draft.value),
     public_remark: normalizedRemark,
     expired_at_unix_ms: expires.value
       ? new Date(expires.value).getTime()
@@ -250,12 +371,18 @@ async function save(): Promise<void> {
     traffic_limit_bytes: Math.round(numericQuota * 1024 ** 3),
   }
   const submittedExpires = expires.value
-  await saveAction.run(async () => {
+  const submittedSnapshot: NodeDraftSnapshot = {
+    draft: cloneNodeDraft(node),
+    expires: submittedExpires,
+    quotaGiB: numericQuota,
+  }
+  clearPendingSave(node.id)
+  const result = await saveAction.run(async () => {
     await getSharedApi().post(`admin/nodes/${encodeURIComponent(node.id)}`, node)
   }, {
     message: '已保存',
     onCommitted: () => {
-      if (!draft.value)
+      if (!draft.value || draft.value.id !== node.id)
         return
       draft.value.public_remark = normalizedRemark
       quotaGiB.value = numericQuota
@@ -268,27 +395,54 @@ async function save(): Promise<void> {
       }
     },
   })
+  if (result === 'uncertain') {
+    pendingUncertainSaves.value = {
+      ...pendingUncertainSaves.value,
+      [node.id]: {
+        nodeId: node.id,
+        nodeName: node.name,
+        submitted: submittedSnapshot,
+        message: saveError.value,
+        resyncError: '',
+      },
+    }
+  }
 }
 
 async function enroll(): Promise<void> {
+  if (busy.value || enrollUncertain.value)
+    return
   secret.value = ''
-  await saveAction.run(async () => {
+  const result = await enrollAction.run(async () => {
     const response = await getSharedApi().post<{ token: string }>('admin/enrollment', { ttl_seconds: ttlHours.value * 3600 })
     secret.value = response.token
   }, {
     message: '已生成注册令牌',
     reload: false,
     riskyWrite: true,
+    uncertainMessage: detail => `生成一次性注册令牌结果未确认（${detail}）。管理状态接口不展示历史一次性令牌，为避免重复签发已暂停直接重试；如确认仍需新令牌，请先解除暂停后再重新生成。`,
   })
+  if (result === 'uncertain')
+    enrollUncertain.value = enrollError.value
+}
+
+function buildDangerUncertainMessage(action: DangerActionKind, nodeName: string, detail: string): string {
+  if (action === 'rotate')
+    return `节点「${nodeName}」的轮换 Agent 凭据结果未确认（${detail}）。管理状态接口无法核实凭据是否已轮换；若服务端已生效，旧凭据可能已失效且新令牌未能传回。请先检查对应 Agent 连接状态，或明确解锁后再次轮换以获取新凭据。`
+  if (action === 'reset-traffic')
+    return `节点「${nodeName}」的重置本周期流量结果未确认（${detail}）。仅凭管理状态接口的当前流量值无法证明重置是否已生效；请先刷新状态核对当前流量，必要时再明确解锁重试。`
+  return `节点「${nodeName}」的${actionLabels[action]}结果未确认（${detail}）。请先重新同步核对当前状态，勿直接重复提交。`
 }
 
 async function execute(): Promise<void> {
-  if (!confirm.value || !selected.value || dangerAction.uncertain.value)
+  if (!confirm.value || !selected.value || activeConfirmUncertain.value)
     return
   const action = confirm.value
   const id = selected.value.id
+  const nodeName = selected.value.name
+  const key = `${action}:${id}`
   secret.value = ''
-  await dangerAction.run(async () => {
+  const result = await dangerAction.run(async () => {
     if (action === 'rotate') {
       const response = await getSharedApi().post<{ agent_token: string }>(`admin/nodes/${encodeURIComponent(id)}/rotate`)
       secret.value = response.agent_token
@@ -299,49 +453,167 @@ async function execute(): Promise<void> {
   }, {
     message: '操作已完成',
     riskyWrite: true,
+    uncertainMessage: detail => buildDangerUncertainMessage(action, nodeName, detail),
     onCommitted: () => {
       confirm.value = null
+      if (pendingUncertainDangers.value[key]) {
+        const next = { ...pendingUncertainDangers.value }
+        delete next[key]
+        pendingUncertainDangers.value = next
+      }
     },
   })
+  if (result === 'uncertain') {
+    pendingUncertainDangers.value = {
+      ...pendingUncertainDangers.value,
+      [key]: {
+        key,
+        action,
+        nodeId: id,
+        nodeName,
+        verifiable: action === 'delete' || action === 'revoke',
+        message: dangerError.value,
+        resyncError: '',
+      },
+    }
+  }
 }
 
-async function resyncPage(): Promise<void> {
-  if (saveAction.needsResync.value) {
-    await saveAction.resync()
+async function resyncSave(): Promise<void> {
+  const pending = currentPendingSave.value
+  if (!pending) {
+    await saveAction.resync('已重新同步最新状态')
     return
   }
-  await dangerAction.resync()
+  pending.resyncError = ''
+  const ok = await saveAction.resync({
+    verify: () => {
+      const freshNode = props.nodes.find(item => item.id === pending.nodeId)
+      clearPendingSave(pending.nodeId)
+      if (!freshNode) {
+        return {
+          resolved: true,
+          message: `已核实：节点「${pending.nodeName}」已不存在`,
+        }
+      }
+      const serverSnapshot = createNodeDraftSnapshot(freshNode)
+      const applied = !isNodeDraftDirty({
+        draft: pending.submitted.draft,
+        expires: pending.submitted.expires,
+        quotaGiB: pending.submitted.quotaGiB,
+        newTagText: '',
+      }, serverSnapshot)
+      if (applied) {
+        if (selected.value?.id === pending.nodeId)
+          savedBaseline.value = serverSnapshot
+        return {
+          resolved: true,
+          message: `已核实：节点「${pending.nodeName}」的修改已在服务端生效`,
+        }
+      }
+      return {
+        resolved: true,
+        message: `已同步最新状态：服务端节点「${pending.nodeName}」与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。`,
+      }
+    },
+  })
+  if (!ok && pendingUncertainSaves.value[pending.nodeId])
+    pendingUncertainSaves.value[pending.nodeId]!.resyncError = saveResyncError.value
 }
 
-async function resyncDanger(): Promise<void> {
-  const ok = await dangerAction.resync()
-  if (ok)
-    confirm.value = null
+async function resyncDanger(entry?: PendingUncertainDanger): Promise<void> {
+  if (!entry) {
+    await dangerAction.resync('已重新同步最新状态')
+    return
+  }
+  entry.resyncError = ''
+  const ok = await dangerAction.resync({
+    verify: () => {
+      const freshNode = props.nodes.find(item => item.id === entry.nodeId)
+      if (entry.action === 'delete') {
+        unlockUncertainDanger(entry.key)
+        if (!freshNode) {
+          if (confirm.value === 'delete')
+            confirm.value = null
+          return {
+            resolved: true,
+            message: `已核实：节点「${entry.nodeName}」已删除`,
+          }
+        }
+        return {
+          resolved: true,
+          message: `已核对最新状态：节点「${entry.nodeName}」仍存在，可确认后再决定是否重试删除。`,
+        }
+      }
+      if (entry.action === 'revoke') {
+        unlockUncertainDanger(entry.key)
+        if (!freshNode) {
+          if (confirm.value === 'revoke')
+            confirm.value = null
+          return {
+            resolved: true,
+            message: `已核实：节点「${entry.nodeName}」已不存在`,
+          }
+        }
+        if (freshNode.disabled) {
+          if (confirm.value === 'revoke')
+            confirm.value = null
+          return {
+            resolved: true,
+            message: `已核实：节点「${entry.nodeName}」的 Agent 凭据已撤销`,
+          }
+        }
+        return {
+          resolved: true,
+          message: `已核对最新状态：节点「${entry.nodeName}」的 Agent 凭据仍处于有效状态，可确认后再决定是否重试撤销。`,
+        }
+      }
+      const honestMessage = entry.action === 'rotate'
+        ? `已刷新管理状态，但该接口无法证明节点「${entry.nodeName}」的凭据轮换是否已生效；请结合 Agent 连接状态核对后再决定是否解锁重新轮换。`
+        : `已刷新管理状态，但仅凭当前流量值无法证明节点「${entry.nodeName}」的流量重置是否已生效；请核对当前流量后再决定是否解锁重试。`
+      if (pendingUncertainDangers.value[entry.key]) {
+        pendingUncertainDangers.value[entry.key] = {
+          ...pendingUncertainDangers.value[entry.key]!,
+          message: honestMessage,
+          resyncError: '',
+        }
+      }
+      return {
+        resolved: false,
+        error: honestMessage,
+      }
+    },
+  })
+  if (!ok && dangerResyncError.value && pendingUncertainDangers.value[entry.key])
+    pendingUncertainDangers.value[entry.key]!.resyncError = dangerResyncError.value
 }
 </script>
 
 <template>
   <div class="space-y-4">
-    <div v-if="pageError || pageNeedsResync" class="flex flex-wrap items-center gap-2">
-      <p v-if="pageError" role="alert" class="text-sm text-destructive">
-        {{ pageError }}
-      </p>
-      <Button v-if="pageNeedsResync" type="button" variant="outline" size="sm" :disabled="busy" @click="resyncPage">
-        重新同步
-      </Button>
-    </div>
-    <p v-if="pageSuccess" role="status" class="text-sm text-success">
-      {{ pageSuccess }}
-    </p>
     <CardX title="接入节点" content-class="space-y-4">
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="enroll">
         <label class="grid gap-2 text-sm">注册令牌有效期（小时）<Input v-model="ttlHours" type="number" min="1" max="24" required class="max-w-48" :disabled="busy" /></label>
-        <Button type="submit" class="min-h-11" :disabled="busy">
-          生成一次性注册令牌
+        <Button type="submit" class="min-h-11" :disabled="busy || Boolean(enrollUncertain)">
+          {{ enrollBusy ? '正在生成…' : '生成一次性注册令牌' }}
         </Button>
       </form>
       <p class="text-sm text-muted-foreground">
         令牌仅用于注册一个 Agent，请通过受保护的配置文件交给对应服务器。
+      </p>
+      <div v-if="enrollUncertain" class="flex flex-wrap items-center gap-2">
+        <p role="alert" class="text-sm text-destructive">
+          {{ enrollUncertain }}
+        </p>
+        <Button type="button" variant="outline" size="sm" :disabled="busy" @click="acknowledgeEnrollUncertain">
+          已知悉，允许重新生成
+        </Button>
+      </div>
+      <p v-else-if="enrollError" role="alert" class="text-sm text-destructive">
+        {{ enrollError }}
+      </p>
+      <p v-if="enrollSuccess" role="status" class="text-sm text-success">
+        {{ enrollSuccess }}
       </p>
       <div v-if="secret" class="space-y-2 rounded-md border p-3">
         <label for="agent-secret" class="text-sm font-medium">新令牌（离开页面后清除）</label>
@@ -445,33 +717,70 @@ async function resyncDanger(): Promise<void> {
         </fieldset>
         <div class="flex flex-wrap gap-2">
           <Button class="min-h-11" type="submit" :disabled="busy">
-            {{ saveAction.busy.value ? '正在处理…' : '保存节点' }}
+            {{ saveBusy ? '正在处理…' : '保存节点' }}
           </Button><Button variant="outline" type="button" class="min-h-11" :disabled="selected?.hidden" @click="router.push(`/instance/${draft.id}`)">
             查看监控
           </Button>
-          <Button v-if="saveAction.needsResync.value" variant="outline" type="button" class="min-h-11" :disabled="busy" @click="resyncPage">
+          <Button v-if="showSaveResync" variant="outline" type="button" class="min-h-11" :disabled="busy" @click="resyncSave">
             重新同步
           </Button>
         </div>
+        <p v-if="saveAlert" role="alert" class="text-sm text-destructive">
+          {{ saveAlert }}
+        </p>
+        <p v-if="saveSuccess" role="status" class="text-sm text-success">
+          {{ saveSuccess }}
+        </p>
         <p v-if="selected?.hidden" class="text-sm text-muted-foreground">
           此节点已从监控页面和探测历史中隐藏。取消隐藏并保存后可查看。
         </p>
       </form>
-      <div v-if="draft" class="flex flex-wrap gap-2 border-t pt-4">
-        <AdminTrafficCorrection v-if="selected" :node="selected" :disabled="busy" :refresh="props.refresh" />
-        <Button v-for="(label, action) in actionLabels" :key="action" variant="outline" type="button" :disabled="busy" :class="action === 'delete' ? 'text-destructive' : ''" @click="openConfirm(action)">
-          {{ label }}
-        </Button>
+      <div v-if="draft" class="space-y-3 border-t pt-4">
+        <div class="flex flex-wrap gap-2">
+          <AdminTrafficCorrection v-if="selected" :node="selected" :disabled="busy" :refresh="props.refresh" />
+          <Button v-for="(label, action) in actionLabels" :key="action" variant="outline" type="button" :disabled="busy" :class="action === 'delete' ? 'text-destructive' : ''" @click="openConfirm(action)">
+            {{ label }}
+          </Button>
+        </div>
+        <div v-if="confirm === null && selectedNodePendingDangers.length" class="space-y-2">
+          <div v-for="entry in selectedNodePendingDangers" :key="entry.key" class="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3">
+            <p role="alert" class="text-sm text-destructive">
+              {{ formatPendingAlert(entry.message, entry.resyncError) }}
+            </p>
+            <Button v-if="entry.verifiable" type="button" variant="outline" size="sm" :disabled="busy" @click="resyncDanger(entry)">
+              重新同步
+            </Button>
+            <template v-else>
+              <Button type="button" variant="outline" size="sm" :disabled="busy" @click="resyncDanger(entry)">
+                刷新管理状态
+              </Button>
+              <Button type="button" variant="outline" size="sm" :disabled="busy" @click="unlockUncertainDanger(entry.key)">
+                我已核对状态，解除锁定
+              </Button>
+            </template>
+          </div>
+        </div>
+        <div v-if="showInlineDangerRefreshError" class="flex flex-wrap items-center gap-2">
+          <p role="alert" class="text-sm text-destructive">
+            {{ dangerError }}
+          </p>
+          <Button v-if="dangerNeedsResync" type="button" variant="outline" size="sm" :disabled="busy" @click="resyncDanger()">
+            重新同步
+          </Button>
+        </div>
+        <p v-if="confirm === null && dangerSuccess" role="status" class="text-sm text-success">
+          {{ dangerSuccess }}
+        </p>
       </div>
     </CardX>
-    <Dialog :open="draftGuard.isOpen.value" @update:open="value => { if (!value) draftGuard.cancel() }">
-      <DialogContent @close-auto-focus="draftGuard.restoreFocus">
+    <Dialog :open="draftGuardOpen" @update:open="value => { if (!value) cancelDraftGuard() }">
+      <DialogContent @close-auto-focus="restoreDraftGuardFocus">
         <DialogHeader>
           <DialogTitle>放弃未保存修改？</DialogTitle>
-          <DialogDescription v-if="draftGuard.pending.value?.kind === 'switch'">
-            切换到 {{ draftGuard.pending.value.targetLabel }} 会丢弃当前节点未保存的修改，不会保存任何更改。
+          <DialogDescription v-if="draftGuardPending?.kind === 'switch'">
+            切换到 {{ draftGuardPending.targetLabel }} 会丢弃当前节点未保存的修改，不会保存任何更改。
           </DialogDescription>
-          <DialogDescription v-else-if="draftGuard.pending.value?.kind === 'refresh'">
+          <DialogDescription v-else-if="draftGuardPending?.kind === 'refresh'">
             刷新管理数据会丢弃当前节点未保存的修改，不会保存任何更改。
           </DialogDescription>
           <DialogDescription v-else>
@@ -479,14 +788,14 @@ async function resyncDanger(): Promise<void> {
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" @click="draftGuard.cancel">
+          <Button variant="outline" @click="cancelDraftGuard">
             取消，继续编辑
           </Button>
-          <Button variant="destructive" @click="draftGuard.confirm">
+          <Button variant="destructive" @click="confirmDraftGuard">
             {{
-              draftGuard.pending.value?.kind === 'switch'
+              draftGuardPending?.kind === 'switch'
                 ? '放弃修改并切换'
-                : draftGuard.pending.value?.kind === 'refresh'
+                : draftGuardPending?.kind === 'refresh'
                   ? '放弃修改并刷新'
                   : '放弃修改并离开'
             }}
@@ -497,18 +806,34 @@ async function resyncDanger(): Promise<void> {
     <Dialog :open="confirm !== null" @update:open="value => { if (!value) closeConfirm() }">
       <DialogContent :show-close="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
         <DialogHeader><DialogTitle>{{ confirm ? actionLabels[confirm] : '' }}</DialogTitle><DialogDescription>{{ selected?.name }}：{{ confirm ? actionHints[confirm] : '' }}</DialogDescription></DialogHeader>
-        <p v-if="dangerAction.error.value" role="alert" class="text-sm text-destructive">
-          {{ dangerAction.error.value }}
+        <p v-if="activeConfirmUncertain" role="alert" class="text-sm text-destructive">
+          {{ formatPendingAlert(activeConfirmUncertain.message, activeConfirmUncertain.resyncError) }}
+        </p>
+        <p v-else-if="dangerError" role="alert" class="text-sm text-destructive">
+          {{ dangerError }}
+        </p>
+        <p v-if="!activeConfirmUncertain && dangerSuccess" role="status" class="text-sm text-success">
+          {{ dangerSuccess }}
         </p>
         <DialogFooter>
           <Button variant="outline" :disabled="busy" @click="closeConfirm">
             取消
           </Button>
-          <Button v-if="dangerAction.needsResync.value" variant="outline" :disabled="busy" @click="resyncDanger">
-            重新同步
-          </Button>
-          <Button variant="destructive" :disabled="busy || dangerAction.uncertain.value" @click="execute">
-            {{ dangerAction.busy.value ? '正在处理…' : '确认执行' }}
+          <template v-if="activeConfirmUncertain">
+            <Button v-if="activeConfirmUncertain.verifiable" variant="outline" :disabled="busy" @click="resyncDanger(activeConfirmUncertain)">
+              重新同步
+            </Button>
+            <template v-else>
+              <Button variant="outline" :disabled="busy" @click="resyncDanger(activeConfirmUncertain)">
+                刷新管理状态
+              </Button>
+              <Button variant="outline" :disabled="busy" @click="unlockUncertainDanger(activeConfirmUncertain.key)">
+                我已核对状态，解除锁定
+              </Button>
+            </template>
+          </template>
+          <Button variant="destructive" :disabled="busy || Boolean(activeConfirmUncertain)" @click="execute">
+            {{ dangerBusy ? '正在处理…' : '确认执行' }}
           </Button>
         </DialogFooter>
       </DialogContent>
