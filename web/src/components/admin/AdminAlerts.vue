@@ -98,6 +98,7 @@ function emptyRule(): AlertRule {
 const channel = ref<NotificationChannel>(emptyChannel())
 const channelBaseline = ref<NotificationChannel>(emptyChannel())
 const pendingNewChannelId = ref('')
+const seenPendingNewChannelId = ref('')
 const channelEditRevision = ref(0)
 const pendingUncertainChannelSave = ref<PendingUncertainChannelSave | null>(null)
 const channelFormHeadingRef = ref<HTMLElement | null>(null)
@@ -105,6 +106,8 @@ const channelFormHeadingRef = ref<HTMLElement | null>(null)
 const rule = ref<AlertRule>(emptyRule())
 const ruleBaseline = ref<AlertRule>(emptyRule())
 const pendingNewRuleId = ref('')
+const seenPendingNewRuleId = ref('')
+const unverifiedScopedRuleTarget = ref<{ id: string, nodeIds: string[], enabled: boolean } | null>(null)
 const ruleEditRevision = ref(0)
 const confirmGlobalScope = ref(false)
 const pendingUncertainRuleSave = ref<PendingUncertainRuleSave | null>(null)
@@ -147,34 +150,55 @@ const busy = computed(() => channelBusy.value || ruleBusy.value || deleteBusy.va
 const hasUnsavedChannel = computed(() => isChannelDraftDirty(channel.value, channelBaseline.value))
 const hasUnsavedRule = computed(() => isAlertRuleDraftDirty(rule.value, ruleBaseline.value, confirmGlobalScope.value))
 const hasAnyUnsavedChanges = computed(() => hasUnsavedChannel.value || hasUnsavedRule.value)
-const liveEditingRule = computed(() => {
-  const lookupId = rule.value.id || pendingNewRuleId.value
-  if (!lookupId)
-    return undefined
-  return props.rules.find(item => item.id === lookupId)
-})
+const effectiveChannelId = computed(() => channel.value.id || pendingNewChannelId.value)
+const effectiveRuleId = computed(() => rule.value.id || pendingNewRuleId.value)
+const liveEditingRule = computed(() => effectiveRuleId.value
+  ? props.rules.find(item => item.id === effectiveRuleId.value)
+  : undefined)
 const editingChannelMissing = computed(() => Boolean(channel.value.id) && !props.channels.some(item => item.id === channel.value.id))
 const editingRuleMissing = computed(() => Boolean(rule.value.id) && !props.rules.some(item => item.id === rule.value.id))
 
-// Always derive #312 persisted scope guard and persisted node IDs from the latest server snapshot (or unconfirmed create submission).
-const persistedRuleScopeSource = computed(() => {
+// Combine latest GET snapshot with any still-unverified scoped submission for the same ID so neither stale GET nor 400 retries can bypass #312.
+const matchingUnverifiedRuleScope = computed(() => {
+  const pending = unverifiedScopedRuleTarget.value
+  if (!pending || !effectiveRuleId.value || pending.id !== effectiveRuleId.value)
+    return null
+  return pending
+})
+const persistedRuleBaseScope = computed(() => {
   if (liveEditingRule.value)
     return liveEditingRule.value
   if (rule.value.id)
     return ruleBaseline.value
-  if (pendingUncertainRuleSave.value && pendingUncertainRuleSave.value.targetId === pendingNewRuleId.value)
-    return pendingUncertainRuleSave.value.submitted
   return undefined
 })
-const persistedNodeIds = computed(() => persistedRuleScopeSource.value?.node_ids ?? [])
-const guardGlobalScope = computed(() => persistedRuleScopeSource.value
-  ? shouldGuardGlobalScope(persistedRuleScopeSource.value)
-  : false)
+const persistedNodeIds = computed(() => {
+  const ids = new Set<string>()
+  if (persistedRuleBaseScope.value) {
+    for (const id of persistedRuleBaseScope.value.node_ids)
+      ids.add(id)
+  }
+  if (matchingUnverifiedRuleScope.value) {
+    for (const id of matchingUnverifiedRuleScope.value.nodeIds)
+      ids.add(id)
+  }
+  return Array.from(ids)
+})
+const guardGlobalScope = computed(() => {
+  if (persistedRuleBaseScope.value && shouldGuardGlobalScope(persistedRuleBaseScope.value))
+    return true
+  if (matchingUnverifiedRuleScope.value)
+    return true
+  return false
+})
 const persistedRuleScopeSignature = computed(() => {
-  const source = persistedRuleScopeSource.value
-  if (!source)
-    return ''
-  return `${source.id}|${source.enabled ? '1' : '0'}|${[...source.node_ids].sort().join(',')}`
+  const basePart = persistedRuleBaseScope.value
+    ? `${persistedRuleBaseScope.value.id}|${persistedRuleBaseScope.value.enabled ? '1' : '0'}|${[...persistedRuleBaseScope.value.node_ids].sort().join(',')}`
+    : ''
+  const unverifiedPart = matchingUnverifiedRuleScope.value
+    ? `${matchingUnverifiedRuleScope.value.id}|${matchingUnverifiedRuleScope.value.enabled ? '1' : '0'}|${[...matchingUnverifiedRuleScope.value.nodeIds].sort().join(',')}`
+    : ''
+  return `${basePart}::${unverifiedPart}`
 })
 
 const dirtyDraftSummary = computed(() => {
@@ -243,9 +267,9 @@ const removingDraftWarning = computed(() => {
   const target = removingTarget.value
   if (!target || removingTargetInvalidReason.value)
     return ''
-  if (target.kind === 'channels' && channel.value.id === target.id && hasUnsavedChannel.value)
+  if (target.kind === 'channels' && effectiveChannelId.value === target.id && hasUnsavedChannel.value)
     return '当前通知渠道表单中针对此渠道的未保存修改也会一并丢弃（不影响告警规则草稿）。'
-  if (target.kind === 'alert-rules' && rule.value.id === target.id && hasUnsavedRule.value)
+  if (target.kind === 'alert-rules' && effectiveRuleId.value === target.id && hasUnsavedRule.value)
     return '当前告警规则表单中针对此规则的未保存修改也会一并丢弃（不影响通知渠道草稿）。'
   return ''
 })
@@ -321,6 +345,7 @@ function applyResetChannel(clearFeedback = true): void {
   channel.value = emptyChannel()
   channelBaseline.value = emptyChannel()
   pendingNewChannelId.value = ''
+  seenPendingNewChannelId.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
@@ -330,15 +355,32 @@ function applyEditChannel(item: NotificationChannel, clearFeedback = true): void
   channel.value = cloneNotificationChannel(item)
   channelBaseline.value = cloneNotificationChannel(item)
   pendingNewChannelId.value = ''
+  seenPendingNewChannelId.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
+}
+
+function markPendingNewChannelRemoved(removedId: string, fallbackName: string): void {
+  if (!channel.value.id && pendingNewChannelId.value === removedId) {
+    channel.value.id = removedId
+    channelBaseline.value = {
+      ...channelBaseline.value,
+      id: removedId,
+      name: channelBaseline.value.name || fallbackName,
+    }
+    pendingNewChannelId.value = ''
+    seenPendingNewChannelId.value = ''
+    pendingUncertainChannelSave.value = null
+  }
 }
 
 function applyResetRule(clearFeedback = true): void {
   rule.value = emptyRule()
   ruleBaseline.value = emptyRule()
   pendingNewRuleId.value = ''
+  seenPendingNewRuleId.value = ''
+  unverifiedScopedRuleTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
   ruleValidationError.value = ''
@@ -350,11 +392,28 @@ function applyEditRule(item: AlertRule, clearFeedback = true): void {
   rule.value = cloneAlertRule(item)
   ruleBaseline.value = cloneAlertRule(item)
   pendingNewRuleId.value = ''
+  seenPendingNewRuleId.value = ''
+  unverifiedScopedRuleTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
   ruleValidationError.value = ''
   if (clearFeedback)
     ruleAction.clearFeedback()
+}
+
+function markPendingNewRuleRemoved(removedId: string, fallbackName: string): void {
+  if (!rule.value.id && pendingNewRuleId.value === removedId) {
+    rule.value.id = removedId
+    ruleBaseline.value = {
+      ...ruleBaseline.value,
+      id: removedId,
+      name: ruleBaseline.value.name || fallbackName,
+    }
+    pendingNewRuleId.value = ''
+    seenPendingNewRuleId.value = ''
+    unverifiedScopedRuleTarget.value = null
+    pendingUncertainRuleSave.value = null
+  }
 }
 
 watch(() => rule.value.node_ids.length, (count) => {
@@ -387,8 +446,21 @@ watch(
 watch(
   () => props.channels,
   (channels) => {
-    if (!channel.value.id)
+    if (!channel.value.id) {
+      if (pendingNewChannelId.value) {
+        const created = channels.find(item => item.id === pendingNewChannelId.value)
+        if (created) {
+          seenPendingNewChannelId.value = pendingNewChannelId.value
+        }
+        else if (seenPendingNewChannelId.value === pendingNewChannelId.value) {
+          if (!hasUnsavedChannel.value)
+            applyResetChannel(false)
+          else
+            markPendingNewChannelRemoved(pendingNewChannelId.value, channel.value.name || pendingNewChannelId.value)
+        }
+      }
       return
+    }
     const live = channels.find(item => item.id === channel.value.id)
     if (!live) {
       if (!hasUnsavedChannel.value)
@@ -407,8 +479,21 @@ watch(
 watch(
   () => props.rules,
   (rules) => {
-    if (!rule.value.id)
+    if (!rule.value.id) {
+      if (pendingNewRuleId.value) {
+        const created = rules.find(item => item.id === pendingNewRuleId.value)
+        if (created) {
+          seenPendingNewRuleId.value = pendingNewRuleId.value
+        }
+        else if (seenPendingNewRuleId.value === pendingNewRuleId.value) {
+          if (!hasUnsavedRule.value)
+            applyResetRule(false)
+          else
+            markPendingNewRuleRemoved(pendingNewRuleId.value, rule.value.name || pendingNewRuleId.value)
+        }
+      }
       return
+    }
     const live = rules.find(item => item.id === rule.value.id)
     if (!live) {
       if (!hasUnsavedRule.value)
@@ -733,6 +818,7 @@ async function resyncChannel(): Promise<void> {
       if (sameDraftContext && !pending.wasExisting) {
         channel.value.id = fresh.id
         pendingNewChannelId.value = ''
+        seenPendingNewChannelId.value = ''
         channelBaseline.value = cloneNotificationChannel(fresh)
       }
       else if (sameDraftContext && metaMatches && !pending.urlChanged) {
@@ -799,6 +885,13 @@ async function saveRule(): Promise<void> {
     },
   })
   if (result === 'uncertain') {
+    if (shouldGuardGlobalScope(submitted)) {
+      unverifiedScopedRuleTarget.value = {
+        id: targetId,
+        nodeIds: [...submitted.node_ids],
+        enabled: Boolean(submitted.enabled),
+      }
+    }
     pendingUncertainRuleSave.value = {
       targetId,
       wasExisting,
@@ -823,6 +916,8 @@ async function resyncRule(): Promise<void> {
     verify: () => {
       pendingUncertainRuleSave.value = null
       const fresh = props.rules.find(item => item.id === pending.targetId)
+      if (fresh && shouldGuardGlobalScope(fresh) && unverifiedScopedRuleTarget.value?.id === pending.targetId)
+        unverifiedScopedRuleTarget.value = null
       if (!fresh) {
         return {
           resolved: true,
@@ -842,6 +937,7 @@ async function resyncRule(): Promise<void> {
             if (!pending.wasExisting) {
               rule.value.id = fresh.id
               pendingNewRuleId.value = ''
+              seenPendingNewRuleId.value = ''
             }
             ruleBaseline.value = cloneAlertRule(fresh)
           }
@@ -870,6 +966,7 @@ async function resyncRule(): Promise<void> {
       if (sameDraftContext && !pending.wasExisting) {
         rule.value.id = fresh.id
         pendingNewRuleId.value = ''
+        seenPendingNewRuleId.value = ''
         ruleBaseline.value = cloneAlertRule(fresh)
       }
       return {
@@ -909,7 +1006,7 @@ async function remove(): Promise<void> {
   })
   if (committedDelete && isSameActiveSession(sessionGen, auth.loggedIn)) {
     if (item.kind === 'channels') {
-      if (channel.value.id === item.id)
+      if (effectiveChannelId.value === item.id)
         applyResetChannel(false)
       const ruleWasClean = !hasUnsavedRule.value
       rule.value.channel_ids = rule.value.channel_ids.filter(id => id !== item.id)
@@ -918,7 +1015,7 @@ async function remove(): Promise<void> {
       emit('channelDeleted', item.id)
     }
     else {
-      if (rule.value.id === item.id)
+      if (effectiveRuleId.value === item.id)
         applyResetRule(false)
       emit('ruleDeleted', item.id)
     }
@@ -976,13 +1073,20 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
     },
   })
   if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
-    // Read-only resync must preserve dirty user edits (surfaced via editing*Missing) rather than wiping them.
+    // Read-only resync must preserve dirty user edits (surfaced via editing*Missing) and block old UUID resurrection.
     if (entry.kind === 'channels') {
-      if (channel.value.id === entry.id && !hasUnsavedChannel.value)
-        applyResetChannel(false)
+      if (effectiveChannelId.value === entry.id) {
+        if (!hasUnsavedChannel.value)
+          applyResetChannel(false)
+        else
+          markPendingNewChannelRemoved(entry.id, entry.name)
+      }
     }
-    else if (rule.value.id === entry.id && !hasUnsavedRule.value) {
-      applyResetRule(false)
+    else if (effectiveRuleId.value === entry.id) {
+      if (!hasUnsavedRule.value)
+        applyResetRule(false)
+      else
+        markPendingNewRuleRemoved(entry.id, entry.name)
     }
     return
   }

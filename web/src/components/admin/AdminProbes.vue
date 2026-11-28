@@ -70,6 +70,8 @@ function blank(): ProbeTask {
 const draft = ref<ProbeTask>(blank())
 const baseline = ref<ProbeTask>(blank())
 const pendingCreateId = ref('')
+const seenPendingCreateId = ref('')
+const unverifiedScopedTarget = ref<{ id: string, nodeIds: string[], enabled: boolean } | null>(null)
 const confirmGlobalScope = ref(false)
 const editRevision = ref(0)
 const refreshBusy = ref(false)
@@ -100,33 +102,53 @@ const {
 
 const busy = computed(() => saveBusy.value || deleteBusy.value || refreshBusy.value)
 const hasUnsavedChanges = computed(() => isProbeDraftDirty(draft.value, baseline.value, confirmGlobalScope.value))
-const liveEditingTask = computed(() => {
-  const lookupId = draft.value.id || pendingCreateId.value
-  if (!lookupId)
-    return undefined
-  return props.probes.find(task => task.id === lookupId)
-})
+const effectiveEditingId = computed(() => draft.value.id || pendingCreateId.value)
+const liveEditingTask = computed(() => effectiveEditingId.value
+  ? props.probes.find(task => task.id === effectiveEditingId.value)
+  : undefined)
 const editingTaskMissing = computed(() => Boolean(draft.value.id) && !props.probes.some(task => task.id === draft.value.id))
 
-// Always derive #312 persisted scope guard and persisted node IDs from the latest server snapshot (or unconfirmed create submission).
-const persistedScopeSource = computed(() => {
+// Combine latest GET snapshot with any still-unverified scoped submission for the same ID so neither stale GET nor 400 retries can bypass #312.
+const matchingUnverifiedScope = computed(() => {
+  const pending = unverifiedScopedTarget.value
+  if (!pending || !effectiveEditingId.value || pending.id !== effectiveEditingId.value)
+    return null
+  return pending
+})
+const persistedBaseScope = computed(() => {
   if (liveEditingTask.value)
     return liveEditingTask.value
   if (draft.value.id)
     return baseline.value
-  if (pendingUncertainSave.value && pendingUncertainSave.value.targetId === pendingCreateId.value)
-    return pendingUncertainSave.value.submitted
   return undefined
 })
-const persistedNodeIds = computed(() => persistedScopeSource.value?.node_ids ?? [])
-const guardGlobalScope = computed(() => persistedScopeSource.value
-  ? shouldGuardGlobalScope(persistedScopeSource.value)
-  : false)
+const persistedNodeIds = computed(() => {
+  const ids = new Set<string>()
+  if (persistedBaseScope.value) {
+    for (const id of persistedBaseScope.value.node_ids)
+      ids.add(id)
+  }
+  if (matchingUnverifiedScope.value) {
+    for (const id of matchingUnverifiedScope.value.nodeIds)
+      ids.add(id)
+  }
+  return Array.from(ids)
+})
+const guardGlobalScope = computed(() => {
+  if (persistedBaseScope.value && shouldGuardGlobalScope(persistedBaseScope.value))
+    return true
+  if (matchingUnverifiedScope.value)
+    return true
+  return false
+})
 const persistedScopeSignature = computed(() => {
-  const source = persistedScopeSource.value
-  if (!source)
-    return ''
-  return `${source.id}|${source.enabled ? '1' : '0'}|${[...source.node_ids].sort().join(',')}`
+  const basePart = persistedBaseScope.value
+    ? `${persistedBaseScope.value.id}|${persistedBaseScope.value.enabled ? '1' : '0'}|${[...persistedBaseScope.value.node_ids].sort().join(',')}`
+    : ''
+  const unverifiedPart = matchingUnverifiedScope.value
+    ? `${matchingUnverifiedScope.value.id}|${matchingUnverifiedScope.value.enabled ? '1' : '0'}|${[...matchingUnverifiedScope.value.nodeIds].sort().join(',')}`
+    : ''
+  return `${basePart}::${unverifiedPart}`
 })
 
 const visibleNodes = computed(() => props.nodes.filter(node => !node.hidden && !node.disabled))
@@ -155,7 +177,7 @@ const removingTargetInvalidReason = computed(() => {
 })
 const removingDiscardsActiveDraft = computed(() => Boolean(
   removingTarget.value
-  && draft.value.id === removingTarget.value.id
+  && effectiveEditingId.value === removingTarget.value.id
   && hasUnsavedChanges.value,
 ))
 const saveAlert = computed(() => {
@@ -195,6 +217,8 @@ function applyResetDraft(clearFeedback = true): void {
   draft.value = blank()
   baseline.value = blank()
   pendingCreateId.value = ''
+  seenPendingCreateId.value = ''
+  unverifiedScopedTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
   saveValidationError.value = ''
@@ -206,11 +230,28 @@ function applyEditTask(task: ProbeTask, clearFeedback = true): void {
   draft.value = cloneProbeTask(task)
   baseline.value = cloneProbeTask(task)
   pendingCreateId.value = ''
+  seenPendingCreateId.value = ''
+  unverifiedScopedTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
   saveValidationError.value = ''
   if (clearFeedback)
     saveAction.clearFeedback()
+}
+
+function markPendingCreateRemoved(removedId: string, fallbackName: string): void {
+  if (!draft.value.id && pendingCreateId.value === removedId) {
+    draft.value.id = removedId
+    baseline.value = {
+      ...baseline.value,
+      id: removedId,
+      name: baseline.value.name || fallbackName,
+    }
+    pendingCreateId.value = ''
+    seenPendingCreateId.value = ''
+    unverifiedScopedTarget.value = null
+    pendingUncertainSave.value = null
+  }
 }
 
 watch(visibleNodes, (nodes) => {
@@ -243,8 +284,21 @@ watch(
 watch(
   () => props.probes,
   (probes) => {
-    if (!draft.value.id)
+    if (!draft.value.id) {
+      if (pendingCreateId.value) {
+        const created = probes.find(task => task.id === pendingCreateId.value)
+        if (created) {
+          seenPendingCreateId.value = pendingCreateId.value
+        }
+        else if (seenPendingCreateId.value === pendingCreateId.value) {
+          if (!hasUnsavedChanges.value)
+            applyResetDraft(false)
+          else
+            markPendingCreateRemoved(pendingCreateId.value, draft.value.name || pendingCreateId.value)
+        }
+      }
       return
+    }
     const live = probes.find(task => task.id === draft.value.id)
     if (!live) {
       if (!hasUnsavedChanges.value)
@@ -437,6 +491,13 @@ async function save(): Promise<void> {
     },
   })
   if (result === 'uncertain') {
+    if (shouldGuardGlobalScope(submitted)) {
+      unverifiedScopedTarget.value = {
+        id: targetId,
+        nodeIds: [...submitted.node_ids],
+        enabled: Boolean(submitted.enabled),
+      }
+    }
     pendingUncertainSave.value = {
       targetId,
       wasExisting,
@@ -461,6 +522,8 @@ async function resyncSave(): Promise<void> {
     verify: () => {
       pendingUncertainSave.value = null
       const fresh = props.probes.find(task => task.id === pending.targetId)
+      if (fresh && shouldGuardGlobalScope(fresh) && unverifiedScopedTarget.value?.id === pending.targetId)
+        unverifiedScopedTarget.value = null
       if (!fresh) {
         return {
           resolved: true,
@@ -480,6 +543,7 @@ async function resyncSave(): Promise<void> {
             if (!pending.wasExisting) {
               draft.value.id = fresh.id
               pendingCreateId.value = ''
+              seenPendingCreateId.value = ''
             }
             baseline.value = cloneProbeTask(fresh)
           }
@@ -508,6 +572,7 @@ async function resyncSave(): Promise<void> {
       if (sameDraftContext && !pending.wasExisting) {
         draft.value.id = fresh.id
         pendingCreateId.value = ''
+        seenPendingCreateId.value = ''
         baseline.value = cloneProbeTask(fresh)
       }
       return {
@@ -544,7 +609,7 @@ async function remove(): Promise<void> {
     },
   })
   if (committedDelete && isSameActiveSession(sessionGen, auth.loggedIn)) {
-    if (draft.value.id === id)
+    if (effectiveEditingId.value === id)
       applyResetDraft(false)
     emit('probeDeleted', id)
     return
@@ -595,9 +660,13 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
     },
   })
   if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
-    // Read-only resync must preserve dirty user edits (surfaced via editingTaskMissing) rather than wiping them.
-    if (draft.value.id === entry.id && !hasUnsavedChanges.value)
-      applyResetDraft(false)
+    // Read-only resync must preserve dirty user edits (surfaced via editingTaskMissing) and block old UUID resurrection.
+    if (effectiveEditingId.value === entry.id) {
+      if (!hasUnsavedChanges.value)
+        applyResetDraft(false)
+      else
+        markPendingCreateRemoved(entry.id, entry.name)
+    }
     return
   }
   if (!ok && deleteResyncError.value && isSameActiveSession(sessionGen, auth.loggedIn) && pendingDeleteLocks.value[entry.key])

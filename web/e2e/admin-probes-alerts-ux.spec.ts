@@ -68,6 +68,7 @@ test('probes management highlights active edits, syncs dynamic #312 scope after 
     },
   ]
   let saveReturn502 = false
+  let probeSavePosts = 0
   let holdNextStateGet = false
   let failHeldStateGet = false
   let releaseHeldStateGet: (() => void) | null = null
@@ -109,6 +110,7 @@ test('probes management highlights active edits, syncs dynamic #312 scope after 
     })
   })
   await page.route('**/api/admin/probes', async (route) => {
+    probeSavePosts++
     const body = route.request().postDataJSON()
     const idx = probes.findIndex(item => item.id === body.id)
     if (idx >= 0) {
@@ -218,19 +220,26 @@ test('probes management highlights active edits, syncs dynamic #312 scope after 
   await expect(page.getByRole('heading', { name: '编辑探测任务' })).toBeFocused()
 
   // Dynamic #312 scope sync: Global Ping starts global (guardGlobalScope=false), user narrows to Alpha SG -> 502 (server saved [Alpha]),
-  // user unchecks Alpha SG & edits name before resync -> resync preserves newer edit AND dynamically enables #312 guard blocking silent widening!
+  // 1) Even BEFORE resync, unchecking Alpha SG and clicking Save MUST block silent widening with ZERO global POST!
+  // 2) After resync, newer edit is preserved AND #312 guard remains active against silent widening.
   await page.getByLabel('Alpha SG', { exact: true }).check()
   saveReturn502 = true
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Synthetic probe save 502' })).toBeVisible()
+  const postsAfter502 = probeSavePosts
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
   await nameInput.fill('Global Ping Newer Edit')
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
+  expect(probeSavePosts).toBe(postsAfter502)
+
   await page.getByRole('button', { name: '重新同步', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: '您之后的新修改已保留' })).toBeVisible()
   await expect(nameInput).toHaveValue('Global Ping Newer Edit')
   await expect(page.getByLabel('确认改为应用于所有活动节点')).toBeVisible()
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
+  expect(probeSavePosts).toBe(postsAfter502)
 
   // Confirmed top refresh locks inputs while pending; failed refresh preserves dirty draft; succeeded refresh resets cleanly.
   await page.getByLabel('确认改为应用于所有活动节点').check()
@@ -292,37 +301,55 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
   const initialState = await (await page.request.get('/api/admin/state')).json()
   const nodes = buildSyntheticNodes(initialState.nodes[0])
   const probes: Array<Record<string, unknown>> = []
-  const channels: Array<Record<string, unknown>> = []
-  const rules: Array<Record<string, unknown>> = []
+  let channels: Array<Record<string, unknown>> = []
+  let rules: Array<Record<string, unknown>> = []
   const submittedProbeIds: string[] = []
   const submittedChannelIds: string[] = []
   const submittedRuleIds: string[] = []
-  let failFirstProbeSave = true
+  let probeSaveAttempt = 0
+  let hideNewProbeOnNextGet = false
   let failFirstChannelSave = true
   let failFirstRuleSave = true
+  let failSecondChannelSave = false
+  let failRuleDelete502 = true
 
   await page.route('**/api/v1/nodes/*/probes*', route => route.fulfill({
     json: EMPTY_PROBE_HISTORY,
   }))
-  await page.route('**/api/admin/state', route => route.fulfill({
-    json: {
-      ...initialState,
-      nodes,
-      probes,
-      channels,
-      alert_rules: rules,
-    },
-  }))
+  await page.route('**/api/admin/state', (route) => {
+    const visibleProbes = hideNewProbeOnNextGet
+      ? []
+      : probes
+    if (hideNewProbeOnNextGet)
+      hideNewProbeOnNextGet = false
+    return route.fulfill({
+      json: {
+        ...initialState,
+        nodes,
+        probes: visibleProbes,
+        channels,
+        alert_rules: rules,
+      },
+    })
+  })
   await page.route('**/api/admin/probes', async (route) => {
+    probeSaveAttempt++
     const body = route.request().postDataJSON()
     submittedProbeIds.push(body.id)
+    if (probeSaveAttempt === 2) {
+      // Simulate definite 400 validation failure on retry: MUST NOT clear earlier unverified scoped 502 guard!
+      await route.fulfill({
+        status: 400,
+        json: { error: 'Synthetic retry 400 validation error' },
+      })
+      return
+    }
     const idx = probes.findIndex(item => item.id === body.id)
     if (idx >= 0)
       probes[idx] = body
     else
       probes.push(body)
-    if (failFirstProbeSave) {
-      failFirstProbeSave = false
+    if (probeSaveAttempt === 1) {
       await route.fulfill({
         status: 502,
         json: { error: 'Probe created before 502' },
@@ -357,6 +384,21 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
       channels[idx] = body
     else
       channels.push(body)
+    if (failSecondChannelSave) {
+      failSecondChannelSave = false
+      await route.fulfill({
+        status: 502,
+        json: { error: 'Second channel created before 502' },
+      })
+      return
+    }
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/admin/channels/*/delete', async (route) => {
+    const url = route.request().url()
+    channels = channels.filter(item => !url.includes(String(item.id)))
     await route.fulfill({
       json: { ok: true },
     })
@@ -381,8 +423,23 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
       json: { ok: true },
     })
   })
+  await page.route('**/api/admin/alert-rules/*/delete', async (route) => {
+    const url = route.request().url()
+    rules = rules.filter(item => !url.includes(String(item.id)))
+    if (failRuleDelete502) {
+      failRuleDelete502 = false
+      await route.fulfill({
+        status: 502,
+        json: { error: 'Pending-create rule delete 502 after commit' },
+      })
+      return
+    }
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
 
-  // 1. New probe targeting Alpha SG -> 502 (persisted on server) -> unchecking Alpha SG before resync MUST NOT send global POST -> re-checking & retrying upserts SAME UUID without duplicate!
+  // 1. New probe targeting Alpha SG -> 502 -> stale GET resync (new ID not visible yet) conservatively keeps guard -> retry gets 400 -> unchecking Alpha SG STILL blocks global POST -> re-checking & retrying upserts SAME UUID!
   await page.goto('/admin?section=probes')
   await page.getByLabel('名称', { exact: true }).fill('Idempotent Probe')
   await page.getByLabel('目标', { exact: true }).fill('example.com')
@@ -391,22 +448,33 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
   await expect(page.getByRole('alert').filter({ hasText: 'Probe created before 502' })).toBeVisible()
   expect(submittedProbeIds).toHaveLength(1)
 
+  hideNewProbeOnNextGet = true
+  await page.getByRole('button', { name: '重新同步', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '列表中尚未出现新探测任务' })).toBeVisible()
+
+  // Retry while still scoped hits definite 400; earlier unverified scoped 502 guard MUST remain active!
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: 'Synthetic retry 400 validation error' })).toBeVisible()
+  expect(submittedProbeIds).toHaveLength(2)
+
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
-  expect(submittedProbeIds).toHaveLength(1)
+  expect(submittedProbeIds).toHaveLength(2)
 
   await page.getByLabel('Alpha SG', { exact: true }).check()
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('status').filter({ hasText: '已保存探测任务' })).toBeVisible()
-  expect(submittedProbeIds).toHaveLength(2)
+  expect(submittedProbeIds).toHaveLength(3)
   expect(submittedProbeIds[0]).toBe(submittedProbeIds[1])
+  expect(submittedProbeIds[1]).toBe(submittedProbeIds[2])
   await expect(page.getByRole('list', { name: '探测任务列表' }).getByRole('listitem').filter({ hasText: 'Idempotent Probe' })).toHaveCount(1)
 
   // 2. New channel duplicate-name / different-URL MUST NOT false-positive on resync or wipe URL; retry uses same client UUID.
   await page.goto('/admin?section=alerts')
   const channelNameInput = page.getByLabel('渠道名称', { exact: true })
   const webhookUrlInput = page.getByLabel('Webhook URL', { exact: true })
+  const ruleNameInput = page.getByLabel('规则名称', { exact: true })
   await channelNameInput.fill('Duplicate Name Hook')
   await webhookUrlInput.fill('https://example.invalid/my-intended-hook')
   await page.getByRole('button', { name: '保存渠道' }).click()
@@ -422,8 +490,8 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
   expect(submittedChannelIds[0]).toBe(submittedChannelIds[1])
   expect(channels.some(item => item.id === submittedChannelIds[0] && item.url === 'https://example.invalid/my-intended-hook')).toBe(true)
 
-  // 3. New alert rule targeting Alpha SG -> 502 (persisted) -> unchecking Alpha SG before resync MUST NOT send global POST -> retry upserts SAME UUID!
-  await page.getByLabel('规则名称', { exact: true }).fill('Idempotent Rule')
+  // 3. New alert rule targeting Alpha SG -> 502 (persisted) -> unchecking Alpha SG before resync MUST NOT send global POST -> sibling channel save loads it into list while Rule form stays in new-draft state -> uncertain delete 502 + resync preserves dirty draft & blocks resurrecting deleted UUID!
+  await ruleNameInput.fill('Idempotent Rule')
   await page.getByLabel('Alpha SG', { exact: true }).check()
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Rule created before 502' })).toBeVisible()
@@ -434,12 +502,53 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
   expect(submittedRuleIds).toHaveLength(1)
 
-  await page.getByLabel('Alpha SG', { exact: true }).check()
+  await channelNameInput.fill('Sibling Channel Trigger')
+  await webhookUrlInput.fill('https://example.invalid/sibling-hook')
+  await page.getByRole('button', { name: '保存渠道' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已保存通知渠道' })).toBeVisible()
+
+  const ruleList = page.getByRole('list', { name: '告警规则列表' })
+  const pendingRuleRow = ruleList.getByRole('listitem').filter({ hasText: 'Idempotent Rule' })
+  await expect(pendingRuleRow).toHaveCount(1)
+
+  await pendingRuleRow.getByRole('button', { name: '删除' }).click()
+  const ruleDeleteDialog = page.getByRole('dialog', { name: '删除告警规则' })
+  await expect(ruleDeleteDialog).toContainText('当前告警规则表单中针对此规则的未保存修改也会一并丢弃')
+  await ruleDeleteDialog.getByRole('button', { name: '确认删除告警规则' }).click()
+  await expect(ruleDeleteDialog.getByRole('alert')).toContainText('Pending-create rule delete 502 after commit')
+  await ruleDeleteDialog.getByRole('button', { name: '取消' }).click()
+
+  await ruleNameInput.fill('Idempotent Rule Dirty After Delete 502')
+  await page.getByRole('alert').filter({ hasText: '删除告警规则「Idempotent Rule」结果未确认' }).locator('..').getByRole('button', { name: '重新同步' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已核实：告警规则「Idempotent Rule」已删除' })).toBeVisible()
+  await expect(ruleNameInput).toHaveValue('Idempotent Rule Dirty After Delete 502')
+  await expect(page.getByRole('alert').filter({ hasText: '在最新同步中已不存在' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '保存规则' })).toBeDisabled()
+
+  // 4. Direct confirmed delete of a pending-create channel (loaded via sibling refresh) immediately resets the channel form so deleted UUID cannot be resurrected!
+  await page.getByRole('button', { name: '取消编辑' }).click()
+  await page.getByRole('dialog', { name: '放弃未保存修改？' }).getByRole('button', { name: '放弃修改并切换' }).click()
+  failSecondChannelSave = true
+  await channelNameInput.fill('Ephemeral Hook')
+  await webhookUrlInput.fill('https://example.invalid/ephemeral-hook')
+  await page.getByRole('button', { name: '保存渠道' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: 'Second channel created before 502' })).toBeVisible()
+
+  await ruleNameInput.fill('Sibling Rule Refresh')
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('status').filter({ hasText: '已保存告警规则' })).toBeVisible()
-  expect(submittedRuleIds).toHaveLength(2)
-  expect(submittedRuleIds[0]).toBe(submittedRuleIds[1])
-  await expect(page.getByRole('list', { name: '告警规则列表' }).getByRole('listitem').filter({ hasText: 'Idempotent Rule' })).toHaveCount(1)
+
+  const channelList = page.getByRole('list', { name: '通知渠道列表' })
+  const ephemeralChannelRow = channelList.getByRole('listitem').filter({ hasText: 'Ephemeral Hook' })
+  await expect(ephemeralChannelRow).toHaveCount(1)
+  await ephemeralChannelRow.getByRole('button', { name: '删除' }).click()
+  const channelDeleteDialog = page.getByRole('dialog', { name: '删除通知渠道' })
+  await expect(channelDeleteDialog).toContainText('当前通知渠道表单中针对此渠道的未保存修改也会一并丢弃')
+  await channelDeleteDialog.getByRole('button', { name: '确认删除通知渠道' }).click()
+  await expect(channelDeleteDialog).toBeHidden()
+  await expect(ephemeralChannelRow).toHaveCount(0)
+  await expect(channelNameInput).toHaveValue('')
+  await expect(webhookUrlInput).toHaveValue('')
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 
@@ -506,6 +615,7 @@ test('alerts management isolates channel and rule drafts, shows in-app-only zero
     },
   ]
   let ruleSave502 = false
+  let ruleSavePosts = 0
   let expireRuleSaveWith401 = false
   let expired = false
 
@@ -538,6 +648,7 @@ test('alerts management isolates channel and rule drafts, shows in-app-only zero
     })
   })
   await page.route('**/api/admin/alert-rules', async (route) => {
+    ruleSavePosts++
     if (expireRuleSaveWith401) {
       expired = true
       await route.fulfill({
@@ -664,19 +775,25 @@ test('alerts management isolates channel and rule drafts, shows in-app-only zero
   const updatedBackupChannelRow = channelList.getByRole('listitem').filter({ hasText: 'Backup Hook Saved Later' })
   await expect(updatedBackupChannelRow).toBeVisible()
 
-  // 7. Dynamic #312 rule scope sync after 502: In-App Global Rule narrowed to Alpha SG -> 502 (applied) -> uncheck Alpha SG & edit name -> resync preserves edit AND blocks silent widening!
+  // 7. Dynamic #312 rule scope sync after 502: In-App Global Rule narrowed to Alpha SG -> 502 (applied) -> uncheck Alpha SG BEFORE resync MUST NOT send global POST -> resync preserves edit AND still blocks silent widening!
   await globalRuleRow.getByRole('button', { name: '编辑' }).click()
   await page.getByLabel('Alpha SG', { exact: true }).check()
   ruleSave502 = true
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Rule save 502 after narrowing scope' })).toBeVisible()
+  const rulePostsAfter502 = ruleSavePosts
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
   await ruleNameInput.fill('In-App Global Rule Newer')
+  await page.getByRole('button', { name: '保存规则' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
+  expect(ruleSavePosts).toBe(rulePostsAfter502)
+
   await page.getByRole('button', { name: '重新同步', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: '您之后的新修改已保留' })).toBeVisible()
   await expect(page.getByLabel('确认改为应用于所有活动节点')).toBeVisible()
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
+  expect(ruleSavePosts).toBe(rulePostsAfter502)
 
   // 8. Uncertain channel delete 502 -> edit channel dirty -> read-only resync verifies deletion WITHOUT wiping dirty channel draft (and leaves dirty rule untouched)!
   await updatedBackupChannelRow.getByRole('button', { name: '删除' }).click()
