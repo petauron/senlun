@@ -63,9 +63,9 @@ enum EnqueueOutcome {
 pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
     // Legacy v10 rows whose outbox entries were already cleared cannot distinguish
     // an in-app-only alert or suppressed firing from a delivered notification.
-    // Backfill firing_notified only when a durable outbox row proves a current-
-    // episode firing delivery was enqueued; future firing evaluations rebuild
-    // evidence cleanly without emitting phantom recovery notifications.
+    // Backfill firing_notified / recovery_pending only when a durable outbox row
+    // proves a current-episode firing delivery was enqueued; future firing
+    // evaluations rebuild evidence cleanly without emitting phantom recoveries.
     db.execute_batch(
         "ALTER TABLE alert_incidents
              ADD COLUMN firing_notified INTEGER NOT NULL DEFAULT 0 CHECK(firing_notified IN (0,1));
@@ -78,10 +78,29 @@ pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
                    SELECT 1
                    FROM alert_deliveries d
                    WHERE d.incident_id = alert_incidents.id
-                     AND json_valid(d.payload)
-                     AND json_extract(d.payload, '$.status') = 'firing'
-                     AND typeof(json_extract(d.payload, '$.occurred_at_unix_ms')) = 'integer'
-                     AND json_extract(d.payload, '$.occurred_at_unix_ms') >= alert_incidents.opened_at_ms
+                     AND CASE
+                         WHEN json_valid(d.payload) THEN
+                             json_extract(d.payload, '$.status') = 'firing'
+                             AND typeof(json_extract(d.payload, '$.occurred_at_unix_ms')) = 'integer'
+                             AND json_extract(d.payload, '$.occurred_at_unix_ms') >= alert_incidents.opened_at_ms
+                         ELSE 0
+                     END = 1
+               );
+         UPDATE alert_incidents
+             SET recovery_pending = 1
+             WHERE status = 'resolved'
+               AND last_sent_at_ms < 0
+               AND EXISTS (
+                   SELECT 1
+                   FROM alert_deliveries d
+                   WHERE d.incident_id = alert_incidents.id
+                     AND CASE
+                         WHEN json_valid(d.payload) THEN
+                             json_extract(d.payload, '$.status') = 'firing'
+                             AND typeof(json_extract(d.payload, '$.occurred_at_unix_ms')) = 'integer'
+                             AND json_extract(d.payload, '$.occurred_at_unix_ms') >= alert_incidents.opened_at_ms
+                         ELSE 0
+                     END = 1
                );
          UPDATE alert_incidents
              SET last_sent_at_ms = 0
@@ -423,16 +442,7 @@ fn resolve_incident(
         )?;
     }
     if needs_recovery {
-        let outcome = enqueue(
-            tx,
-            incident,
-            rule,
-            node_id,
-            node,
-            "resolved",
-            &message,
-            now,
-        )?;
+        let outcome = enqueue(tx, incident, rule, node_id, node, "resolved", &message, now)?;
         if matches!(
             outcome,
             EnqueueOutcome::Enqueued | EnqueueOutcome::AlreadyPending | EnqueueOutcome::NoTargets
@@ -567,16 +577,7 @@ fn evaluate_node(
             || now.saturating_sub(incident.last_sent_at)
                 >= rule.cooldown_seconds.saturating_mul(1000))
     {
-        let outcome = enqueue(
-            tx,
-            &incident,
-            rule,
-            node_id,
-            node,
-            "firing",
-            &message,
-            now,
-        )?;
+        let outcome = enqueue(tx, &incident, rule, node_id, node, "firing", &message, now)?;
         if outcome == EnqueueOutcome::Enqueued {
             tx.execute(
                 "UPDATE alert_incidents SET last_sent_at_ms=?2,firing_notified=1 WHERE id=?1",
@@ -1383,6 +1384,7 @@ mod tests {
             "rule-bad-payload",
             "rule-stale-outbox",
             "rule-live-outbox",
+            "rule-live-recovery",
         ] {
             let mut item = rule("offline");
             item.id = id.into();
@@ -1401,7 +1403,8 @@ mod tests {
                  ('inc-legacy-neg','node-a','rule-legacy-neg','resolved','m',100,150,-1),
                  ('inc-bad-payload','node-a','rule-bad-payload','firing','m',100,110,110),
                  ('inc-stale-outbox','node-a','rule-stale-outbox','firing','m',200,210,210),
-                 ('inc-live-outbox','node-a','rule-live-outbox','firing','m',100,110,110);
+                 ('inc-live-outbox','node-a','rule-live-outbox','firing','m',100,110,110),
+                 ('inc-live-recovery','node-a','rule-live-recovery','resolved','m',100,150,-1);
              INSERT INTO alert_deliveries(
                  id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms
              ) VALUES
@@ -1409,6 +1412,8 @@ mod tests {
                  ('del-stale','inc-stale-outbox','legacy-ch',
                   '{\"status\":\"firing\",\"occurred_at_unix_ms\":110}',0,110,110),
                  ('del-live','inc-live-outbox','legacy-ch',
+                  '{\"status\":\"firing\",\"occurred_at_unix_ms\":110}',0,110,110),
+                 ('del-live-rec','inc-live-recovery','legacy-ch',
                   '{\"status\":\"firing\",\"occurred_at_unix_ms\":110}',0,110,110);",
         )
         .unwrap();
@@ -1447,9 +1452,13 @@ mod tests {
             incident_flags(&storage, "rule-live-outbox"),
             ("firing".into(), 110, 1, 0)
         );
+        assert_eq!(
+            incident_flags(&storage, "rule-live-recovery"),
+            ("resolved".into(), 0, 0, 1)
+        );
 
-        // Enable the channel after upgrade and recover node-a: only rule-live-outbox
-        // had provable current-episode firing outbox evidence, so only it sends resolved.
+        // Enable the channel after upgrade and recover node-a: only incidents with
+        // provable current-episode firing outbox evidence replace their rows with resolved.
         let enabled = Channel {
             id: "legacy-ch".into(),
             name: "legacy-channel".into(),
@@ -1469,7 +1478,7 @@ mod tests {
         storage.evaluate_alerts(300, 90_000).unwrap();
 
         let deliveries = storage.pending_deliveries(300).unwrap();
-        let resolved_rules: Vec<String> = deliveries
+        let mut resolved_rules: Vec<String> = deliveries
             .iter()
             .filter_map(|item| {
                 let body: serde_json::Value = serde_json::from_str(&item.payload).ok()?;
@@ -1477,7 +1486,18 @@ mod tests {
                     .then(|| body["rule_id"].as_str().unwrap_or_default().to_owned())
             })
             .collect();
-        assert_eq!(resolved_rules, vec!["rule-live-outbox".to_owned()]);
+        resolved_rules.sort();
+        assert_eq!(
+            resolved_rules,
+            vec![
+                "rule-live-outbox".to_owned(),
+                "rule-live-recovery".to_owned(),
+            ]
+        );
+        assert_eq!(
+            incident_flags(&storage, "rule-live-recovery"),
+            ("resolved".into(), 0, 0, 0)
+        );
     }
 
     fn set_provider_traffic(
