@@ -469,7 +469,7 @@ const trafficProgressStyle = computed(() => ({
 
       <LoadChart :uuid="data.uuid" class="px-4" />
       <div class="px-4">
-        <ProbeHistory :uuid="data.uuid" />
+        <ProbeHistory :uuid="data.uuid" detail-interactions />
         <PeerLatencyPanel :node-id="data.uuid" class="mt-4" />
       </div>
     </template>

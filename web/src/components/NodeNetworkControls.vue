@@ -208,7 +208,7 @@ async function detect() {
           size="xs"
           class="rounded-full"
           :class="mobileTouchTarget
-            ? 'ml-auto h-auto min-h-11 border border-border/60 px-3.5 text-xs sm:ml-0 sm:h-7 sm:min-h-0 sm:border-transparent sm:px-2 sm:text-[10px]'
+            ? 'group/detect ml-auto h-11 min-h-11 min-w-11 bg-transparent px-0 hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:ml-0 sm:h-7 sm:min-h-0 sm:min-w-0 sm:px-2 sm:text-[10px] sm:hover:bg-accent sm:hover:text-accent-foreground dark:sm:hover:bg-accent/50'
             : 'h-7 px-2 text-[10px]'"
           :disabled="busy || !ready"
           :title="hint"
@@ -216,8 +216,18 @@ async function detect() {
           @keydown.enter.stop @keydown.space.stop
           @click.stop="detect"
         >
-          <Icon icon="lucide:refresh-cw" class="mr-1 size-3" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
-          {{ busy ? '检测中' : '检测' }}
+          <span
+            v-if="mobileTouchTarget"
+            data-testid="network-detect-pill"
+            class="inline-flex h-8 items-center justify-center rounded-full bg-muted/60 px-3 text-xs font-medium text-foreground/85 transition-colors motion-reduce:transition-none group-hover/detect:bg-muted group-hover/detect:text-foreground sm:h-auto sm:bg-transparent sm:px-0 sm:text-[10px] sm:font-normal sm:group-hover/detect:bg-transparent"
+          >
+            <Icon icon="lucide:refresh-cw" class="mr-1 size-3" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
+            {{ busy ? '检测中' : '检测' }}
+          </span>
+          <template v-else>
+            <Icon icon="lucide:refresh-cw" class="mr-1 size-3" :class="{ 'animate-spin motion-reduce:animate-none': busy }" aria-hidden="true" />
+            {{ busy ? '检测中' : '检测' }}
+          </template>
         </Button>
       </div>
     </div>

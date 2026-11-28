@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { EChartsType } from 'echarts'
 import type { RecordFormat } from '@/utils/recordHelper'
 import type { HistoryCoverage, StatusRecord } from '@/utils/rpc'
 import { Icon } from '@iconify/vue'
@@ -13,6 +14,12 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
+import {
+  DETAIL_RANGE_TAB_PILL,
+  DETAIL_RANGE_TAB_TRIGGER,
+  DETAIL_RANGE_TABS_LIST_BLUR,
+  DETAIL_RANGE_TABS_LIST_PLAIN,
+} from '@/utils/detailTabs'
 import { formatBytes, formatBytesSplit } from '@/utils/helper'
 import { getLoadChartStatusDisplay } from '@/utils/loadChartStatus'
 import { alignRecordsToTimeWindow } from '@/utils/recordHelper'
@@ -74,7 +81,7 @@ const chartThemeColors = computed(() => ({
 // 通用 Tooltip 配置
 const baseTooltipConfig = computed(() => ({
   trigger: 'axis' as const,
-  confine: false,
+  confine: true,
   backgroundColor: chartThemeColors.value.tooltipBg,
   borderColor: 'transparent',
   borderWidth: 0,
@@ -171,6 +178,22 @@ const nodeInfo = computed(() => nodesStore.nodesByUuid.get(props.uuid))
 const rpc = getSharedRpc()
 let activeRequest: AbortController | null = null
 let requestGeneration = 0
+const chartInstances = new Map<string, Pick<EChartsType, 'dispatchAction'>>()
+
+function bindChart(key: string) {
+  return (instance: unknown) => {
+    const chart = instance as Pick<EChartsType, 'dispatchAction'> | null
+    if (chart && typeof chart.dispatchAction === 'function')
+      chartInstances.set(key, chart)
+    else
+      chartInstances.delete(key)
+  }
+}
+
+function clearChartTooltips() {
+  for (const chart of chartInstances.values())
+    chart.dispatchAction({ type: 'hideTip' })
+}
 
 // ==================== 数据获取 ====================
 
@@ -931,6 +954,7 @@ watch(isRealtime, (realtime) => {
 // 生命周期 ====================
 
 watch(selectedView, () => {
+  clearChartTooltips()
   remoteData.value = []
   coverage.value = null
   loadedScopeKey.value = null
@@ -940,6 +964,7 @@ watch(selectedView, () => {
 })
 
 watch(() => props.uuid, () => {
+  clearChartTooltips()
   remoteData.value = []
   coverage.value = null
   loadedScopeKey.value = null
@@ -967,16 +992,16 @@ onBeforeUnmount(() => {
         <div class="flex w-full max-w-full overflow-x-auto px-0.5 py-0.5">
           <TabsList
             aria-label="资源负载时间范围"
-            :class="pickSurfaceClass(
-              'mx-auto inline-flex h-auto w-max min-w-fit gap-1 rounded-md bg-background/60 p-1 pointer-events-auto group-data-horizontal/tabs:h-auto sm:gap-0 sm:p-[3px] sm:group-data-horizontal/tabs:h-8',
-              'mx-auto inline-flex h-auto w-max min-w-fit gap-1 rounded-md bg-background/50 p-1 backdrop-blur-xl pointer-events-auto group-data-horizontal/tabs:h-auto sm:gap-0 sm:p-[3px] sm:group-data-horizontal/tabs:h-8',
-            )"
+            class="mx-auto pointer-events-auto"
+            :class="pickSurfaceClass(DETAIL_RANGE_TABS_LIST_PLAIN, DETAIL_RANGE_TABS_LIST_BLUR)"
           >
             <TabsTrigger
               v-for="view in availableViews" :key="view.label" :value="view.label"
-              class="h-auto min-h-11 min-w-11 flex-none shrink-0 rounded-sm border-none px-3 text-xs shadow-none sm:h-6.5 sm:min-h-0 sm:min-w-0 sm:px-2 data-[state=active]:text-emerald-700 dark:data-[state=active]:text-emerald-600"
+              :class="DETAIL_RANGE_TAB_TRIGGER"
             >
-              {{ view.label }}
+              <span data-testid="load-tab-pill" :class="DETAIL_RANGE_TAB_PILL">
+                {{ view.label }}
+              </span>
             </TabsTrigger>
           </TabsList>
         </div>
@@ -1047,7 +1072,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="cpuChartOption" autoresize />
+            <VChart :ref="bindChart('cpu')" :option="cpuChartOption" autoresize />
           </div>
         </CardX>
 
@@ -1077,7 +1102,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="memoryChartOption" autoresize />
+            <VChart :ref="bindChart('memory')" :option="memoryChartOption" autoresize />
           </div>
         </CardX>
 
@@ -1106,7 +1131,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="diskChartOption" autoresize />
+            <VChart :ref="bindChart('disk')" :option="diskChartOption" autoresize />
           </div>
         </CardX>
 
@@ -1140,7 +1165,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="networkChartOption" autoresize />
+            <VChart :ref="bindChart('network')" :option="networkChartOption" autoresize />
           </div>
         </CardX>
 
@@ -1162,7 +1187,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="connectionsChartOption" autoresize />
+            <VChart :ref="bindChart('connections')" :option="connectionsChartOption" autoresize />
           </div>
         </CardX>
 
@@ -1182,7 +1207,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <div class="h-48">
-            <VChart :option="processChartOption" autoresize />
+            <VChart :ref="bindChart('process')" :option="processChartOption" autoresize />
           </div>
         </CardX>
       </div>
