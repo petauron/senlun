@@ -301,6 +301,43 @@ function handleNodeDeleted(deletedId: string): void {
   }
 }
 
+function handleProbeDeleted(deletedId: string): void {
+  if (!state.value)
+    return
+  if (!state.value.probes.some(probe => probe.id === deletedId))
+    return
+  state.value = {
+    ...state.value,
+    probes: state.value.probes.filter(probe => probe.id !== deletedId),
+  }
+}
+
+function handleChannelDeleted(deletedId: string): void {
+  if (!state.value)
+    return
+  if (!state.value.channels.some(channel => channel.id === deletedId))
+    return
+  state.value = {
+    ...state.value,
+    channels: state.value.channels.filter(channel => channel.id !== deletedId),
+    alert_rules: state.value.alert_rules.map(rule => ({
+      ...rule,
+      channel_ids: rule.channel_ids.filter(id => id !== deletedId),
+    })),
+  }
+}
+
+function handleAlertRuleDeleted(deletedId: string): void {
+  if (!state.value)
+    return
+  if (!state.value.alert_rules.some(rule => rule.id === deletedId))
+    return
+  state.value = {
+    ...state.value,
+    alert_rules: state.value.alert_rules.filter(rule => rule.id !== deletedId),
+  }
+}
+
 async function logout(): Promise<void> {
   await logoutAction.run(async () => {
     await auth.logout()
@@ -348,8 +385,8 @@ async function logout(): Promise<void> {
     <template v-if="state">
       <AdminNodes v-if="section === 'nodes'" :nodes="state.nodes" :refresh="() => refresh(false, false)" @node-deleted="handleNodeDeleted" />
       <AdminTrafficSources v-else-if="section === 'traffic'" :nodes="state.nodes" />
-      <AdminProbes v-else-if="section === 'probes'" :nodes="state.nodes" :probes="state.probes" :refresh="() => refresh(false, false)" />
-      <AdminAlerts v-else-if="section === 'alerts'" :nodes="state.nodes" :channels="state.channels" :rules="state.alert_rules" :incidents="state.incidents" :failures="state.notification_failures" :refresh="() => refresh(false, false)" />
+      <AdminProbes v-else-if="section === 'probes'" :nodes="state.nodes" :probes="state.probes" :refresh="() => refresh(false, false)" @probe-deleted="handleProbeDeleted" />
+      <AdminAlerts v-else-if="section === 'alerts'" :nodes="state.nodes" :channels="state.channels" :rules="state.alert_rules" :incidents="state.incidents" :failures="state.notification_failures" :refresh="() => refresh(false, false)" @channel-deleted="handleChannelDeleted" @rule-deleted="handleAlertRuleDeleted" />
       <AccountSecurity v-else-if="section === 'security'" />
       <AdminThemes v-else-if="section === 'themes'" />
       <CardX v-else title="站点设置" content-class="space-y-4">

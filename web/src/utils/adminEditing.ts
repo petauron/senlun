@@ -1,4 +1,4 @@
-import type { ManagedNode, NotificationChannel } from './admin'
+import type { AlertRule, ManagedNode, NotificationChannel, ProbeTask } from './admin'
 
 export interface AssignableNodeOption {
   id: string
@@ -11,6 +11,26 @@ export interface SelectableChannelOption {
   id: string
   label: string
   missing: boolean
+}
+
+export interface NodeTargetScopeSummary {
+  mode: 'all' | 'scoped'
+  label: string
+  totalCount: number
+  activeCount: number
+  revokedCount: number
+  missingCount: number
+  warningLabel: string
+}
+
+export interface AlertChannelSummary {
+  mode: 'in-app-only' | 'channels'
+  label: string
+  totalCount: number
+  enabledCount: number
+  disabledCount: number
+  missingCount: number
+  warningLabel: string
 }
 
 export interface ScopedNodeValidationInput {
@@ -187,4 +207,250 @@ export function validatePublicRemark(value: string): string | null {
   if (new TextEncoder().encode(normalized).length > MAX_PUBLIC_REMARK_BYTES)
     return '公开备注长度不能超过 2048 字节。'
   return null
+}
+
+function sameNumericField(a: number | string | undefined, b: number | string | undefined): boolean {
+  const sa = String(a ?? '').trim()
+  const sb = String(b ?? '').trim()
+  if (sa === sb)
+    return true
+  if (!sa || !sb)
+    return false
+  const na = Number(sa)
+  const nb = Number(sb)
+  return Number.isFinite(na) && Number.isFinite(nb) && na === nb
+}
+
+function sameIdSet(a: readonly string[], b: readonly string[]): boolean {
+  const setA = new Set(a)
+  const setB = new Set(b)
+  if (setA.size !== setB.size)
+    return false
+  for (const id of setA) {
+    if (!setB.has(id))
+      return false
+  }
+  return true
+}
+
+export function cloneProbeTask(task: ProbeTask): ProbeTask {
+  return {
+    ...task,
+    node_ids: [...task.node_ids],
+  }
+}
+
+export function isProbeDraftDirty(
+  current: ProbeTask,
+  baseline: ProbeTask,
+  confirmGlobalScope = false,
+): boolean {
+  if (confirmGlobalScope)
+    return true
+  return !(
+    current.id === baseline.id
+    && current.name === baseline.name
+    && sameNumericField(current.weight, baseline.weight)
+    && current.kind === baseline.kind
+    && current.target === baseline.target
+    && sameNumericField(current.interval_seconds, baseline.interval_seconds)
+    && sameNumericField(current.timeout_seconds, baseline.timeout_seconds)
+    && Boolean(current.enabled) === Boolean(baseline.enabled)
+    && sameIdSet(current.node_ids, baseline.node_ids)
+  )
+}
+
+export function cloneNotificationChannel(channel: NotificationChannel): NotificationChannel {
+  return { ...channel }
+}
+
+export function isChannelDraftDirty(
+  current: NotificationChannel,
+  baseline: NotificationChannel,
+): boolean {
+  return !(
+    current.id === baseline.id
+    && current.name === baseline.name
+    && current.kind === baseline.kind
+    && current.url === baseline.url
+    && Boolean(current.enabled) === Boolean(baseline.enabled)
+  )
+}
+
+export function cloneAlertRule(rule: AlertRule): AlertRule {
+  return {
+    ...rule,
+    node_ids: [...rule.node_ids],
+    channel_ids: [...rule.channel_ids],
+  }
+}
+
+export function isAlertRuleDraftDirty(
+  current: AlertRule,
+  baseline: AlertRule,
+  confirmGlobalScope = false,
+): boolean {
+  if (confirmGlobalScope)
+    return true
+  return !(
+    current.id === baseline.id
+    && current.name === baseline.name
+    && current.metric === baseline.metric
+    && sameNumericField(current.threshold, baseline.threshold)
+    && sameNumericField(current.duration_seconds, baseline.duration_seconds)
+    && sameNumericField(current.cooldown_seconds, baseline.cooldown_seconds)
+    && Boolean(current.enabled) === Boolean(baseline.enabled)
+    && sameIdSet(current.node_ids, baseline.node_ids)
+    && sameIdSet(current.channel_ids, baseline.channel_ids)
+  )
+}
+
+export function summarizeNodeTargetScope(
+  nodeIds: readonly string[],
+  nodes: readonly ManagedNode[],
+): NodeTargetScopeSummary {
+  const uniqueIds = Array.from(new Set(nodeIds))
+  if (uniqueIds.length === 0) {
+    return {
+      mode: 'all',
+      label: '全部活动节点',
+      totalCount: 0,
+      activeCount: 0,
+      revokedCount: 0,
+      missingCount: 0,
+      warningLabel: '',
+    }
+  }
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  let activeCount = 0
+  let revokedCount = 0
+  let missingCount = 0
+  for (const id of uniqueIds) {
+    const node = byId.get(id)
+    if (!node)
+      missingCount++
+    else if (node.disabled)
+      revokedCount++
+    else
+      activeCount++
+  }
+  const warningParts: string[] = []
+  if (revokedCount > 0)
+    warningParts.push(`${revokedCount} 个已撤销`)
+  if (missingCount > 0)
+    warningParts.push(`${missingCount} 个已不存在`)
+  return {
+    mode: 'scoped',
+    label: `指定 ${uniqueIds.length} 个节点`,
+    totalCount: uniqueIds.length,
+    activeCount,
+    revokedCount,
+    missingCount,
+    warningLabel: warningParts.length > 0
+      ? `含 ${warningParts.join('、')}节点`
+      : '',
+  }
+}
+
+export function summarizeAlertChannels(
+  channelIds: readonly string[],
+  channels: readonly NotificationChannel[],
+): AlertChannelSummary {
+  const uniqueIds = Array.from(new Set(channelIds))
+  if (uniqueIds.length === 0) {
+    return {
+      mode: 'in-app-only',
+      label: '仅站内记录',
+      totalCount: 0,
+      enabledCount: 0,
+      disabledCount: 0,
+      missingCount: 0,
+      warningLabel: '',
+    }
+  }
+  const byId = new Map(channels.map(channel => [channel.id, channel]))
+  let enabledCount = 0
+  let disabledCount = 0
+  let missingCount = 0
+  const knownNames: string[] = []
+  for (const id of uniqueIds) {
+    const channel = byId.get(id)
+    if (!channel) {
+      missingCount++
+    }
+    else {
+      knownNames.push(channel.name)
+      if (channel.enabled)
+        enabledCount++
+      else
+        disabledCount++
+    }
+  }
+  const warningParts: string[] = []
+  if (missingCount > 0)
+    warningParts.push(`${missingCount} 个已失效`)
+  if (disabledCount > 0)
+    warningParts.push(`${disabledCount} 个已停用`)
+  const warningLabel = warningParts.length > 0
+    ? `含 ${warningParts.join('、')}渠道`
+    : ''
+
+  // Zero enabled delivery channels means alerts only record in-app (matches backend notifications.rs).
+  if (enabledCount === 0) {
+    return {
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: uniqueIds.length,
+      enabledCount,
+      disabledCount,
+      missingCount,
+      warningLabel,
+    }
+  }
+
+  let label = `通知渠道：${knownNames[0]} 等 ${uniqueIds.length} 个`
+  if (knownNames.length === 1 && uniqueIds.length === 1)
+    label = `通知渠道：${knownNames[0]}`
+
+  return {
+    mode: 'channels',
+    label,
+    totalCount: uniqueIds.length,
+    enabledCount,
+    disabledCount,
+    missingCount,
+    warningLabel,
+  }
+}
+
+export function createClientUuid(): string {
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes)
+  }
+  else {
+    for (let index = 0; index < bytes.length; index++)
+      bytes[index] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6]! & 0x0F) | 0x40
+  bytes[8] = (bytes[8]! & 0x3F) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+export function scrollAndFocusHeading(el: HTMLElement | null): void {
+  if (!el)
+    return
+  const reducedMotion = typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (typeof el.scrollIntoView === 'function') {
+    el.scrollIntoView({
+      behavior: reducedMotion
+        ? 'auto'
+        : 'smooth',
+      block: 'start',
+    })
+  }
+  el.focus({ preventScroll: true })
 }

@@ -1,12 +1,21 @@
-import type { ManagedNode, NotificationChannel } from '../admin'
+import type { AlertRule, ManagedNode, NotificationChannel, ProbeTask } from '../admin'
 import { describe, expect, it } from 'vitest'
 import {
   buildAssignableNodes,
   buildSelectableChannels,
+  cloneAlertRule,
+  cloneNotificationChannel,
+  cloneProbeTask,
+  createClientUuid,
+  isAlertRuleDraftDirty,
+  isChannelDraftDirty,
+  isProbeDraftDirty,
   normalizePublicRemark,
   pruneMissingChannels,
   requiresGlobalScopeConfirmation,
   shouldGuardGlobalScope,
+  summarizeAlertChannels,
+  summarizeNodeTargetScope,
   validateAlertDraftChannels,
   validatePublicRemark,
   validateScopedNodeSelection,
@@ -208,5 +217,160 @@ describe('admin editing helpers', () => {
     expect(validatePublicRemark('has\u0000nul')).not.toBeNull()
     expect(validatePublicRemark('c1\u0085nel')).not.toBeNull()
     expect(validatePublicRemark('a'.repeat(2049))).not.toBeNull()
+  })
+
+  it('summarizes target node scopes and channel assignments without leaking webhook URLs', () => {
+    const nodes = [
+      makeNode('active-1', 'Alpha'),
+      makeNode('revoked-1', 'Beta', true),
+    ]
+    expect(summarizeNodeTargetScope([], nodes)).toEqual({
+      mode: 'all',
+      label: '全部活动节点',
+      totalCount: 0,
+      activeCount: 0,
+      revokedCount: 0,
+      missingCount: 0,
+      warningLabel: '',
+    })
+    expect(summarizeNodeTargetScope(['active-1', 'revoked-1', 'active-1'], nodes)).toEqual({
+      mode: 'scoped',
+      label: '指定 2 个节点',
+      totalCount: 2,
+      activeCount: 1,
+      revokedCount: 1,
+      missingCount: 0,
+      warningLabel: '含 1 个已撤销节点',
+    })
+    expect(summarizeNodeTargetScope(['revoked-1', 'missing-1'], nodes)).toEqual({
+      mode: 'scoped',
+      label: '指定 2 个节点',
+      totalCount: 2,
+      activeCount: 0,
+      revokedCount: 1,
+      missingCount: 1,
+      warningLabel: '含 1 个已撤销、1 个已不存在节点',
+    })
+
+    const channels = [
+      {
+        ...makeChannel('ch-1', 'Primary', true),
+        url: 'https://example.invalid/top-secret-token',
+      },
+      makeChannel('ch-2', 'Backup', false),
+    ]
+    expect(summarizeAlertChannels([], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录',
+      totalCount: 0,
+      enabledCount: 0,
+      disabledCount: 0,
+      missingCount: 0,
+      warningLabel: '',
+    })
+    const singleSummary = summarizeAlertChannels(['ch-1'], channels)
+    expect(singleSummary.label).toBe('通知渠道：Primary')
+    expect(singleSummary.warningLabel).toBe('')
+    expect(JSON.stringify(singleSummary)).not.toContain('top-secret-token')
+
+    const mixedSummary = summarizeAlertChannels(['ch-1', 'ch-2', 'stale-ch'], channels)
+    expect(mixedSummary).toEqual({
+      mode: 'channels',
+      label: '通知渠道：Primary 等 3 个',
+      totalCount: 3,
+      enabledCount: 1,
+      disabledCount: 1,
+      missingCount: 1,
+      warningLabel: '含 1 个已失效、1 个已停用渠道',
+    })
+    expect(summarizeAlertChannels(['ch-2'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 1,
+      enabledCount: 0,
+      disabledCount: 1,
+      missingCount: 0,
+      warningLabel: '含 1 个已停用渠道',
+    })
+    expect(summarizeAlertChannels(['stale-ch'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 1,
+      enabledCount: 0,
+      disabledCount: 0,
+      missingCount: 1,
+      warningLabel: '含 1 个已失效渠道',
+    })
+    expect(summarizeAlertChannels(['ch-2', 'stale-ch'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 2,
+      enabledCount: 0,
+      disabledCount: 1,
+      missingCount: 1,
+      warningLabel: '含 1 个已失效、1 个已停用渠道',
+    })
+
+    const uuid1 = createClientUuid()
+    const uuid2 = createClientUuid()
+    expect(uuid1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(uuid2).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(uuid1).not.toBe(uuid2)
+  })
+
+  it('tracks dirty state accurately for probe, channel, and alert rule drafts', () => {
+    const probe: ProbeTask = {
+      id: 'probe-1',
+      name: 'Edge Ping',
+      weight: 10,
+      kind: 'icmp',
+      target: 'example.com',
+      interval_seconds: 60,
+      timeout_seconds: 5,
+      enabled: true,
+      node_ids: ['n1', 'n2'],
+    }
+    const probeCopy = cloneProbeTask(probe)
+    expect(isProbeDraftDirty({
+      ...probeCopy,
+      interval_seconds: '60' as unknown as number,
+      node_ids: ['n2', 'n1'],
+    }, probe)).toBe(false)
+    expect(isProbeDraftDirty({
+      ...probeCopy,
+      target: 'edge.example.com',
+    }, probe)).toBe(true)
+    expect(isProbeDraftDirty(probeCopy, probe, true)).toBe(true)
+
+    const channel = makeChannel('ch-1', 'Primary', false)
+    const channelCopy = cloneNotificationChannel(channel)
+    expect(isChannelDraftDirty(channelCopy, channel)).toBe(false)
+    expect(isChannelDraftDirty({
+      ...channelCopy,
+      enabled: true,
+    }, channel)).toBe(true)
+
+    const rule: AlertRule = {
+      id: 'rule-1',
+      name: 'High CPU',
+      metric: 'cpu',
+      threshold: 85,
+      duration_seconds: 120,
+      cooldown_seconds: 900,
+      node_ids: ['n1'],
+      channel_ids: ['ch-1', 'ch-2'],
+      enabled: true,
+    }
+    const ruleCopy = cloneAlertRule(rule)
+    expect(isAlertRuleDraftDirty({
+      ...ruleCopy,
+      threshold: '85.0' as unknown as number,
+      channel_ids: ['ch-2', 'ch-1'],
+    }, rule)).toBe(false)
+    expect(isAlertRuleDraftDirty({
+      ...ruleCopy,
+      channel_ids: ['ch-1'],
+    }, rule)).toBe(true)
+    expect(isAlertRuleDraftDirty(ruleCopy, rule, true)).toBe(true)
   })
 })
