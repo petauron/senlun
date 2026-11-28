@@ -170,7 +170,8 @@ const financeDisclosure = computed(() =>
                 fmt(sum('net_total_down')).unit}`
             "
             placement="top"
-            content-class="left-0 w-max max-w-[calc(100vw-2rem)] translate-x-0 whitespace-nowrap px-2 py-1.5 text-xs leading-normal"
+            persist-description
+            content-class="px-2 py-1.5 text-xs leading-normal sm:whitespace-nowrap"
           >
             <span class="stat-label">{{ label }} ›</span><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b>
           </DataTooltip><template v-else>

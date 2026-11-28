@@ -41,13 +41,19 @@ const showVisitorInfo = computed(() => appStore.visitorInfoCardEnabled
           as="span"
           placement="top"
           :content="formattedServerVersion ?? ''"
+          :stop-click-propagation="false"
+          describe-target="slot"
+          persist-description
         >
-          <a
-            href="https://github.com/petauron/senlun" target="_blank" rel="noopener noreferrer"
-            class="transition-opacity hover:opacity-80"
-          >
-            <span class="font-medium text-foreground">Senlun</span>
-          </a>
+          <template #default="{ describedBy }">
+            <a
+              href="https://github.com/petauron/senlun" target="_blank" rel="noopener noreferrer"
+              :aria-describedby="describedBy"
+              class="transition-opacity hover:opacity-80"
+            >
+              <span class="font-medium text-foreground">Senlun</span>
+            </a>
+          </template>
         </DataTooltip>
       </div>
     </div>

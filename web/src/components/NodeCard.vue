@@ -152,7 +152,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               <span>{{ memPercentage.toFixed(1) }}%</span>
             </div>
             <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" />
-            <DataTooltip :stop-click-propagation="false" placement="top" class="relative z-10 block" :content-class="[!props.node.swap && '!hidden']">
+            <DataTooltip :stop-click-propagation="false" placement="top" class="relative z-10 block" :disabled="!props.node.swap">
               <div class="text-[11px] text-muted-foreground truncate">
                 {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
               </div>
@@ -189,6 +189,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
             <div v-else role="img" class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
             <DataTooltip
               :stop-click-propagation="false" placement="top" class="relative z-10 block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabindex="0" role="group"
+              persist-description
               :aria-label="`${trafficSourceLabel(selectedTraffic)}，${trafficMode}，上传 ${selectedTraffic?.up_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.up_bytes)}，下载 ${selectedTraffic?.down_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.down_bytes)}`"
             >
               <div class="text-[11px] text-muted-foreground truncate">
@@ -276,7 +277,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
             <div class="metric-row flex items-center justify-between">
               <span class="truncate">费用</span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-              <DataTooltip :stop-click-propagation="false" placement="left" class="relative z-10" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
+              <DataTooltip :stop-click-propagation="false" placement="left" class="relative z-10" :content="expiredDate" content-class="whitespace-nowrap">
                 <span class="flex flex-row gap-1 truncate">
                   <template v-for="(tag, index) in priceTags" :key="index">
                     <span v-if="index > 0">·</span>
