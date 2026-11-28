@@ -238,7 +238,7 @@ fn outcome_from_latency(result: Result<f64, &'static str>) -> (PeerProbeStatus, 
 }
 
 fn outcome_from_probe_result(
-    result: senlun_protocol::ProbeResult,
+    result: &senlun_protocol::ProbeResult,
 ) -> (PeerProbeStatus, Option<f64>) {
     if result.success {
         outcome_from_latency(result.latency_ms.ok_or("probe_failed"))
@@ -275,7 +275,7 @@ async fn measure_address(
             )
             .await
             {
-                Ok(result) => outcome_from_probe_result(result),
+                Ok(result) => outcome_from_probe_result(&result),
                 Err(_) => (PeerProbeStatus::Timeout, None),
             }
         }
@@ -536,23 +536,23 @@ mod tests {
             }
         };
         assert_eq!(
-            outcome_from_probe_result(result(true, Some(30_000.0), None)),
+            outcome_from_probe_result(&result(true, Some(30_000.0), None)),
             (PeerProbeStatus::Ready, Some(3000.0))
         );
         assert_eq!(
-            outcome_from_probe_result(result(true, None, None)),
+            outcome_from_probe_result(&result(true, None, None)),
             (PeerProbeStatus::Failed, None)
         );
         assert_eq!(
-            outcome_from_probe_result(result(false, None, Some("timeout"))),
+            outcome_from_probe_result(&result(false, None, Some("timeout"))),
             (PeerProbeStatus::Timeout, None)
         );
         assert_eq!(
-            outcome_from_probe_result(result(false, None, Some("unavailable"))),
+            outcome_from_probe_result(&result(false, None, Some("unavailable"))),
             (PeerProbeStatus::Unavailable, None)
         );
         assert_eq!(
-            outcome_from_probe_result(result(false, None, Some("probe_failed"))),
+            outcome_from_probe_result(&result(false, None, Some("probe_failed"))),
             (PeerProbeStatus::Failed, None)
         );
     }

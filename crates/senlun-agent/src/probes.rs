@@ -1032,7 +1032,7 @@ mod tests {
             Duration::from_secs(2),
             measure_tcp_with(
                 Duration::from_millis(30),
-                || std::future::pending::<Result<SocketAddr, &'static str>>(),
+                std::future::pending::<Result<SocketAddr, &'static str>>,
                 |_| {
                     connect_called = true;
                     std::future::ready(Ok(1.0))
