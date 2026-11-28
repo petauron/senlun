@@ -467,6 +467,26 @@ async function assertHeaderButtonUnobstructed(button: Locator): Promise<void> {
   }
 }
 
+async function clickHeaderButtonBottomEdge(button: Locator, page: Page): Promise<void> {
+  const target = await button.evaluate((el) => {
+    const rect = el.getBoundingClientRect()
+    const x = rect.left + rect.width / 2
+    const y = rect.bottom - 1
+    const hit = document.elementFromPoint(x, y)
+    return {
+      x,
+      y,
+      insideButton: Boolean(hit && el.contains(hit)),
+      hitSlot: hit?.getAttribute('data-slot') ?? null,
+      hitTag: hit?.tagName ?? null,
+    }
+  })
+
+  expect(target.insideButton, `bottom-edge click target hit ${target.hitTag} (${target.hitSlot})`).toBe(true)
+  expect(target.hitSlot).not.toBe('data-tooltip-content')
+  await page.mouse.click(target.x, target.y)
+}
+
 async function assertTooltipBelowButtons(tooltip: Locator, buttons: Locator[], page: Page): Promise<void> {
   await expect(tooltip).toBeVisible()
   await expect(tooltip).toHaveAttribute('data-placement', 'bottom')
@@ -574,16 +594,7 @@ test('header action tooltips open below buttons without intercepting adjacent co
     }
 
     // Click adjacent Network Quality button near its bottom inner edge while theme tooltip is visible.
-    const qualityBox = await qualityButton.boundingBox()
-    expect(qualityBox).not.toBeNull()
-    if (qualityBox) {
-      await qualityButton.click({
-        position: {
-          x: Math.floor(qualityBox.width / 2),
-          y: Math.max(1, Math.floor(qualityBox.height) - 1),
-        },
-      })
-    }
+    await clickHeaderButtonBottomEdge(qualityButton, page)
     await expect(page).toHaveURL('/network-quality')
     await homeLink.click()
     await expect(page).toHaveURL('/')
@@ -607,31 +618,13 @@ test('header action tooltips open below buttons without intercepting adjacent co
         await expect(adminTooltip).toBeVisible()
       }
 
-      const narrowThemeBox = await themeButton.boundingBox()
-      expect(narrowThemeBox).not.toBeNull()
-      if (narrowThemeBox) {
-        await themeButton.click({
-          position: {
-            x: Math.floor(narrowThemeBox.width / 2),
-            y: Math.max(1, Math.floor(narrowThemeBox.height) - 1),
-          },
-        })
-      }
+      await clickHeaderButtonBottomEdge(themeButton, page)
       await expect(themeButton).toHaveAccessibleName('自动主题')
       await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
       await assertHeaderButtonUnobstructed(qualityButton)
       await assertHeaderButtonUnobstructed(adminButton)
 
-      const narrowAdminBox = await adminButton.boundingBox()
-      expect(narrowAdminBox).not.toBeNull()
-      if (narrowAdminBox) {
-        await adminButton.click({
-          position: {
-            x: Math.floor(narrowAdminBox.width / 2),
-            y: Math.max(1, Math.floor(narrowAdminBox.height) - 1),
-          },
-        })
-      }
+      await clickHeaderButtonBottomEdge(adminButton, page)
       await expect(page).toHaveURL(/\/admin/)
     }
     finally {
