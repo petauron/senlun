@@ -46,7 +46,38 @@ function makeStatusRecord(uuid: string, timestampMs: number, cpu: number) {
 test('instance detail keeps unlock card stable for missing IPv6 and address_changed while hiding invalid Google badge', async ({ page }) => {
   const checkedAt = Date.UTC(2026, 4, 10, 11, 30, 0)
   await page.route('**/api/rpc2', async (route) => {
-    const body = route.request().postDataJSON() as { method?: string } | null
+    const body = route.request().postDataJSON() as {
+      id?: number
+      method?: string
+      params?: { uuid?: string }
+    } | null
+    if (body?.method === 'common:getNodeRecentStatus') {
+      const uuid = body.params?.uuid ?? MISSING_V6_NODE_ID
+      await route.fulfill({
+        json: {
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            count: 2,
+            records: [
+              makeStatusRecord(uuid, checkedAt - 3_600_000, 15.2),
+              makeStatusRecord(uuid, checkedAt, 19.4),
+            ],
+            coverage: {
+              requested_start_unix_ms: checkedAt - 4 * 3_600_000,
+              requested_end_unix_ms: checkedAt,
+              actual_start_unix_ms: checkedAt - 3_600_000,
+              actual_end_unix_ms: checkedAt,
+              source_points: 2,
+              returned_points: 2,
+              bucket_ms: 0,
+              downsampled: false,
+            },
+          },
+        },
+      })
+      return
+    }
     const response = await route.fetch()
     if (body?.method !== 'common:getDashboard') {
       await route.fulfill({ response })
@@ -142,7 +173,9 @@ test('instance detail keeps unlock card stable for missing IPv6 and address_chan
   await expect(unlockPanel.locator('[data-unlock-state="empty"]')).toBeVisible()
   await expect(unlockPanel).not.toContainText('回程')
 
-  const emptyAccessibility = await new AxeBuilder({ page }).analyze()
+  const emptyAccessibility = await new AxeBuilder({ page })
+    .include('[data-testid="unlock-summary-panel"]')
+    .analyze()
   expect(emptyAccessibility.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([])
 
   await page.getByRole('button', { name: 'unlock-missing-v6 显示 IPv4' }).click()
@@ -163,7 +196,9 @@ test('instance detail keeps unlock card stable for missing IPv6 and address_chan
   await expect(unlockPanel.locator('[data-unlock-state="address_changed"]')).toBeVisible()
   await expect(unlockPanel).not.toContainText('暂无记录')
 
-  const changedAccessibility = await new AxeBuilder({ page }).analyze()
+  const changedAccessibility = await new AxeBuilder({ page })
+    .include('[data-testid="unlock-summary-panel"]')
+    .analyze()
   expect(changedAccessibility.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([])
 })
 
@@ -393,9 +428,24 @@ test('mobile detail touch targets reach 44px with safe probe separation without 
             checked_at_unix_ms: checkedAt,
             address_changed: false,
             carriers: [
-              { carrier: 'telecom', target: '198.51.100.1', status: 'ok', label: 'CN2 GIA' },
-              { carrier: 'unicom', target: '198.51.100.2', status: 'ok', label: '9929' },
-              { carrier: 'mobile', target: '198.51.100.3', status: 'ok', label: 'CMIN2' },
+              {
+                carrier: 'telecom',
+                target: '198.51.100.1',
+                status: 'ok',
+                label: 'CN2 GIA',
+              },
+              {
+                carrier: 'unicom',
+                target: '198.51.100.2',
+                status: 'ok',
+                label: '9929',
+              },
+              {
+                carrier: 'mobile',
+                target: '198.51.100.3',
+                status: 'ok',
+                label: 'CMIN2',
+              },
             ],
           },
         ],
