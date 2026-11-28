@@ -12,9 +12,12 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
   })
 
   await login(page)
+  await expect(page.getByRole('banner')).toBeVisible()
+  await expect(page.getByRole('link', { name: /返回 .* 首页/ })).toHaveAttribute('href', '/')
   await expect(page.getByRole('button', { name: '访问者信息' })).toBeVisible()
-  const card = page.getByRole('button', { name: '查看 e2e-node 节点详情' })
-  await expect(card).toBeVisible({ timeout: 20_000 })
+  const cardLink = page.getByRole('link', { name: '查看 e2e-node 节点详情' })
+  await expect(cardLink).toBeVisible({ timeout: 20_000 })
+  const card = page.getByTestId('node-card').filter({ has: cardLink })
   await expect(page.getByTestId('node-card-grid')).toHaveClass(/auto-rows-fr/)
   await expect(card).toContainText('e2e-node')
   await expect(card.locator(':scope > div:first-child > div:first-child')).toHaveText('e2e-node')
@@ -24,6 +27,17 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
   const flag = card.getByRole('img', { name: 'SG', exact: true })
   await expect(flag).toHaveAttribute('src', '/assets/flags/sg.svg')
   await expect.poll(() => flag.evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0)
+
+  // Color contrast tuning is tracked separately from #304 structural semantics.
+  const cardAccessibility = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze()
+  expect(cardAccessibility.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([])
+
+  await card.getByRole('button', { name: /^e2e-node .+ 延迟$/ }).first().click()
+  await expect(page.getByRole('dialog', { name: /e2e-node 延迟/ })).toBeVisible()
+  await expect(page).toHaveURL('/')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: /e2e-node 延迟/ })).toBeHidden()
+
   const cardScreenshot = testInfo.outputPath('node-card.png')
   await page.screenshot({ path: cardScreenshot, fullPage: true })
   await testInfo.attach('node-card', { path: cardScreenshot, contentType: 'image/png' })
@@ -53,18 +67,33 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
   await expect(valueTrigger).toContainText('USD')
 
   await page.getByRole('button', { name: '列表视图' }).click()
-  const row = page.getByRole('button', { name: /查看 e2e-node 节点详情，当前在线/ })
-  await expect(row).toBeVisible()
-  await page.getByRole('button', { name: /^CPU/ }).click()
+  await expect(page.getByRole('table', { name: '节点列表' })).toBeVisible()
+  const rowLink = page.getByRole('link', { name: /查看 e2e-node 节点详情，当前在线/ })
+  await expect(rowLink).toBeVisible()
+
+  const listAccessibility = await new AxeBuilder({ page }).disableRules(['color-contrast']).analyze()
+  expect(listAccessibility.violations.filter(({ impact }) => impact === 'serious' || impact === 'critical')).toEqual([])
+
+  await page.getByRole('button', { name: /e2e-node 延迟 \/ .+详情/ }).click()
+  await expect(page.getByRole('dialog', { name: /e2e-node 延迟/ })).toBeVisible()
+  await expect(page).toHaveURL('/')
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: /e2e-node 延迟/ })).toBeHidden()
+
+  const cpuSort = page.getByRole('button', { name: /^CPU/ })
+  await cpuSort.click()
   await expect(page.getByRole('columnheader', { name: /CPU/ })).toHaveAttribute('aria-sort', 'ascending')
+  await cpuSort.click()
+  await expect(page.getByRole('columnheader', { name: /CPU/ })).toHaveAttribute('aria-sort', 'descending')
 
   const search = page.getByRole('textbox', { name: '搜索节点' })
   await search.fill('missing-node')
   await expect(page.getByText('暂无节点')).toBeVisible()
   await search.fill('e2e-node')
-  await expect(row).toBeVisible()
+  await expect(rowLink).toBeVisible()
 
-  await row.press('Enter')
+  await rowLink.focus()
+  await rowLink.press('Enter')
   await expect(page).toHaveURL(/\/instance\/[0-9a-f-]+$/)
   await expect(page.getByRole('button', { name: '访问者信息' })).toBeVisible()
   await expect(page.getByText('节点价格', { exact: true }).locator('../..')).toContainText(/\$[\d,.]+\s*USD/)
@@ -88,6 +117,12 @@ test('real Agent is visible through the Emerald card, list, search, detail, and 
 
   await page.getByRole('button', { name: '返回节点列表' }).click()
   await expect(page).toHaveURL('/')
+  await page.getByRole('button', { name: '卡片视图' }).click()
+  const returnedCardLink = page.getByRole('link', { name: '查看 e2e-node 节点详情' })
+  await expect(returnedCardLink).toBeVisible()
+  await returnedCardLink.focus()
+  await returnedCardLink.press('Enter')
+  await expect(page).toHaveURL(/\/instance\/[0-9a-f-]+$/)
 })
 
 test('the first failed connection recovers without reloading the page', async ({ page }) => {
@@ -103,7 +138,7 @@ test('the first failed connection recovers without reloading the page', async ({
   await page.goto('/')
   await expect(page.getByText('连接服务器失败，正在自动重试。请检查网络设置。')).toBeVisible()
   failRequests = false
-  await expect(page.getByRole('button', { name: '查看 e2e-node 节点详情' })).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByRole('link', { name: '查看 e2e-node 节点详情' })).toBeVisible({ timeout: 20_000 })
   await expect(page.getByText('连接服务器失败，正在自动重试。请检查网络设置。')).toBeHidden()
 })
 
@@ -160,7 +195,7 @@ test('network quality offers the full retained range with an exact custom label'
   await expect(ranges.getByRole('button', { name: '100 天' })).toHaveAttribute('aria-pressed', 'true')
 
   await page.goto('/')
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   await expect(page.getByRole('tab', { name: '4 小时', exact: true })).toBeVisible()
   await expect(page.getByRole('tab', { name: '100 天', exact: true })).toBeVisible()
 })
@@ -258,7 +293,7 @@ test('minute history displays counted failures and exact statistics on desktop a
     })
   })
   await login(page)
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   await page.getByText('图表选项与导出', { exact: true }).click()
   await expect(page.getByText('较早历史按分钟汇总，峰值、失败次数和延迟分位数保留。')).toBeVisible()
   const analysis = page.getByRole('region', { name: '延迟数据分析' })
@@ -310,7 +345,7 @@ test('probe history honors Emerald chart defaults and retained range', async ({ 
     })
   })
   await login(page)
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   const ranges = page.getByRole('tablist', { name: '探测历史时间范围' })
   await expect(ranges.getByRole('tab')).toHaveText([
     '1 小时',
@@ -371,7 +406,7 @@ test('probe history does not leave stale metrics visible after refresh fails', a
     })
   })
   await login(page)
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   await expect(page.getByRole('region', { name: '延迟数据分析' })).toBeVisible()
 
   responseMode = 'error'
@@ -477,7 +512,7 @@ test('probe line focus restores the prior selection and keeps analysis and expor
     })
   })
   await login(page)
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   const analysis = page.getByRole('region', { name: '延迟数据分析' })
   const taskColors = analysis.locator('span[style*="background-color"]')
   await expect(taskColors.nth(0)).toHaveCSS('background-color', 'rgb(18, 52, 86)')
@@ -599,7 +634,7 @@ test('probe auto-refresh pauses without blocking range changes or manual refresh
     })
   })
   await login(page)
-  await page.getByRole('button', { name: '查看 e2e-node 节点详情' }).click()
+  await page.getByRole('link', { name: '查看 e2e-node 节点详情' }).click()
   const pause = page.getByRole('button', { name: '暂停刷新' })
   await expect(pause).toBeVisible()
   await expect.poll(() => requests.length).toBe(1)

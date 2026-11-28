@@ -109,7 +109,7 @@ function onMetricKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div v-if="!compact" class="flex flex-col gap-y-2 text-[11px]" :aria-label="`最近 ${historyLabel}的平均延迟与探测结果，每格约 ${historyHours * 6} 分钟`">
+  <div v-if="!compact" role="group" class="flex flex-col gap-y-2 text-[11px]" :aria-label="`最近 ${historyLabel}的平均延迟与探测结果，每格约 ${historyHours * 6} 分钟`">
     <div v-for="row in rows" :key="row.id" class="grid h-8 grid-cols-[minmax(64px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2">
       <DataTooltip :stop-click-propagation="false" placement="top" :content="row.name" class="min-w-0" content-class="min-w-24">
         <span class="block truncate font-medium text-foreground/75">{{ row.name }}</span>
@@ -144,7 +144,7 @@ function onMetricKeydown(event: KeyboardEvent) {
     <span v-if="!rows.length" class="text-muted-foreground">未配置探测</span>
   </div>
   <!-- On touch, the list cell opens details on the first tap instead of opening a bar tooltip. -->
-  <div v-else class="grid h-8 w-full grid-cols-3 items-center gap-1.5" aria-label="电信、联通、移动的延迟与探测结果概览，点击查看详情" @pointerdown.capture.stop>
+  <div v-else role="group" class="grid h-8 w-full grid-cols-3 items-center gap-1.5" aria-label="电信、联通、移动的延迟与探测结果概览，点击查看详情" @pointerdown.capture.stop>
     <div v-for="(row, index) in rows" :key="index" class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-1 gap-y-px">
       <span class="row-span-2 text-[11px] text-muted-foreground">{{ ['电', '联', '移'][index] }}</span>
       <div v-for="metric in metrics" :key="metric" class="group/panel relative opacity-80 hover:opacity-100" :title="panelTooltip(row, metric)">

@@ -46,11 +46,13 @@ onUnmounted(() => {
   >
     <button
       v-show="show"
-      class="fixed bottom-8 right-8 z-[9999] size-10 rounded-full bg-background border shadow-sm flex items-center justify-center text-foreground hover:bg-accent transition-colors"
+      type="button"
+      class="fixed bottom-8 right-8 z-40 size-10 cursor-pointer rounded-full bg-background border shadow-sm flex items-center justify-center text-foreground hover:bg-accent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       aria-label="返回顶部"
       @click="scrollToTop"
     >
       <svg
+        aria-hidden="true"
         xmlns="http://www.w3.org/2000/svg"
         width="20"
         height="20"
