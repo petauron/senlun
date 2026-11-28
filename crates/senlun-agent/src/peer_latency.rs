@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use reqwest::{Client, Url};
+use reqwest::{Client, StatusCode, Url};
 use senlun_protocol::{
     DEFAULT_PEER_PROBE_INTERVAL_SECONDS, MAX_PEER_PROBE_BATCH, MAX_PEER_PROBE_INTERVAL_SECONDS,
     MAX_PEER_PROBE_TARGETS, MIN_PEER_PROBE_INTERVAL_SECONDS, PEER_PROBE_SCHEMA_VERSION,
@@ -22,6 +22,28 @@ const MAX_ROUND_PAGES: usize = MAX_PEER_PROBE_TARGETS.div_ceil(MAX_PEER_PROBE_BA
 const MAX_PLAN_BYTES: usize = 8 * 1024;
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
 
+#[derive(Debug)]
+enum PlanFetch {
+    Plan(PeerProbePlan),
+    Unauthorized,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReportOutcome {
+    Accepted,
+    Unauthorized,
+    Failed,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct RoundOutcome {
+    interval: Option<Duration>,
+    unauthorized: bool,
+    fetch_failed: bool,
+    report_failures: usize,
+}
+
 pub(crate) async fn run(client: Client, target_client: Client, service_url: Url, token: String) {
     let Ok(endpoint) = service_url.join("api/v1/agents/peer-latency") else {
         return;
@@ -29,7 +51,18 @@ pub(crate) async fn run(client: Client, target_client: Client, service_url: Url,
     let mut interval = Duration::from_secs(DEFAULT_PEER_PROBE_INTERVAL_SECONDS);
     loop {
         let started = Instant::now();
-        if let Some(updated) = run_round(&client, &target_client, &endpoint, &token).await {
+        let outcome = run_round(&client, &target_client, &endpoint, &token).await;
+        if outcome.unauthorized {
+            tracing::warn!("peer latency worker stopping after HTTP 401");
+            return;
+        }
+        if outcome.report_failures > 0 {
+            tracing::warn!(
+                failed_batches = outcome.report_failures,
+                "peer latency batch report failed; the next round will sample again"
+            );
+        }
+        if let Some(updated) = outcome.interval {
             interval = updated;
         }
         tokio::time::sleep_until(started + interval).await;
@@ -41,7 +74,7 @@ async fn run_round(
     target_client: &Client,
     endpoint: &Url,
     token: &str,
-) -> Option<Duration> {
+) -> RoundOutcome {
     let target_client = target_client.clone();
     let (report_client, report_url, report_token) =
         (client.clone(), endpoint.clone(), token.to_owned());
@@ -57,57 +90,101 @@ async fn run_round(
             }
         },
         move |batch| {
-            let request = report_client
-                .post(report_url.clone())
-                .bearer_auth(&report_token)
-                .json(&batch);
-            async move {
-                let _ = request.send().await;
-            }
+            report_batch(
+                report_client.clone(),
+                report_url.clone(),
+                report_token.clone(),
+                batch,
+            )
         },
     )
     .await
 }
 
-async fn fetch_plan(
-    client: &Client,
-    endpoint: &Url,
-    token: &str,
-    after: String,
-) -> Option<PeerProbePlan> {
+async fn fetch_plan(client: &Client, endpoint: &Url, token: &str, after: String) -> PlanFetch {
     let mut plan_url = endpoint.clone();
     if !after.is_empty() {
         plan_url.query_pairs_mut().append_pair("after", &after);
     }
-    let response = client.get(plan_url).bearer_auth(token).send().await.ok()?;
-    if !response.status().is_success() {
-        return None;
+    let Ok(response) = client.get(plan_url).bearer_auth(token).send().await else {
+        tracing::warn!(
+            reason = "transport",
+            "peer latency plan request failed; the next round will sample again"
+        );
+        return PlanFetch::Failed;
+    };
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED {
+        return PlanFetch::Unauthorized;
     }
-    crate::read_json_with_limit(response, MAX_PLAN_BYTES)
+    if !status.is_success() {
+        tracing::warn!(
+            status = status.as_u16(),
+            "peer latency plan request rejected; the next round will sample again"
+        );
+        return PlanFetch::Failed;
+    }
+    match crate::read_json_with_limit(response, MAX_PLAN_BYTES).await {
+        Ok(plan) => PlanFetch::Plan(plan),
+        Err(_) => {
+            tracing::warn!(
+                reason = "invalid_response",
+                "peer latency plan response was invalid; the next round will sample again"
+            );
+            PlanFetch::Failed
+        }
+    }
+}
+
+async fn report_batch(
+    client: Client,
+    endpoint: Url,
+    token: String,
+    batch: PeerProbeBatch,
+) -> ReportOutcome {
+    match client
+        .post(endpoint)
+        .bearer_auth(&token)
+        .json(&batch)
+        .send()
         .await
-        .ok()
+    {
+        Ok(response) if response.status() == StatusCode::UNAUTHORIZED => {
+            ReportOutcome::Unauthorized
+        }
+        Ok(response) if response.status().is_success() => ReportOutcome::Accepted,
+        Ok(_) | Err(_) => ReportOutcome::Failed,
+    }
 }
 
 async fn run_round_with<Fetch, Probe, Report>(
     mut fetch: impl FnMut(String) -> Fetch,
     probe: impl FnMut(PeerProbeTarget) -> Probe + Clone + Send + 'static,
     report: impl FnMut(PeerProbeBatch) -> Report + Clone + Send + 'static,
-) -> Option<Duration>
+) -> RoundOutcome
 where
-    Fetch: Future<Output = Option<PeerProbePlan>>,
+    Fetch: Future<Output = PlanFetch>,
     Probe: Future<Output = PeerProbeSample> + Send + 'static,
-    Report: Future<Output = ()> + Send + 'static,
+    Report: Future<Output = ReportOutcome> + Send + 'static,
 {
     let mut after = String::new();
-    let mut interval = None;
+    let mut outcome = RoundOutcome::default();
     let mut remaining = MAX_PEER_PROBE_TARGETS;
     let slots = Arc::new(Semaphore::new(MAX_CONCURRENT_PEERS));
     let mut pages = JoinSet::new();
     // At most four pages and 99 targets can be outstanding. Fetch subsequent
     // pages while earlier pages measure and report through the shared slots.
     for _ in 0..MAX_ROUND_PAGES {
-        let Some(plan) = fetch(after.clone()).await else {
-            break;
+        let plan = match fetch(after.clone()).await {
+            PlanFetch::Plan(plan) => plan,
+            PlanFetch::Unauthorized => {
+                outcome.unauthorized = true;
+                return outcome;
+            }
+            PlanFetch::Failed => {
+                outcome.fetch_failed = true;
+                break;
+            }
         };
         if plan.schema_version != PEER_PROBE_SCHEMA_VERSION
             || !(MIN_PEER_PROBE_INTERVAL_SECONDS..=MAX_PEER_PROBE_INTERVAL_SECONDS)
@@ -121,10 +198,15 @@ where
                         .is_none_or(|target| &target.node_id != cursor)
             })
         {
+            tracing::warn!(
+                reason = "invalid_plan",
+                "peer latency plan failed validation; skipping remaining pages"
+            );
+            outcome.fetch_failed = true;
             break;
         }
         if after.is_empty() {
-            interval = Some(Duration::from_secs(plan.interval_seconds));
+            outcome.interval = Some(Duration::from_secs(plan.interval_seconds));
         }
         if plan.targets.is_empty() {
             break;
@@ -135,14 +217,15 @@ where
         let slots = Arc::clone(&slots);
         pages.spawn(async move {
             let samples = probe_queue(plan.targets, slots, probe).await;
-            if !samples.is_empty() {
-                report(PeerProbeBatch {
-                    schema_version: PEER_PROBE_SCHEMA_VERSION,
-                    issued_at_unix_ms: plan.issued_at_unix_ms,
-                    samples,
-                })
-                .await;
+            if samples.is_empty() {
+                return ReportOutcome::Accepted;
             }
+            report(PeerProbeBatch {
+                schema_version: PEER_PROBE_SCHEMA_VERSION,
+                issued_at_unix_ms: plan.issued_at_unix_ms,
+                samples,
+            })
+            .await
         });
         if remaining == 0 {
             break;
@@ -152,8 +235,17 @@ where
         };
         after = cursor;
     }
-    while pages.join_next().await.is_some() {}
-    interval
+    while let Some(joined) = pages.join_next().await {
+        match joined {
+            Ok(ReportOutcome::Accepted) => {}
+            Ok(ReportOutcome::Unauthorized) => {
+                outcome.unauthorized = true;
+                return outcome;
+            }
+            Ok(ReportOutcome::Failed) | Err(_) => outcome.report_failures += 1,
+        }
+    }
+    outcome
 }
 
 async fn probe_queue<F>(
@@ -279,7 +371,7 @@ mod tests {
         let round = tokio::spawn(run_round_with(
             |after| {
                 let index = after.parse::<usize>().unwrap_or(0) + 1;
-                ready(Some(PeerProbePlan {
+                ready(PlanFetch::Plan(PeerProbePlan {
                     schema_version: PEER_PROBE_SCHEMA_VERSION,
                     issued_at_unix_ms: 1,
                     interval_seconds: if index == 1 { 75 } else { 60 },
@@ -305,6 +397,7 @@ mod tests {
                             .await
                             .unwrap();
                         allow_reports.acquire().await.unwrap().forget();
+                        ReportOutcome::Accepted
                     }
                 }
             },
@@ -328,7 +421,15 @@ mod tests {
             assert_eq!(reports, measurements);
             assert!(!round.is_finished());
             allow_reports.add_permits(MAX_ROUND_PAGES);
-            assert_eq!(round.await.unwrap(), Some(Duration::from_secs(75)));
+            assert_eq!(
+                round.await.unwrap(),
+                RoundOutcome {
+                    interval: Some(Duration::from_secs(75)),
+                    unauthorized: false,
+                    fetch_failed: false,
+                    report_failures: 0,
+                }
+            );
         })
         .await
         .expect("peer rotation waited for a slow report");
@@ -336,9 +437,9 @@ mod tests {
 
     #[tokio::test]
     async fn empty_plans_still_set_the_round_interval() {
-        let interval = run_round_with(
+        let outcome = run_round_with(
             |_| {
-                ready(Some(PeerProbePlan {
+                ready(PlanFetch::Plan(PeerProbePlan {
                     schema_version: PEER_PROBE_SCHEMA_VERSION,
                     issued_at_unix_ms: 1,
                     interval_seconds: 120,
@@ -350,7 +451,169 @@ mod tests {
             |_| async { unreachable!("empty plans do not send reports") },
         )
         .await;
-        assert_eq!(interval, Some(Duration::from_secs(120)));
+        assert_eq!(
+            outcome,
+            RoundOutcome {
+                interval: Some(Duration::from_mins(2)),
+                unauthorized: false,
+                fetch_failed: false,
+                report_failures: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn unauthorized_plan_stops_peer_latency_worker() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 1024];
+            let _ = stream.read(&mut buf).await;
+            let reply = concat!(
+                "HTTP/1.1 401 Unauthorized\r\n",
+                "Content-Length: 0\r\n",
+                "Connection: close\r\n\r\n"
+            );
+            stream.write_all(reply.as_bytes()).await.unwrap();
+        });
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            run(Client::new(), Client::new(), url, "test-token".to_owned()),
+        )
+        .await
+        .expect("worker should stop after HTTP 401");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unauthorized_report_aborts_remaining_pages_immediately() {
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            run_round_with(
+                |after| {
+                    let index = after.parse::<usize>().unwrap_or(0) + 1;
+                    ready(PlanFetch::Plan(PeerProbePlan {
+                        schema_version: PEER_PROBE_SCHEMA_VERSION,
+                        issued_at_unix_ms: 1,
+                        interval_seconds: 60,
+                        targets: vec![target(index)],
+                        next_after: (index == 1).then(|| "1".to_owned()),
+                    }))
+                },
+                |item| {
+                    ready(PeerProbeSample {
+                        node_id: item.node_id,
+                        address: item.address,
+                        kind: item.kind,
+                        status: PeerProbeStatus::Ready,
+                        latency_ms: Some(1.0),
+                    })
+                },
+                |batch| async move {
+                    if batch.samples[0].node_id == "1" {
+                        ReportOutcome::Unauthorized
+                    } else {
+                        std::future::pending::<ReportOutcome>().await
+                    }
+                },
+            ),
+        )
+        .await
+        .expect("HTTP 401 report should abort remaining in-flight pages");
+        assert!(outcome.unauthorized);
+    }
+
+    #[tokio::test]
+    async fn report_failures_and_unauthorized_are_recorded_per_round() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn serve_status(status: &str) -> Url {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+            tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(response.as_bytes()).await;
+            });
+            url
+        }
+
+        fn empty_batch() -> PeerProbeBatch {
+            PeerProbeBatch {
+                schema_version: PEER_PROBE_SCHEMA_VERSION,
+                issued_at_unix_ms: 1,
+                samples: Vec::new(),
+            }
+        }
+
+        let failed_url = serve_status("503 Service Unavailable").await;
+        assert!(matches!(
+            fetch_plan(&Client::new(), &failed_url, "token", String::new()).await,
+            PlanFetch::Failed
+        ));
+
+        let unauth_report_url = serve_status("401 Unauthorized").await;
+        let failed_report_url = serve_status("500 Internal Server Error").await;
+        assert_eq!(
+            report_batch(
+                Client::new(),
+                unauth_report_url,
+                "token".to_owned(),
+                empty_batch()
+            )
+            .await,
+            ReportOutcome::Unauthorized
+        );
+        assert_eq!(
+            report_batch(
+                Client::new(),
+                failed_report_url,
+                "token".to_owned(),
+                empty_batch()
+            )
+            .await,
+            ReportOutcome::Failed
+        );
+
+        let outcome = run_round_with(
+            |_| {
+                ready(PlanFetch::Plan(PeerProbePlan {
+                    schema_version: PEER_PROBE_SCHEMA_VERSION,
+                    issued_at_unix_ms: 1,
+                    interval_seconds: 60,
+                    targets: vec![target(1)],
+                    next_after: None,
+                }))
+            },
+            |item| {
+                ready(PeerProbeSample {
+                    node_id: item.node_id,
+                    address: item.address,
+                    kind: item.kind,
+                    status: PeerProbeStatus::Ready,
+                    latency_ms: Some(1.0),
+                })
+            },
+            |_| ready(ReportOutcome::Failed),
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            RoundOutcome {
+                interval: Some(Duration::from_mins(1)),
+                unauthorized: false,
+                fetch_failed: false,
+                report_failures: 1,
+            }
+        );
     }
 
     async fn assert_queue_refills(two_pages: bool) {
