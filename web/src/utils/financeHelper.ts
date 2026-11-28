@@ -70,11 +70,15 @@ const UNIQUE_CURRENCY_SYMBOL_ALIASES = Object.fromEntries(
     ]),
 ) as Record<string, CurrencyCode>
 
-export function normalizeCurrency(currency: string | null | undefined): CurrencyCode {
+export function resolveCurrencyCode(currency: string | null | undefined): CurrencyCode | null {
   const value = String(currency || 'CNY').trim().toUpperCase()
   if (value in CURRENCY_SYMBOL_CONFIG)
     return value as CurrencyCode
-  return EXPLICIT_CURRENCY_ALIASES[value] || UNIQUE_CURRENCY_SYMBOL_ALIASES[value] || 'CNY'
+  return EXPLICIT_CURRENCY_ALIASES[value] || UNIQUE_CURRENCY_SYMBOL_ALIASES[value] || null
+}
+
+export function normalizeCurrency(currency: string | null | undefined): CurrencyCode {
+  return resolveCurrencyCode(currency) ?? 'CNY'
 }
 
 const financeCurrencyStorageKey = 'fin_currency'
@@ -180,12 +184,12 @@ export function summarizeNodeValue(nodes: PricedNode[], now = Date.now(), rates:
   for (const node of nodes) {
     if (!Number.isFinite(node.price) || node.price <= 0 || node.tags?.includes('白嫖中'))
       continue
-    const rawCurrency = String(node.currency || 'CNY').trim().toUpperCase()
-    if (!(rawCurrency in CURRENCY_SYMBOLS) && !(rawCurrency in EXPLICIT_CURRENCY_ALIASES) && !(rawCurrency in UNIQUE_CURRENCY_SYMBOL_ALIASES)) {
+    const currencyCode = resolveCurrencyCode(node.currency)
+    if (!currencyCode) {
       excluded++
       continue
     }
-    const rate = rates[normalizeCurrency(node.currency)]
+    const rate = rates[currencyCode]
     if (!rate || !Number.isFinite(rate) || rate <= 0) {
       excluded++
       continue
