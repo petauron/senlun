@@ -1,7 +1,7 @@
 {
   "name": "@petauron/senlun-web",
   "type": "module",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "private": true,
   "packageManager": "npm@11.17.0",
   "author": {
