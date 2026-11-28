@@ -152,11 +152,13 @@ impl From<&AgentConfig> for HostCollectionConfig {
     }
 }
 
+type CollectionReply<T> = oneshot::Sender<Result<T, String>>;
+
 /// Runs synchronous host collection on one dedicated OS thread with at most
 /// one in-flight sample so stalled mounts never block the `current_thread`
 /// runtime or pile up blocking tasks across ticks.
 struct SingleFlightWorker<T> {
-    request_tx: mpsc::SyncSender<oneshot::Sender<Result<T, String>>>,
+    request_tx: mpsc::SyncSender<CollectionReply<T>>,
     in_flight: Option<(Instant, oneshot::Receiver<Result<T, String>>)>,
     warned_stall: bool,
 }
@@ -166,7 +168,7 @@ impl<T: Send + 'static> SingleFlightWorker<T> {
     where
         Work: FnMut() -> Result<T, String> + Send + 'static,
     {
-        let (request_tx, request_rx) = mpsc::sync_channel(1);
+        let (request_tx, request_rx) = mpsc::sync_channel::<CollectionReply<T>>(1);
         thread::Builder::new()
             .name(name.to_owned())
             .spawn(move || {
