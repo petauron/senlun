@@ -62,6 +62,15 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max)
 }
 
+export function isAnchorOutsideViewport(trigger: RectLike, viewport: ViewportLike): boolean {
+  if (trigger.width <= 0 && trigger.height <= 0)
+    return true
+  return trigger.bottom <= 0
+    || trigger.top >= viewport.height
+    || trigger.right <= 0
+    || trigger.left >= viewport.width
+}
+
 export function computeTooltipPosition(
   trigger: RectLike,
   tooltip: SizeLike,

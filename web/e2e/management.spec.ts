@@ -293,7 +293,7 @@ test('DataTooltip portals above overflow containers, supports pointer bridge hov
   const cardLink = page.getByRole('link', { name: '查看 e2e-node 节点详情' })
   await expect(cardLink).toBeVisible({ timeout: 20_000 })
 
-  const qualityButton = page.getByRole('button', { name: '网络质量' })
+  const qualityButton = page.getByRole('banner').getByRole('button', { name: '网络质量', exact: true })
   const headerTooltipId = await qualityButton.getAttribute('aria-describedby')
   expect(headerTooltipId).toBeTruthy()
   const headerTooltip = page.locator(`[id="${headerTooltipId}"]`)
@@ -306,7 +306,7 @@ test('DataTooltip portals above overflow containers, supports pointer bridge hov
   await expect(headerTooltip).toBeHidden()
   await expect(qualityButton).toBeFocused()
 
-  const footerLink = page.getByRole('link', { name: 'Senlun' })
+  const footerLink = page.getByRole('contentinfo').getByRole('link', { name: 'Senlun', exact: true })
   await expect(footerLink).toHaveAttribute('href', 'https://github.com/petauron/senlun')
   await expect(footerLink).toHaveAttribute('aria-describedby', /.+/)
   const footerTooltipId = await footerLink.getAttribute('aria-describedby')
@@ -338,6 +338,31 @@ test('DataTooltip portals above overflow containers, supports pointer bridge hov
   await expect(trafficTrigger).toBeFocused()
   await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
 
+  // Scrolling a focused trigger completely outside the viewport hides the floating tooltip while preserving its description node.
+  await trafficTrigger.focus()
+  await expect(trafficTooltip).toBeVisible()
+  try {
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = '2000px'
+    })
+    const scrollTargetY = await trafficTrigger.evaluate(el => Math.ceil(el.getBoundingClientRect().bottom + window.scrollY + 120))
+    await page.evaluate(y => window.scrollTo(0, y), scrollTargetY)
+    await expect(trafficTooltip).toBeHidden()
+    await expect(trafficTrigger).toHaveAttribute('aria-describedby', String(trafficTooltipId))
+    await expect(trafficTooltip).toHaveCount(1)
+    await page.evaluate(() => window.scrollTo(0, 0))
+    await expect(trafficTooltip).toBeVisible()
+  }
+  finally {
+    await page.evaluate(() => {
+      document.body.style.paddingBottom = ''
+      window.scrollTo(0, 0)
+    })
+  }
+  await page.keyboard.press('Escape')
+  await expect(trafficTooltip).toBeHidden()
+  await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
+
   const compact = await page.evaluate(() => innerWidth <= 640)
   if (!compact) {
     await trafficTrigger.hover()
@@ -363,6 +388,16 @@ test('DataTooltip portals above overflow containers, supports pointer bridge hov
       await page.keyboard.press('Escape')
       await expect(trafficTooltip).toBeHidden()
     }
+
+    // Hover -> leave -> focus before close timer expires -> blur must still close cleanly.
+    await trafficTrigger.hover()
+    await expect(trafficTooltip).toBeVisible()
+    await page.mouse.move(8, 8)
+    await trafficTrigger.focus()
+    await page.waitForTimeout(180)
+    await expect(trafficTooltip).toBeVisible()
+    await trafficTrigger.evaluate(el => (el as HTMLElement).blur())
+    await expect(trafficTooltip).toBeHidden()
   }
   else {
     await page.getByRole('button', { name: /资源与费用/ }).click()

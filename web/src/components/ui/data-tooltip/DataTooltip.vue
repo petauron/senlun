@@ -3,7 +3,7 @@ import type { CSSProperties, HTMLAttributes } from 'vue'
 import type { DataTooltipPlacement } from './position'
 import { computed, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { cn } from '@/lib/utils'
-import { computeTooltipPosition } from './position'
+import { computeTooltipPosition, isAnchorOutsideViewport } from './position'
 
 interface Props {
   /** 提示文本，留空且无 #content 插槽时不渲染气泡 */
@@ -54,6 +54,7 @@ const tooltipRef = ref<HTMLElement | null>(null)
 const isTouchOpen = ref(false)
 const isHoverOpen = ref(false)
 const isFocusOpen = ref(false)
+const isAnchorOffscreen = ref(false)
 const tooltipPosition = ref<{ top: number, left: number, placement: DataTooltipPlacement }>({
   top: 0,
   left: 0,
@@ -68,6 +69,7 @@ let isDisposed = false
 
 const hasTooltip = computed(() => !props.disabled && Boolean(props.content || slots.content))
 const isVisible = computed(() => hasTooltip.value && (isTouchOpen.value || isHoverOpen.value || isFocusOpen.value))
+const isRenderedOpen = computed(() => isVisible.value && !isAnchorOffscreen.value)
 const activeDescribedBy = computed(() => {
   if (!hasTooltip.value)
     return undefined
@@ -139,6 +141,19 @@ function updatePosition() {
     return
 
   const triggerRect = root.getBoundingClientRect()
+  const viewport = {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }
+  if (isAnchorOutsideViewport(triggerRect, viewport)) {
+    isAnchorOffscreen.value = true
+    return
+  }
+  if (isAnchorOffscreen.value) {
+    isAnchorOffscreen.value = false
+    return
+  }
+
   const tooltipRect = tooltip.getBoundingClientRect()
   tooltipPosition.value = computeTooltipPosition(
     triggerRect,
@@ -146,10 +161,7 @@ function updatePosition() {
       width: tooltipRect.width,
       height: tooltipRect.height,
     },
-    {
-      width: window.innerWidth,
-      height: window.innerHeight,
-    },
+    viewport,
     props.placement,
   )
 }
@@ -168,6 +180,7 @@ function closeTooltip() {
   isTouchOpen.value = false
   isHoverOpen.value = false
   isFocusOpen.value = false
+  isAnchorOffscreen.value = false
 }
 
 function removeActiveListeners() {
@@ -244,7 +257,6 @@ function handleTooltipPointerLeave(event: PointerEvent) {
 function handleFocusIn() {
   if (!hasTooltip.value)
     return
-  cancelScheduledHoverClose()
   isFocusOpen.value = true
 }
 
@@ -268,11 +280,22 @@ watch(isVisible, (visible) => {
     return
   }
 
+  isAnchorOffscreen.value = false
   removeActiveListeners()
 }, { flush: 'post' })
 
+watch(isRenderedOpen, (shown) => {
+  if (shown)
+    updatePosition()
+}, { flush: 'post' })
+
 watch(
-  () => [props.content, props.placement, props.width, props.height],
+  () => [
+    props.content,
+    props.placement,
+    props.width,
+    props.height,
+  ],
   () => {
     if (isVisible.value)
       scheduleFramePositionUpdate()
@@ -295,7 +318,7 @@ onBeforeUnmount(() => {
     :is="as"
     ref="rootRef"
     data-slot="data-tooltip"
-    :data-state="isVisible ? 'open' : 'closed'"
+    :data-state="isRenderedOpen ? 'open' : 'closed'"
     :aria-describedby="rootDescribedBy"
     :class="cn('group/data-tooltip relative inline-block', props.class)"
     @pointerdown.capture="handlePointerDown"
@@ -309,7 +332,7 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <span
         v-if="hasTooltip && (persistDescription || isVisible)"
-        v-show="isVisible"
+        v-show="isRenderedOpen"
         :id="tooltipId"
         ref="tooltipRef"
         role="tooltip"

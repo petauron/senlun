@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeTooltipPosition } from '../position'
+import { computeTooltipPosition, isAnchorOutsideViewport } from '../position'
 
 describe('computeTooltipPosition', () => {
   const viewport = {
@@ -85,5 +85,52 @@ describe('computeTooltipPosition', () => {
       left: 142,
       placement: 'top',
     })
+  })
+})
+
+describe('isAnchorOutsideViewport', () => {
+  const viewport = {
+    width: 1280,
+    height: 720,
+  }
+
+  it('returns false when the trigger overlaps the viewport', () => {
+    expect(isAnchorOutsideViewport({
+      top: -10,
+      left: 100,
+      right: 180,
+      bottom: 14,
+      width: 80,
+      height: 24,
+    }, viewport)).toBe(false)
+  })
+
+  it('returns true when the trigger is scrolled completely above or past the viewport', () => {
+    expect(isAnchorOutsideViewport({
+      top: -40,
+      left: 100,
+      right: 180,
+      bottom: 0,
+      width: 80,
+      height: 40,
+    }, viewport)).toBe(true)
+
+    expect(isAnchorOutsideViewport({
+      top: 720,
+      left: 100,
+      right: 180,
+      bottom: 744,
+      width: 80,
+      height: 24,
+    }, viewport)).toBe(true)
+
+    expect(isAnchorOutsideViewport({
+      top: 100,
+      left: 1280,
+      right: 1320,
+      bottom: 124,
+      width: 40,
+      height: 24,
+    }, viewport)).toBe(true)
   })
 })
