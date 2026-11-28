@@ -648,14 +648,87 @@ async fn probe_reddit(family: u8) -> UnlockServiceStatus {
     }
 }
 
-fn netflix_region_from_url(location: &str) -> Option<String> {
+// Two-letter ISO 639-1 language and non-country codes that are not assigned
+// ISO 3166-1 alpha-2 country codes and must never be mistaken for a Netflix region.
+const NON_COUNTRY_LANGUAGE_CODES: &[&str] = &[
+    "AA", "AB", "AK", "AN", "AV", "AY", "CE", "CS", "DA", "EL", "EN", "EO", "EU", "FA", "FF", "FY",
+    "GV", "HA", "HE", "HI", "HO", "IA", "IG", "II", "IK", "IU", "JA", "JV", "KA", "KJ", "KL", "KO",
+    "KS", "KU", "KV", "LO", "MI", "NB", "ND", "NN", "NV", "NY", "OC", "OJ", "OR", "OS", "PI", "RM",
+    "RN", "SU", "SW", "TA", "TE", "TI", "TS", "TY", "UK", "UR", "VO", "WA", "WO", "XH", "XX", "YI",
+    "YO", "ZH", "ZU", "ZZ",
+];
+
+fn is_non_country_language(code: &str) -> bool {
+    NON_COUNTRY_LANGUAGE_CODES.binary_search(&code).is_ok()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum NetflixTitleUrl {
+    Region(String),
+    DefaultUs,
+}
+
+fn is_netflix_title_id(segment: &str) -> bool {
+    !segment.is_empty() && segment.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn is_path_end<'a>(segments: &mut impl Iterator<Item = &'a str>) -> bool {
+    matches!(segments.next(), None | Some("")) && segments.next().is_none()
+}
+
+fn parse_netflix_title_url(location: &str) -> Option<NetflixTitleUrl> {
     let parsed = Url::parse("https://www.netflix.com/")
         .ok()?
         .join(location)
         .ok()?;
-    let segment = parsed.path().trim_start_matches('/').split('/').next()?;
-    let candidate = segment.split('-').next()?;
-    valid_region(candidate)
+    if parsed.scheme() != "https"
+        || parsed.port().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return None;
+    }
+    if !matches!(
+        parsed.host_str().map(str::to_ascii_lowercase).as_deref(),
+        Some("www.netflix.com" | "netflix.com")
+    ) {
+        return None;
+    }
+    let mut segments = parsed.path().trim_start_matches('/').split('/');
+    let first = segments.next()?;
+    if first == "title" {
+        let title_id = segments.next()?;
+        if is_netflix_title_id(title_id) && is_path_end(&mut segments) {
+            return Some(NetflixTitleUrl::DefaultUs);
+        }
+        return None;
+    }
+    if segments.next() != Some("title") {
+        return None;
+    }
+    let title_id = segments.next()?;
+    if !is_netflix_title_id(title_id) || !is_path_end(&mut segments) {
+        return None;
+    }
+    let country = match first.split_once('-') {
+        None => first,
+        Some((country, lang))
+            if lang.len() == 2 && lang.bytes().all(|b| b.is_ascii_alphabetic()) =>
+        {
+            country
+        }
+        Some(_) => return None,
+    };
+    valid_region(country)
+        .filter(|code| !is_non_country_language(code))
+        .map(NetflixTitleUrl::Region)
+}
+
+fn netflix_region_from_url(location: &str) -> Option<String> {
+    match parse_netflix_title_url(location) {
+        Some(NetflixTitleUrl::Region(code)) => Some(code),
+        _ => None,
+    }
 }
 
 struct NetflixTitleResult {
@@ -729,11 +802,11 @@ async fn netflix_title_check(client: &Client, title_id: &str) -> Option<NetflixT
         .headers()
         .get("x-originating-url")
         .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+        .and_then(parse_netflix_title_url);
     if region.is_none()
-        && let Some(origin) = &originating
+        && let Some(NetflixTitleUrl::Region(code)) = &originating
     {
-        region = netflix_region_from_url(origin);
+        region = Some(code.clone());
     }
     let mut available = false;
     let mut soft_unavailable = false;
@@ -744,11 +817,7 @@ async fn netflix_title_check(client: &Client, title_id: &str) -> Option<NetflixT
         if region.is_none() {
             region = extract_netflix_body_region(&body);
         }
-        if region.is_none()
-            && originating
-                .as_deref()
-                .is_some_and(|origin| origin.contains("/title/"))
-        {
+        if region.is_none() && originating == Some(NetflixTitleUrl::DefaultUs) {
             region = Some("US".to_owned());
         }
         soft_unavailable = body.contains("Oh no!");
@@ -1099,6 +1168,7 @@ fn is_tiktok_blocked_redirect(base: &str, location: &str) -> bool {
     path == "/about" || path.starts_with("/about/") || path.contains("unavailable")
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum TikTokFetch {
     Blocked,
     Body(String),
@@ -1151,6 +1221,9 @@ async fn fetch_tiktok_page(client: &Client, start_url: &str) -> TikTokFetch {
     }
     if is_blocked_status(response.status()) {
         return TikTokFetch::Blocked;
+    }
+    if !response.status().is_success() {
+        return TikTokFetch::Unknown;
     }
     let Some(body) = read_capped(response, MAX_HTML_BODY).await else {
         return TikTokFetch::Unknown;
@@ -1302,5 +1375,82 @@ mod tests {
         );
         assert!(is_safe_jwt_token("eyJ0eXAi.eyJzdWI.sig_123-abc"));
         assert!(!is_safe_jwt_token("bad&param=1"));
+    }
+
+    #[test]
+    fn netflix_title_url_parser_rejects_spoofed_hosts_and_non_title_paths() {
+        assert_eq!(
+            parse_netflix_title_url("https://www.netflix.com/hk-en/title/81280792"),
+            Some(NetflixTitleUrl::Region("HK".to_owned()))
+        );
+        assert_eq!(
+            parse_netflix_title_url("/jp/title/81280792"),
+            Some(NetflixTitleUrl::Region("JP".to_owned()))
+        );
+        assert_eq!(
+            parse_netflix_title_url("https://netflix.com/title/81280792"),
+            Some(NetflixTitleUrl::DefaultUs)
+        );
+        assert_eq!(
+            parse_netflix_title_url("https://www.netflix.com/title/81280792/?trackId=1"),
+            Some(NetflixTitleUrl::DefaultUs)
+        );
+        for invalid in [
+            "https://evil.example/hk-en/title/81280792",
+            "https://evil.example/title/81280792",
+            "http://www.netflix.com/jp/title/81280792",
+            "https://www.netflix.com/tv/browse",
+            "https://www.netflix.com/en/title/81280792",
+            "/zh/title/81280792",
+            "https://www.netflix.com/in-app/title/81280792",
+            "https://www.netflix.com/login?next=/title/81280792",
+        ] {
+            assert_eq!(parse_netflix_title_url(invalid), None, "{invalid}");
+        }
+        assert_eq!(
+            netflix_region_from_url("https://www.netflix.com/title/81280792"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn fetch_tiktok_page_rejects_non_success_statuses() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn serve_once(status: &str, body: &str) -> TikTokFetch {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut buf = [0_u8; 1024];
+                let _ = stream.read(&mut buf).await;
+                stream.write_all(response.as_bytes()).await.unwrap();
+            });
+            let url = format!("http://{addr}/");
+            let outcome = fetch_tiktok_page(&Client::new(), &url).await;
+            server.await.unwrap();
+            outcome
+        }
+
+        assert_eq!(
+            serve_once("503 Service Unavailable", r#"{"region":"US"}"#).await,
+            TikTokFetch::Unknown
+        );
+        assert_eq!(
+            serve_once("429 Too Many Requests", r#"{"region":"US"}"#).await,
+            TikTokFetch::Unknown
+        );
+        assert_eq!(
+            serve_once("403 Forbidden", "denied").await,
+            TikTokFetch::Blocked
+        );
+        assert_eq!(
+            serve_once("200 OK", r#"{"region":"JP"}"#).await,
+            TikTokFetch::Body(r#"{"region":"JP"}"#.to_owned())
+        );
     }
 }
