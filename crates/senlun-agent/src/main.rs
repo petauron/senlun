@@ -15,6 +15,8 @@ use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -26,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, Networks, System};
 use tempfile::NamedTempFile;
 use tokio::{
-    sync::watch,
+    sync::{oneshot, watch},
     time::{MissedTickBehavior, interval},
 };
 use uuid::Uuid;
@@ -36,6 +38,7 @@ const DEFAULT_INTERVAL_SECONDS: u64 = 3;
 const MIN_INTERVAL_SECONDS: u64 = 1;
 const MAX_INTERVAL_SECONDS: u64 = 300;
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
+const COLLECTION_STALE_AFTER: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 struct AgentConfig {
@@ -127,6 +130,136 @@ struct AgentCredentials {
     agent_token: String,
 }
 
+struct HostCollectionConfig {
+    node_name: String,
+    virtualization: String,
+    region: String,
+    group: String,
+    disk_mount_points: Option<HashSet<String>>,
+    network_interfaces: Option<HashSet<String>>,
+}
+
+impl From<&AgentConfig> for HostCollectionConfig {
+    fn from(config: &AgentConfig) -> Self {
+        Self {
+            node_name: config.node_name.clone(),
+            virtualization: config.virtualization.clone(),
+            region: config.region.clone(),
+            group: config.group.clone(),
+            disk_mount_points: config.disk_mount_points.clone(),
+            network_interfaces: config.network_interfaces.clone(),
+        }
+    }
+}
+
+/// Runs synchronous host collection on one dedicated OS thread with at most
+/// one in-flight sample so stalled mounts never block the `current_thread`
+/// runtime or pile up blocking tasks across ticks.
+struct SingleFlightWorker<T> {
+    request_tx: mpsc::SyncSender<oneshot::Sender<Result<T, String>>>,
+    in_flight: Option<(Instant, oneshot::Receiver<Result<T, String>>)>,
+    warned_stall: bool,
+}
+
+impl<T: Send + 'static> SingleFlightWorker<T> {
+    fn start<Work>(name: &str, mut work: Work) -> io::Result<Self>
+    where
+        Work: FnMut() -> Result<T, String> + Send + 'static,
+    {
+        let (request_tx, request_rx) = mpsc::sync_channel(1);
+        thread::Builder::new().name(name.to_owned()).spawn(move || {
+            while let Ok(reply) = request_rx.recv() {
+                let _ = reply.send(work());
+            }
+        })?;
+        Ok(Self {
+            request_tx,
+            in_flight: None,
+            warned_stall: false,
+        })
+    }
+
+    fn is_in_flight(&self) -> bool {
+        self.in_flight.is_some()
+    }
+
+    fn try_start(&mut self) -> Result<bool, &'static str> {
+        if self.in_flight.is_some() {
+            if !self.warned_stall {
+                self.warned_stall = true;
+                tracing::warn!("host metric collection still in progress; skipping tick");
+            }
+            return Ok(false);
+        }
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.request_tx
+            .try_send(reply_tx)
+            .map_err(|_| "Agent host collector stopped")?;
+        self.in_flight = Some((Instant::now(), reply_rx));
+        self.warned_stall = false;
+        Ok(true)
+    }
+
+    async fn finish(&mut self) -> Result<(T, Duration), String> {
+        let Some((_, rx)) = self.in_flight.as_mut() else {
+            return std::future::pending().await;
+        };
+        let outcome = rx
+            .await
+            .unwrap_or_else(|_| Err("Agent host collector stopped".to_owned()));
+        let elapsed = self
+            .in_flight
+            .take()
+            .map_or(Duration::ZERO, |(started, _)| started.elapsed());
+        self.warned_stall = false;
+        outcome.map(|value| (value, elapsed))
+    }
+}
+
+fn start_host_collector(
+    config: &AgentConfig,
+    extended: extended_metrics::ExtendedCollector,
+) -> io::Result<SingleFlightWorker<SystemSnapshot>> {
+    let collection_config = HostCollectionConfig::from(config);
+    let mut collector = None;
+    SingleFlightWorker::start("senlun-host-collector", move || {
+        if collector.is_none() {
+            collector = Some(Collector::new_blocking().map_err(|error| error.to_string())?);
+        }
+        let Some(collector) = collector.as_mut() else {
+            unreachable!("collector initialized above");
+        };
+        let extra = extended.collect_local_sync();
+        collector
+            .collect(&collection_config, extra)
+            .map_err(|error| error.to_string())
+    })
+}
+
+fn clamp_cpu_percent(value: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 100.0)
+    } else {
+        0.0
+    }
+}
+
+fn clamp_load_average(value: f64) -> f64 {
+    if value.is_finite() && value >= 0.0 {
+        value
+    } else {
+        0.0
+    }
+}
+
+fn clamp_used_to_total(used: u64, total: u64) -> u64 {
+    used.min(total)
+}
+
+fn is_stale_collection(elapsed: Duration, interval: Duration) -> bool {
+    elapsed > interval.max(COLLECTION_STALE_AFTER)
+}
+
 struct Collector {
     system: System,
     disks: Disks,
@@ -136,11 +269,11 @@ struct Collector {
 }
 
 impl Collector {
-    async fn new() -> Result<Self, Box<dyn Error + Send + Sync>> {
+    fn new_blocking() -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut system = System::new()?;
         system.refresh_memory();
         system.refresh_cpu_all();
-        tokio::time::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL).await;
+        thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
         system.refresh_cpu_all();
 
         Ok(Self {
@@ -155,9 +288,31 @@ impl Collector {
         })
     }
 
+    fn disk_totals(&self, allowed: Option<&HashSet<String>>) -> (u64, u64) {
+        let mut seen_disks = HashSet::new();
+        let mut total_bytes = 0_u64;
+        let mut used_bytes = 0_u64;
+        for disk in &self.disks {
+            let mount_point = disk.mount_point().to_string_lossy();
+            if allowed.is_some_and(|mounts| !mounts.contains(mount_point.as_ref())) {
+                continue;
+            }
+            let Some((disk_total, disk_used)) = disk_usage(disk) else {
+                continue;
+            };
+            let identity = (disk.name().to_string_lossy().into_owned(), disk_total);
+            if disk_total == 0 || !seen_disks.insert(identity) {
+                continue;
+            }
+            total_bytes = total_bytes.saturating_add(disk_total);
+            used_bytes = used_bytes.saturating_add(disk_used);
+        }
+        (total_bytes, clamp_used_to_total(used_bytes, total_bytes))
+    }
+
     fn collect(
         &mut self,
-        config: &AgentConfig,
+        config: &HostCollectionConfig,
         extra: extended_metrics::ExtendedSnapshot,
     ) -> Result<SystemSnapshot, Box<dyn Error + Send + Sync>> {
         self.system.refresh_memory();
@@ -168,28 +323,8 @@ impl Collector {
         self.networks.refresh(true);
         self.last_network_refresh = Instant::now();
 
-        let mut seen_disks = HashSet::new();
-        let mut disk_total_bytes = 0_u64;
-        let mut disk_used_bytes = 0_u64;
-        for disk in &self.disks {
-            let mount_point = disk.mount_point().to_string_lossy();
-            if config
-                .disk_mount_points
-                .as_ref()
-                .is_some_and(|allowed| !allowed.contains(mount_point.as_ref()))
-            {
-                continue;
-            }
-            let Some((total_bytes, used_bytes)) = disk_usage(disk) else {
-                continue;
-            };
-            let identity = (disk.name().to_string_lossy().into_owned(), total_bytes);
-            if total_bytes == 0 || !seen_disks.insert(identity) {
-                continue;
-            }
-            disk_total_bytes = disk_total_bytes.saturating_add(total_bytes);
-            disk_used_bytes = disk_used_bytes.saturating_add(used_bytes);
-        }
+        let (disk_total_bytes, disk_used_bytes) =
+            self.disk_totals(config.disk_mount_points.as_ref());
         let mut network_received = 0_u64;
         let mut network_transmitted = 0_u64;
         let mut network_total_received = 0_u64;
@@ -217,6 +352,11 @@ impl Collector {
             .unwrap_or_default();
         let collected_at = SystemTime::now().duration_since(UNIX_EPOCH)?;
 
+        let memory_total_bytes = self.system.total_memory();
+        let memory_used_bytes = clamp_used_to_total(self.system.used_memory(), memory_total_bytes);
+        let swap_total_bytes = self.system.total_swap();
+        let swap_used_bytes = clamp_used_to_total(self.system.used_swap(), swap_total_bytes);
+
         Ok(SystemSnapshot {
             protocol_version: PROTOCOL_VERSION,
             sample_id: Uuid::new_v4().to_string(),
@@ -232,14 +372,14 @@ impl Collector {
             region: config.region.clone(),
             group: config.group.clone(),
             uptime_seconds: System::uptime()?,
-            cpu_usage_percent: self.system.global_cpu_usage(),
-            load_one: load.one,
-            load_five: load.five,
-            load_fifteen: load.fifteen,
-            memory_total_bytes: self.system.total_memory(),
-            memory_used_bytes: self.system.used_memory(),
-            swap_total_bytes: self.system.total_swap(),
-            swap_used_bytes: self.system.used_swap(),
+            cpu_usage_percent: clamp_cpu_percent(self.system.global_cpu_usage()),
+            load_one: clamp_load_average(load.one),
+            load_five: clamp_load_average(load.five),
+            load_fifteen: clamp_load_average(load.fifteen),
+            memory_total_bytes,
+            memory_used_bytes,
+            swap_total_bytes,
+            swap_used_bytes,
             disk_total_bytes,
             disk_used_bytes,
             network_receive_bytes_per_second: rate_per_second(network_received, elapsed),
@@ -290,7 +430,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
     tracing::info!(node_id = %credentials.node_id, "Senlun Agent started");
 
-    let mut collector = Collector::new().await?;
+    let mut host_worker = start_host_collector(&config, extended)?;
     let mut ticker = interval(config.interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut collected_sequence = 0_u64;
@@ -306,7 +446,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     loop {
         tokio::select! {
-            _ = ticker.tick() => {}
+            _ = ticker.tick() => {
+                let _ = host_worker.try_start()?;
+            }
+            collected = host_worker.finish(), if host_worker.is_in_flight() => {
+                let (mut snapshot, elapsed) = collected?;
+                if is_stale_collection(elapsed, ticker.period()) {
+                    tracing::warn!(
+                        elapsed_ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                        "discarding stale host snapshot after stalled collection"
+                    );
+                    continue;
+                }
+                extended.attach_nvidia(&mut snapshot).await;
+                snapshot.region = region.current();
+                tracing::debug!(
+                    collected_at_unix_ms = snapshot.collected_at_unix_ms,
+                    "host snapshot collected"
+                );
+                collected_sequence = collected_sequence.saturating_add(1);
+                snapshots.send_replace(Some((collected_sequence, snapshot)));
+            }
             result = &mut sender => {
                 return match result {
                     Ok(Err(SnapshotSendError::Unauthorized)) => Err(
@@ -323,18 +483,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
                     tracing::info!(interval_seconds = configured_interval.as_secs(), "metrics interval updated");
                 }
-                continue;
             }
         }
-        let extra = extended.collect().await;
-        let mut snapshot = collector.collect(&config, extra)?;
-        snapshot.region = region.current();
-        tracing::debug!(
-            collected_at_unix_ms = snapshot.collected_at_unix_ms,
-            "host snapshot collected"
-        );
-        collected_sequence = collected_sequence.saturating_add(1);
-        snapshots.send_replace(Some((collected_sequence, snapshot)));
     }
 }
 
@@ -948,5 +1098,96 @@ mod tests {
             io::ErrorKind::WouldBlock
         );
         assert_eq!(fs::read(parent).unwrap(), b"existing file");
+    }
+
+    #[test]
+    fn host_metric_clamping_keeps_values_within_service_bounds() {
+        assert_eq!(clamp_cpu_percent(-5.0), 0.0);
+        assert_eq!(clamp_cpu_percent(42.5), 42.5);
+        assert_eq!(clamp_cpu_percent(104.2), 100.0);
+        assert_eq!(clamp_cpu_percent(f32::NAN), 0.0);
+        assert_eq!(clamp_cpu_percent(f32::INFINITY), 0.0);
+
+        assert_eq!(clamp_load_average(-1.0), 0.0);
+        assert_eq!(clamp_load_average(f64::NAN), 0.0);
+        assert_eq!(clamp_load_average(f64::INFINITY), 0.0);
+        assert_eq!(clamp_load_average(1.25), 1.25);
+
+        assert_eq!(clamp_used_to_total(2048, 1024), 1024);
+        assert_eq!(clamp_used_to_total(512, 1024), 512);
+
+        assert!(!is_stale_collection(Duration::from_secs(10), Duration::from_secs(3)));
+        assert!(is_stale_collection(Duration::from_secs(11), Duration::from_secs(3)));
+        assert!(!is_stale_collection(Duration::from_secs(30), Duration::from_secs(30)));
+        assert!(is_stale_collection(Duration::from_secs(31), Duration::from_secs(30)));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn single_flight_worker_skips_ticks_without_blocking_current_thread_runtime() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::sync::Notify;
+
+        let entered = Arc::new(Notify::new());
+        let entered_worker = Arc::clone(&entered);
+        let (release_tx, release_rx) = mpsc::sync_channel::<()>(2);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+
+        let mut worker = SingleFlightWorker::start("test-single-flight", move || {
+            let seq = worker_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            entered_worker.notify_one();
+            let _ = release_rx.recv();
+            Ok(seq)
+        })
+        .unwrap();
+
+        assert!(worker.try_start().unwrap());
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .expect("worker should start first collection");
+
+        // Additional ticks while blocked must not queue work or pile up threads.
+        assert!(!worker.try_start().unwrap());
+        assert!(!worker.try_start().unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // The current_thread runtime stays responsive to control events while blocked.
+        let (ctrl_tx, mut ctrl_rx) = watch::channel(1_u64);
+        ctrl_tx.send_replace(2);
+        let event_handled = tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::select! {
+                _ = worker.finish(), if worker.is_in_flight() => false,
+                changed = ctrl_rx.changed() => changed.is_ok(),
+            }
+        })
+        .await
+        .expect("control event should not be blocked by stalled collector");
+        assert!(event_handled);
+        assert!(worker.is_in_flight());
+
+        // Releasing the stalled collector delivers the sample, reports elapsed time,
+        // and frees the single slot for the next tick.
+        release_tx.send(()).unwrap();
+        let (first, first_elapsed) = tokio::time::timeout(Duration::from_secs(2), worker.finish())
+            .await
+            .expect("first collection should complete after release")
+            .unwrap();
+        assert_eq!(first, 1);
+        assert!(first_elapsed < Duration::from_secs(2));
+        assert!(!worker.is_in_flight());
+
+        assert!(worker.try_start().unwrap());
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .expect("worker should start second collection");
+        release_tx.send(()).unwrap();
+        let (second, _) = tokio::time::timeout(Duration::from_secs(2), worker.finish())
+            .await
+            .expect("second collection should complete")
+            .unwrap();
+        assert_eq!(second, 2);
     }
 }
