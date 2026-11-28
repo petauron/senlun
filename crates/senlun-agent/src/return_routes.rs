@@ -15,13 +15,18 @@ use senlun_protocol::{
 };
 use tokio::{io::AsyncReadExt, process::Command, task::JoinHandle};
 
-use crate::task_lease::{ClaimValidation, TaskLease, validate_claimed_task};
+use crate::task_lease::{
+    ClaimValidation, ResultDelivery, TaskLease, post_result, validate_claimed_task,
+};
 
 const COLLECTOR: &str = include_str!("shanghai-routes.sh");
 const REVISION: &str = "db52fc60523320fc4a34b5c369f28be38df21d13";
 const POLL: Duration = Duration::from_secs(15);
 const MAX_RESPONSE: usize = 16 * 1024;
 const COLLECT_TIMEOUT: Duration = Duration::from_secs(410);
+const MAX_SCRIPT_TIMEOUT_SECONDS: u64 = 390;
+// Reserve GNU `timeout -k 5s` kill grace plus 1s scheduling margin before outer deadline.
+const SCRIPT_KILL_MARGIN_SECONDS: u64 = 6;
 
 pub struct RouteRunner(JoinHandle<()>);
 impl RouteRunner {
@@ -81,30 +86,10 @@ async fn run(client: Client, url: Url, token: String) {
     let mut pending: Option<(ReturnRouteOutcome, Instant)> = None;
     loop {
         if let Some((outcome, deadline)) = &pending {
-            if Instant::now() >= *deadline {
-                pending = None;
-            } else {
-                match tokio::time::timeout_at(
-                    (*deadline).into(),
-                    client
-                        .post(result_url.clone())
-                        .bearer_auth(&token)
-                        .json(outcome)
-                        .send(),
-                )
-                .await
-                {
-                    Ok(Ok(response)) if response.status() == StatusCode::UNAUTHORIZED => return,
-                    Ok(Ok(response))
-                        if response.status().is_success()
-                            || response.status() == StatusCode::CONFLICT
-                            || response.status() == StatusCode::BAD_REQUEST =>
-                    {
-                        pending = None;
-                    }
-                    Err(_) => pending = None,
-                    Ok(Ok(_) | Err(_)) => {}
-                }
+            match post_result(&client, &result_url, &token, outcome, *deadline).await {
+                ResultDelivery::Unauthorized => return,
+                ResultDelivery::Done => pending = None,
+                ResultDelivery::Retry => {}
             }
         }
         if pending.is_none() {
@@ -179,6 +164,14 @@ async fn run(client: Client, url: Url, token: String) {
     }
 }
 
+fn script_timeout_seconds(remaining: Duration) -> Option<u64> {
+    remaining
+        .as_secs()
+        .checked_sub(SCRIPT_KILL_MARGIN_SECONDS)
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| seconds.min(MAX_SCRIPT_TIMEOUT_SECONDS))
+}
+
 async fn collect(
     task: &ReturnRouteTask,
     lease: TaskLease,
@@ -191,72 +184,80 @@ async fn collect(
         return Err("invalid_task");
     }
     let collection_deadline = lease.collection_deadline(Instant::now(), COLLECT_TIMEOUT);
-    if Instant::now() >= collection_deadline {
-        return Err("timeout");
-    }
-    tokio::time::timeout_at(collection_deadline.into(), async {
-        let work = tempfile::tempdir().map_err(|_| "unavailable")?;
-        let script = work.path().join("shanghai-routes.sh");
-        tokio::fs::write(&script, COLLECTOR)
-            .await
-            .map_err(|_| "unavailable")?;
-        let executable = ["/usr/bin/bash", "/bin/bash"]
-            .into_iter()
-            .find(|p| Path::new(p).is_file())
-            .ok_or("unavailable")?;
-        let timeout = ["/usr/bin/timeout", "/bin/timeout"]
-            .into_iter()
-            .find(|p| Path::new(p).is_file())
-            .ok_or("unavailable")?;
-        let mut command = Command::new(timeout);
-        command
-            .args(["-k", "5s", "390s", executable])
-            .arg(&script)
-            .arg(task.family.to_string())
-            .arg(address.to_string())
-            .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-            .env("LC_ALL", "C.UTF-8")
-            .env("HOME", work.path())
-            .env("TMPDIR", work.path())
-            .env("TERM", "xterm")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let mut child = command.spawn().map_err(|_| "unavailable")?;
-        let output = child.stdout.take().ok_or("unavailable")?;
-        let mut bytes = Vec::new();
-        let read_result = async {
-            output
-                .take((MAX_RESPONSE + 1) as u64)
-                .read_to_end(&mut bytes)
-                .await
-                .map_err(|_| "collection_failed")?;
-            if bytes.len() > MAX_RESPONSE {
-                return Err("response_too_large");
-            }
-            if !child
-                .wait()
-                .await
-                .map_err(|_| "collection_failed")?
-                .success()
-            {
-                return Err("collection_failed");
-            }
-            Ok(())
-        }
-        .await;
-        match read_result {
-            Ok(()) => parse(&bytes, task, lease.checked_at_unix_ms(Instant::now())),
-            Err(error) => {
-                let _ = child.kill().await;
-                Err(error)
-            }
-        }
-    })
+    let work = tempfile::tempdir().map_err(|_| "unavailable")?;
+    let script = work.path().join("shanghai-routes.sh");
+    tokio::time::timeout_at(
+        collection_deadline.into(),
+        tokio::fs::write(&script, COLLECTOR),
+    )
     .await
-    .unwrap_or(Err("timeout"))
+    .map_err(|_| "timeout")?
+    .map_err(|_| "unavailable")?;
+    let Some(script_timeout_secs) = collection_deadline
+        .checked_duration_since(Instant::now())
+        .and_then(script_timeout_seconds)
+    else {
+        return Err("timeout");
+    };
+    let executable = ["/usr/bin/bash", "/bin/bash"]
+        .into_iter()
+        .find(|p| Path::new(p).is_file())
+        .ok_or("unavailable")?;
+    let timeout = ["/usr/bin/timeout", "/bin/timeout"]
+        .into_iter()
+        .find(|p| Path::new(p).is_file())
+        .ok_or("unavailable")?;
+    let script_timeout = format!("{script_timeout_secs}s");
+    let mut command = Command::new(timeout);
+    command
+        .args(["-k", "5s", &script_timeout, executable])
+        .arg(&script)
+        .arg(task.family.to_string())
+        .arg(address.to_string())
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LC_ALL", "C.UTF-8")
+        .env("HOME", work.path())
+        .env("TMPDIR", work.path())
+        .env("TERM", "xterm")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = command.spawn().map_err(|_| "unavailable")?;
+    let output = child.stdout.take().ok_or("unavailable")?;
+    let mut bytes = Vec::new();
+    let result = tokio::time::timeout_at(collection_deadline.into(), async {
+        output
+            .take((MAX_RESPONSE + 1) as u64)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| "collection_failed")?;
+        if bytes.len() > MAX_RESPONSE {
+            return Err("response_too_large");
+        }
+        if !child
+            .wait()
+            .await
+            .map_err(|_| "collection_failed")?
+            .success()
+        {
+            return Err("collection_failed");
+        }
+        Ok(())
+    })
+    .await;
+    match result {
+        Ok(Ok(())) => parse(&bytes, task, lease.checked_at_unix_ms(Instant::now())),
+        Ok(Err(error)) => {
+            let _ = child.kill().await;
+            Err(error)
+        }
+        Err(_) => {
+            let _ = child.kill().await;
+            Err("timeout")
+        }
+    }
 }
 
 fn parse(
@@ -337,5 +338,14 @@ mod tests {
         let report = parse(output.as_bytes(), &task, 1_700_000_012_345).unwrap();
         assert_eq!(report.checked_at_unix_ms, 1_700_000_012_345);
         assert!(parse(b"missing-header\n", &task, 1_700_000_012_345).is_err());
+    }
+
+    #[test]
+    fn script_timeout_reserves_kill_grace_before_deadline() {
+        assert_eq!(script_timeout_seconds(Duration::from_secs(410)), Some(390));
+        assert_eq!(script_timeout_seconds(Duration::from_secs(60)), Some(54));
+        assert_eq!(script_timeout_seconds(Duration::from_secs(7)), Some(1));
+        assert_eq!(script_timeout_seconds(Duration::from_millis(6_999)), None);
+        assert_eq!(script_timeout_seconds(Duration::ZERO), None);
     }
 }

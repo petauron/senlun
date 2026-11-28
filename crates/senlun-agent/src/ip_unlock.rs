@@ -20,7 +20,9 @@ use senlun_protocol::{
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use crate::task_lease::{ClaimValidation, TaskLease, validate_claimed_task};
+use crate::task_lease::{
+    ClaimValidation, ResultDelivery, TaskLease, post_result, validate_claimed_task,
+};
 
 const POLL: Duration = Duration::from_secs(15);
 const MAX_CONTROL_RESPONSE: usize = 16 * 1024;
@@ -80,30 +82,10 @@ async fn run(client: Client, url: Url, token: String) {
     let mut pending: Option<(IpUnlockOutcome, Instant)> = None;
     loop {
         if let Some((outcome, deadline)) = &pending {
-            if Instant::now() >= *deadline {
-                pending = None;
-            } else {
-                match tokio::time::timeout_at(
-                    (*deadline).into(),
-                    client
-                        .post(result_url.clone())
-                        .bearer_auth(&token)
-                        .json(outcome)
-                        .send(),
-                )
-                .await
-                {
-                    Ok(Ok(response)) if response.status() == StatusCode::UNAUTHORIZED => return,
-                    Ok(Ok(response))
-                        if response.status().is_success()
-                            || response.status() == StatusCode::CONFLICT
-                            || response.status() == StatusCode::BAD_REQUEST =>
-                    {
-                        pending = None;
-                    }
-                    Err(_) => pending = None,
-                    Ok(Ok(_) | Err(_)) => {}
-                }
+            match post_result(&client, &result_url, &token, outcome, *deadline).await {
+                ResultDelivery::Unauthorized => return,
+                ResultDelivery::Done => pending = None,
+                ResultDelivery::Retry => {}
             }
         }
         if pending.is_none() {

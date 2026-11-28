@@ -2,7 +2,55 @@
 
 use std::time::{Duration, Instant};
 
+use reqwest::{Client, StatusCode, Url};
+use serde::Serialize;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResultDelivery {
+    /// Result accepted or permanently rejected/expired; clear pending state.
+    Done,
+    /// Transient transport/server error before lease expiry; retry on next poll.
+    Retry,
+    /// Agent credential was rejected by Service; stop the worker.
+    Unauthorized,
+}
+
+/// Posts a one-shot task outcome strictly within its monotonic lease deadline.
+pub(crate) async fn post_result<T: Serialize>(
+    client: &Client,
+    url: &Url,
+    token: &str,
+    outcome: &T,
+    deadline: Instant,
+) -> ResultDelivery {
+    if Instant::now() >= deadline {
+        return ResultDelivery::Done;
+    }
+    match tokio::time::timeout_at(
+        deadline.into(),
+        client
+            .post(url.clone())
+            .bearer_auth(token)
+            .json(outcome)
+            .send(),
+    )
+    .await
+    {
+        Ok(Ok(response)) if response.status() == StatusCode::UNAUTHORIZED => {
+            ResultDelivery::Unauthorized
+        }
+        Ok(Ok(response))
+            if response.status().is_success()
+                || response.status() == StatusCode::CONFLICT
+                || response.status() == StatusCode::BAD_REQUEST =>
+        {
+            ResultDelivery::Done
+        }
+        Err(_) => ResultDelivery::Done,
+        Ok(Ok(_) | Err(_)) => ResultDelivery::Retry,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ClaimValidation {
@@ -142,15 +190,16 @@ mod tests {
             ClaimValidation::Ignore
         );
 
-        for invalid_expiry in [0, IP_UNLOCK_LEASE_MS] {
+        for invalid_expires_at in [0, IP_UNLOCK_LEASE_MS] {
+            let result = validate_claimed_task(
+                &id,
+                invalid_expires_at,
+                IP_UNLOCK_LEASE_MS,
+                started,
+                received,
+            );
             assert_eq!(
-                validate_claimed_task(
-                    &id,
-                    invalid_expiry,
-                    IP_UNLOCK_LEASE_MS,
-                    started,
-                    received,
-                ),
+                result,
                 ClaimValidation::InvalidTask {
                     deadline: started + Duration::from_millis(IP_UNLOCK_LEASE_MS),
                 }
