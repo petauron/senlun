@@ -4,6 +4,19 @@ All notable changes to Pulse will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) after its first stable release.
 
+## [0.3.0](https://github.com/petauron/senlun/compare/v0.2.2...v0.3.0) (2026-11-28)
+
+
+### Features
+
+* **admin:** improve node management on desktop and mobile ([#326](https://github.com/petauron/senlun/issues/326)) ([4dc4a92](https://github.com/petauron/senlun/commit/4dc4a9210436f9a708f1e31fe085ecdef7cec5cc)), closes [#325](https://github.com/petauron/senlun/issues/325)
+* **admin:** improve probe and alert editing workflows ([#328](https://github.com/petauron/senlun/issues/328)) ([7ad90a3](https://github.com/petauron/senlun/commit/7ad90a323afd3021bdfebfd8f1e192c34f4dcd40)), closes [#327](https://github.com/petauron/senlun/issues/327)
+
+
+### Bug Fixes
+
+* **admin:** protect configuration drafts and reconcile uncertain writes ([#323](https://github.com/petauron/senlun/issues/323)) ([3c036e8](https://github.com/petauron/senlun/commit/3c036e8b807a7f7fdfe29807948d81bb78fca33a)), closes [#322](https://github.com/petauron/senlun/issues/322)
+
 ## [0.2.2](https://github.com/petauron/senlun/compare/v0.2.1...v0.2.2) (2026-11-28)
 
 
