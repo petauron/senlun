@@ -57,6 +57,42 @@ export function formatTrafficAmount(bytes: string, unit: TrafficUnit): string {
     : ''}`
 }
 
+export function formatIntegerBytes(bytes: string): string {
+  const value = BigInt(bytes)
+  const sign = value < 0n
+    ? '-'
+    : ''
+  const digits = (value < 0n
+    ? -value
+    : value).toString()
+  let formatted = ''
+  for (let index = 0; index < digits.length; index++) {
+    if (index > 0 && (digits.length - index) % 3 === 0)
+      formatted += ','
+    formatted += digits[index]
+  }
+  return `${sign}${formatted} B`
+}
+
+// Pure BigInt half-up rounding to 2 decimals for readable summaries without Number precision loss.
+export function formatApproxTrafficAmount(bytes: string, unit: TrafficUnit): { text: string, approximate: boolean } {
+  const value = BigInt(bytes)
+  const divisor = factor(unit)
+  if ((value * 100n) % divisor === 0n) {
+    return {
+      text: formatTrafficAmount(bytes, unit),
+      approximate: false,
+    }
+  }
+  const roundedHundredths = (value * 100n + divisor / 2n) / divisor
+  const whole = roundedHundredths / 100n
+  const fraction = (roundedHundredths % 100n).toString().padStart(2, '0')
+  return {
+    text: `约 ${whole}.${fraction}`,
+    approximate: true,
+  }
+}
+
 export function billedTraffic(up: string, down: string, direction: TrafficDirection): string {
   const a = BigInt(up)
   const b = BigInt(down)

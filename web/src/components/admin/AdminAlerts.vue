@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { RouteLocationNormalized } from 'vue-router'
 import type { AlertRule, Incident, ManagedNode, NotificationChannel } from '@/utils/admin'
-import type { AlertChannelSummary, NodeTargetScopeSummary } from '@/utils/adminEditing'
+import type { AlertChannelSummary, NodeScopeMode, NodeTargetScopeSummary } from '@/utils/adminEditing'
 import type { AlertConfigDeleteKind, PendingUncertainConfigDeleteLock } from '@/utils/adminUncertain'
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import AdminNodeScopeSelector from '@/components/admin/AdminNodeScopeSelector.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -19,6 +20,8 @@ import {
   cloneAlertRule,
   cloneNotificationChannel,
   createClientUuid,
+  effectiveScopedNodeIds,
+  initialNodeScopeMode,
   isAlertRuleDraftDirty,
   isChannelDraftDirty,
   pruneMissingChannels,
@@ -106,6 +109,8 @@ const channelFormHeadingRef = ref<HTMLElement | null>(null)
 
 const rule = ref<AlertRule>(emptyRule())
 const ruleBaseline = ref<AlertRule>(emptyRule())
+const ruleScopeMode = ref<NodeScopeMode>('scoped')
+const ruleSelectorResetNonce = ref(0)
 const pendingNewRuleId = ref('')
 const seenPendingNewRuleId = ref('')
 const removedRuleName = ref('')
@@ -149,8 +154,15 @@ const {
 } = deleteAction
 
 const busy = computed(() => channelBusy.value || ruleBusy.value || deleteBusy.value || refreshBusy.value)
+const ruleBaselineScopeMode = computed(() => initialNodeScopeMode(ruleBaseline.value))
 const hasUnsavedChannel = computed(() => isChannelDraftDirty(channel.value, channelBaseline.value))
-const hasUnsavedRule = computed(() => isAlertRuleDraftDirty(rule.value, ruleBaseline.value, confirmGlobalScope.value))
+const hasUnsavedRule = computed(() => isAlertRuleDraftDirty(
+  rule.value,
+  ruleBaseline.value,
+  confirmGlobalScope.value,
+  ruleScopeMode.value,
+  ruleBaselineScopeMode.value,
+))
 const hasAnyUnsavedChanges = computed(() => hasUnsavedChannel.value || hasUnsavedRule.value)
 const effectiveChannelId = computed(() => channel.value.id || pendingNewChannelId.value)
 const effectiveRuleId = computed(() => rule.value.id || pendingNewRuleId.value)
@@ -218,7 +230,7 @@ const selectableChannels = computed(() => buildSelectableChannels(props.channels
 const hasMissingChannels = computed(() => selectableChannels.value.some(item => item.missing))
 const needsGlobalConfirmation = computed(() => requiresGlobalScopeConfirmation(
   guardGlobalScope.value,
-  rule.value.node_ids,
+  ruleScopeMode.value,
   rule.value.enabled,
 ))
 
@@ -378,6 +390,8 @@ function markPendingNewChannelRemoved(removedId: string, displayName: string): v
 function applyResetRule(clearFeedback = true): void {
   rule.value = emptyRule()
   ruleBaseline.value = emptyRule()
+  ruleScopeMode.value = 'scoped'
+  ruleSelectorResetNonce.value++
   pendingNewRuleId.value = ''
   seenPendingNewRuleId.value = ''
   removedRuleName.value = ''
@@ -392,6 +406,8 @@ function applyResetRule(clearFeedback = true): void {
 function applyEditRule(item: AlertRule, clearFeedback = true): void {
   rule.value = cloneAlertRule(item)
   ruleBaseline.value = cloneAlertRule(item)
+  ruleScopeMode.value = initialNodeScopeMode(item)
+  ruleSelectorResetNonce.value++
   pendingNewRuleId.value = ''
   seenPendingNewRuleId.value = ''
   removedRuleName.value = ''
@@ -414,8 +430,8 @@ function markPendingNewRuleRemoved(removedId: string, displayName: string): void
   }
 }
 
-watch(() => rule.value.node_ids.length, (count) => {
-  if (count > 0)
+watch(ruleScopeMode, (mode) => {
+  if (mode !== 'all')
     confirmGlobalScope.value = false
 })
 
@@ -432,6 +448,7 @@ watch(channel, () => {
 watch(
   [
     rule,
+    ruleScopeMode,
     confirmGlobalScope,
   ],
   () => {
@@ -502,7 +519,7 @@ watch(
       applyEditRule(live, false)
       return
     }
-    if (!isAlertRuleDraftDirty(rule.value, live, false))
+    if (!isAlertRuleDraftDirty(rule.value, live, false, ruleScopeMode.value, initialNodeScopeMode(live)))
       ruleBaseline.value = cloneAlertRule(live)
   },
 )
@@ -700,6 +717,21 @@ function cancelRuleEdit(event?: MouseEvent): void {
   )
 }
 
+function handleRuleScopeModeUpdate(value: NodeScopeMode): void {
+  ruleScopeMode.value = value
+  ruleValidationError.value = ''
+}
+
+function handleRuleSelectedNodesUpdate(value: string[]): void {
+  rule.value.node_ids = value
+  ruleValidationError.value = ''
+}
+
+function handleRuleConfirmGlobalUpdate(value: boolean): void {
+  confirmGlobalScope.value = value
+  ruleValidationError.value = ''
+}
+
 function clearMissingChannels(): void {
   rule.value.channel_ids = pruneMissingChannels(rule.value.channel_ids, props.channels)
   ruleValidationError.value = ''
@@ -846,6 +878,7 @@ async function saveRule(): Promise<void> {
   ruleValidationError.value = ''
   const scopeError = validateScopedNodeSelection({
     guardGlobalScope: guardGlobalScope.value,
+    scopeMode: ruleScopeMode.value,
     selectedIds: rule.value.node_ids,
     enabled: rule.value.enabled,
     confirmGlobalScope: confirmGlobalScope.value,
@@ -871,6 +904,7 @@ async function saveRule(): Promise<void> {
   const submitted = cloneAlertRule({
     ...rule.value,
     id: targetId,
+    node_ids: effectiveScopedNodeIds(ruleScopeMode.value, rule.value.node_ids),
   })
   const submittedRevision = ruleEditRevision.value
   pendingUncertainRuleSave.value = null
@@ -1306,23 +1340,23 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
           <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="rule.enabled" type="checkbox" class="size-4 accent-primary">启用规则</label>
         </fieldset>
         <div class="grid gap-4 sm:grid-cols-2">
-          <fieldset :disabled="busy" class="rounded-md border p-3">
-            <legend class="px-1 text-sm font-medium">
-              监测节点
-            </legend>
-            <p class="mb-2 text-xs text-muted-foreground">
-              不选择时应用于所有活动节点，包括之后注册的节点。
-            </p>
-            <div class="max-h-64 space-y-2 overflow-auto">
-              <label v-for="node in assignableNodes" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm" :class="node.revoked || node.missing ? 'text-destructive' : ''"><input v-model="rule.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.label }}</label>
-            </div>
-            <div v-if="needsGlobalConfirmation" class="mt-3 space-y-2 rounded-md border border-destructive/40 p-2 text-xs">
-              <p class="text-destructive">
-                当前未指定任何节点且将启用此规则。为避免静默扩大告警范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。
-              </p>
-              <label class="flex min-h-9 items-center gap-2 text-sm"><input v-model="confirmGlobalScope" type="checkbox" class="size-4 accent-primary">确认改为应用于所有活动节点</label>
-            </div>
-          </fieldset>
+          <AdminNodeScopeSelector
+            id-prefix="alert-rule-nodes"
+            legend="监测节点"
+            :nodes="props.nodes"
+            :options="assignableNodes"
+            :scope-mode="ruleScopeMode"
+            :selected-ids="rule.node_ids"
+            :disabled="busy"
+            :needs-global-confirmation="needsGlobalConfirmation"
+            :confirm-global-scope="confirmGlobalScope"
+            global-confirm-warning="当前规则将应用于所有活动节点（含之后注册）且处于启用状态。为避免静默扩大告警范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。"
+            :reset-nonce="ruleSelectorResetNonce"
+            compact
+            @update:scope-mode="handleRuleScopeModeUpdate"
+            @update:selected-ids="handleRuleSelectedNodesUpdate"
+            @update:confirm-global-scope="handleRuleConfirmGlobalUpdate"
+          />
           <fieldset :disabled="busy" class="rounded-md border p-3">
             <legend class="px-1 text-sm font-medium">
               通知渠道（可选）

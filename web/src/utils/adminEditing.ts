@@ -33,8 +33,11 @@ export interface AlertChannelSummary {
   warningLabel: string
 }
 
+export type NodeScopeMode = 'scoped' | 'all'
+
 export interface ScopedNodeValidationInput {
   guardGlobalScope: boolean
+  scopeMode: NodeScopeMode
   selectedIds: readonly string[]
   enabled: boolean
   confirmGlobalScope: boolean
@@ -135,6 +138,77 @@ export function pruneMissingChannels(
   return selectedIds.filter(id => known.has(id))
 }
 
+export function initialNodeScopeMode(item: { id: string, node_ids: readonly string[] }): NodeScopeMode {
+  return item.id && item.node_ids.length === 0
+    ? 'all'
+    : 'scoped'
+}
+
+export function effectiveScopedNodeIds(
+  scopeMode: NodeScopeMode,
+  selectedIds: readonly string[],
+): string[] {
+  return scopeMode === 'all'
+    ? []
+    : [...selectedIds]
+}
+
+export function pruneUnavailableNodes(
+  selectedIds: readonly string[],
+  nodes: readonly ManagedNode[],
+): string[] {
+  const active = new Set(nodes.filter(node => !node.disabled).map(node => node.id))
+  return selectedIds.filter(id => active.has(id))
+}
+
+export function filterAssignableActiveNodes(
+  options: readonly AssignableNodeOption[],
+  nodes: readonly ManagedNode[],
+  query: string,
+  selectedIds: readonly string[],
+  selectedOnly: boolean,
+): AssignableNodeOption[] {
+  const byId = new Map(nodes.map(node => [node.id, node]))
+  const selected = new Set(selectedIds)
+  const normalizedQuery = query.trim().toLowerCase()
+  return options.filter((option) => {
+    if (option.revoked || option.missing)
+      return false
+    if (selectedOnly)
+      return selected.has(option.id)
+    if (!normalizedQuery)
+      return true
+    const node = byId.get(option.id)
+    return (
+      option.label.toLowerCase().includes(normalizedQuery)
+      || option.id.toLowerCase().includes(normalizedQuery)
+      || (node?.name.toLowerCase().includes(normalizedQuery) ?? false)
+      || (node?.region.toLowerCase().includes(normalizedQuery) ?? false)
+      || (node?.group.toLowerCase().includes(normalizedQuery) ?? false)
+    )
+  })
+}
+
+export function applyFilteredNodeSelection(
+  selectedIds: readonly string[],
+  visibleActiveIds: readonly string[],
+  action: 'select' | 'deselect',
+): string[] {
+  if (action === 'select') {
+    const next = [...selectedIds]
+    const seen = new Set(selectedIds)
+    for (const id of visibleActiveIds) {
+      if (!seen.has(id)) {
+        seen.add(id)
+        next.push(id)
+      }
+    }
+    return next
+  }
+  const remove = new Set(visibleActiveIds)
+  return selectedIds.filter(id => !remove.has(id))
+}
+
 export function hasUnavailableNodes(
   selectedIds: readonly string[],
   nodes: readonly ManagedNode[],
@@ -155,19 +229,24 @@ export function shouldGuardGlobalScope(item: { id: string, enabled: boolean, nod
 
 export function requiresGlobalScopeConfirmation(
   guardGlobalScope: boolean,
-  selectedIds: readonly string[],
+  scopeMode: NodeScopeMode,
   enabled: boolean,
 ): boolean {
-  return guardGlobalScope && selectedIds.length === 0 && enabled
+  return guardGlobalScope && scopeMode === 'all' && enabled
 }
 
 export function validateScopedNodeSelection(input: ScopedNodeValidationInput): string | null {
-  if (hasUnavailableNodes(input.selectedIds, input.nodes))
-    return '请先取消勾选已撤销或不存在的节点后再保存。'
+  if (input.scopeMode === 'scoped') {
+    if (hasUnavailableNodes(input.selectedIds, input.nodes))
+      return '请先取消勾选或移除已撤销或不存在的节点后再保存。'
+    if (input.selectedIds.length === 0)
+      return '当前为“指定节点”模式，请至少选择 1 台活动节点；如需应用于所有活动节点，请主动切换至“所有活动节点（含之后注册）”。'
+    return null
+  }
   if (
     requiresGlobalScopeConfirmation(
       input.guardGlobalScope,
-      input.selectedIds,
+      input.scopeMode,
       input.enabled,
     )
     && !input.confirmGlobalScope
@@ -244,9 +323,13 @@ export function isProbeDraftDirty(
   current: ProbeTask,
   baseline: ProbeTask,
   confirmGlobalScope = false,
+  currentScopeMode: NodeScopeMode = initialNodeScopeMode(current),
+  baselineScopeMode: NodeScopeMode = initialNodeScopeMode(baseline),
 ): boolean {
-  if (confirmGlobalScope)
+  if (confirmGlobalScope || currentScopeMode !== baselineScopeMode)
     return true
+  const currentNodes = effectiveScopedNodeIds(currentScopeMode, current.node_ids)
+  const baselineNodes = effectiveScopedNodeIds(baselineScopeMode, baseline.node_ids)
   return !(
     current.id === baseline.id
     && current.name === baseline.name
@@ -256,7 +339,7 @@ export function isProbeDraftDirty(
     && sameNumericField(current.interval_seconds, baseline.interval_seconds)
     && sameNumericField(current.timeout_seconds, baseline.timeout_seconds)
     && Boolean(current.enabled) === Boolean(baseline.enabled)
-    && sameIdSet(current.node_ids, baseline.node_ids)
+    && sameIdSet(currentNodes, baselineNodes)
   )
 }
 
@@ -289,9 +372,13 @@ export function isAlertRuleDraftDirty(
   current: AlertRule,
   baseline: AlertRule,
   confirmGlobalScope = false,
+  currentScopeMode: NodeScopeMode = initialNodeScopeMode(current),
+  baselineScopeMode: NodeScopeMode = initialNodeScopeMode(baseline),
 ): boolean {
-  if (confirmGlobalScope)
+  if (confirmGlobalScope || currentScopeMode !== baselineScopeMode)
     return true
+  const currentNodes = effectiveScopedNodeIds(currentScopeMode, current.node_ids)
+  const baselineNodes = effectiveScopedNodeIds(baselineScopeMode, baseline.node_ids)
   return !(
     current.id === baseline.id
     && current.name === baseline.name
@@ -300,7 +387,7 @@ export function isAlertRuleDraftDirty(
     && sameNumericField(current.duration_seconds, baseline.duration_seconds)
     && sameNumericField(current.cooldown_seconds, baseline.cooldown_seconds)
     && Boolean(current.enabled) === Boolean(baseline.enabled)
-    && sameIdSet(current.node_ids, baseline.node_ids)
+    && sameIdSet(currentNodes, baselineNodes)
     && sameIdSet(current.channel_ids, baseline.channel_ids)
   )
 }

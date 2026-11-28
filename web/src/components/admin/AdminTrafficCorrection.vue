@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { getSharedApi } from '@/utils/api'
-import { billedTraffic, formatTrafficAmount, parseTrafficAmount, trafficDirectionLabels } from '@/utils/trafficCorrection'
+import { billedTraffic, formatApproxTrafficAmount, formatIntegerBytes, formatTrafficAmount, parseTrafficAmount, trafficDirectionLabels } from '@/utils/trafficCorrection'
 
 const props = defineProps<{ node: ManagedNode, disabled: boolean, refresh: () => Promise<void> }>()
 const opened = ref(false)
@@ -22,7 +22,8 @@ const { busy, error, success, run } = useAdminAction(props.refresh)
 const unitLabel = computed(() => unit.value === 'gb'
   ? 'GB'
   : 'GiB')
-const display = (bytes: string) => `${formatTrafficAmount(bytes, unit.value)} ${unitLabel.value}`
+const displaySummary = (bytes: string) => `${formatApproxTrafficAmount(bytes, unit.value).text} ${unitLabel.value}`
+const displayExact = (bytes: string) => `${formatIntegerBytes(bytes)}（${formatTrafficAmount(bytes, unit.value)} ${unitLabel.value}）`
 const utc = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
 const beforeBilled = computed(() => context.value
   ? billedTraffic(context.value.baseline.used_up_bytes, context.value.baseline.used_down_bytes, context.value.baseline.traffic_limit_type)
@@ -144,8 +145,22 @@ async function save(): Promise<void> {
             <p>当前周期开始：{{ utc(context.baseline.cycle_start_ms) }}</p>
             <p>每月 {{ context.baseline.traffic_reset_day }} 日 UTC 重置 · {{ trafficDirectionLabels[context.baseline.traffic_limit_type] }}</p>
             <p>最后采样：{{ utc(context.sampled_at_ms) }}</p>
-            <p>上传 {{ display(context.baseline.used_up_bytes) }} / 下载 {{ display(context.baseline.used_down_bytes) }}</p>
-            <p>计费已用 {{ display(beforeBilled) }} · 额度 {{ context.traffic_limit_bytes === '0' ? '不限' : display(context.traffic_limit_bytes) }}</p>
+            <p>上传 {{ displaySummary(context.baseline.used_up_bytes) }} / 下载 {{ displaySummary(context.baseline.used_down_bytes) }}</p>
+            <p>计费已用 {{ displaySummary(beforeBilled) }} · 额度 {{ context.traffic_limit_bytes === '0' ? '不限' : displaySummary(context.traffic_limit_bytes) }}</p>
+            <details class="border-t pt-2 text-xs text-muted-foreground">
+              <summary class="cursor-pointer font-medium text-foreground select-none">
+                查看精确字节与采样基线
+              </summary>
+              <div class="mt-2 space-y-1 break-all font-mono">
+                <p>上传：{{ displayExact(context.baseline.used_up_bytes) }}</p>
+                <p>下载：{{ displayExact(context.baseline.used_down_bytes) }}</p>
+                <p>计费已用：{{ displayExact(beforeBilled) }}</p>
+                <p v-if="context.traffic_limit_bytes !== '0'">
+                  额度：{{ displayExact(context.traffic_limit_bytes) }}
+                </p>
+                <p>采样基线：{{ utc(context.sampled_at_ms) }}（周期始于 {{ utc(context.baseline.cycle_start_ms) }}）</p>
+              </div>
+            </details>
           </div>
           <form v-if="!preview" class="space-y-4" :aria-busy="busy" @submit.prevent="showPreview">
             <fieldset :disabled="busy" class="grid gap-4 sm:grid-cols-2">
@@ -160,9 +175,19 @@ async function save(): Promise<void> {
             <Button type="submit" class="min-h-11" :disabled="busy">预览校正</Button>
           </form>
           <div v-else role="region" class="space-y-3 break-words rounded-md border p-3 text-sm" aria-label="本地流量校正预览">
-            <p>上传：{{ display(context.baseline.used_up_bytes) }} → {{ display(preview.up) }}</p>
-            <p>下载：{{ display(context.baseline.used_down_bytes) }} → {{ display(preview.down) }}</p>
-            <p>计费已用：{{ display(beforeBilled) }} → {{ display(afterBilled) }}</p>
+            <p>上传：{{ displaySummary(context.baseline.used_up_bytes) }} → {{ displaySummary(preview.up) }}</p>
+            <p>下载：{{ displaySummary(context.baseline.used_down_bytes) }} → {{ displaySummary(preview.down) }}</p>
+            <p>计费已用：{{ displaySummary(beforeBilled) }} → {{ displaySummary(afterBilled) }}</p>
+            <details class="border-t pt-2 text-xs text-muted-foreground">
+              <summary class="cursor-pointer font-medium text-foreground select-none">
+                查看精确字节变更（实际提交值）
+              </summary>
+              <div class="mt-2 space-y-1 break-all font-mono">
+                <p>上传：{{ displayExact(context.baseline.used_up_bytes) }} → {{ displayExact(preview.up) }}</p>
+                <p>下载：{{ displayExact(context.baseline.used_down_bytes) }} → {{ displayExact(preview.down) }}</p>
+                <p>计费已用：{{ displayExact(beforeBilled) }} → {{ displayExact(afterBilled) }}</p>
+              </div>
+            </details>
             <p>原因：{{ preview.reason }}</p>
             <p class="text-muted-foreground">以上为采样时刻的目标值；确认时仍会保留此采样之后的新增流量。若周期或基准变化，操作将被拒绝，需重新预览。</p>
           </div>
