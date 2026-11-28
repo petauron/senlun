@@ -2,6 +2,7 @@
 import type { NodeData } from '@/stores/nodes'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
+import { RouterLink, useRouter } from 'vue-router'
 import NodeBandwidthBadge from '@/components/NodeBandwidthBadge.vue'
 import NodeIpScores from '@/components/NodeIpScores.vue'
 import NodeNetworkControls from '@/components/NodeNetworkControls.vue'
@@ -22,9 +23,21 @@ import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
 
 const props = defineProps<{ node: NodeData }>()
 
-const emit = defineEmits<{
-  click: []
-}>()
+const INTERACTIVE_SELECTOR = 'a, button, input, select, textarea, [role="button"], [role="link"]'
+const router = useRouter()
+const detailRoute = computed(() => ({
+  name: 'instance-detail',
+  params: { id: props.node.uuid },
+}))
+
+function handleCardClick(event: MouseEvent) {
+  if (event.defaultPrevented || window.getSelection()?.toString())
+    return
+  const target = event.target as HTMLElement | null
+  if (target?.closest(INTERACTIVE_SELECTOR))
+    return
+  void router.push(detailRoute.value)
+}
 
 const { pickSurfaceClass } = useBackgroundSurface()
 const { formatBytes, formatBytesPerSecond, formatUptime } = useNodeFormatters()
@@ -75,14 +88,10 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 <template>
   <CardX
     hoverable
-    role="button"
-    tabindex="0"
-    :aria-label="`查看 ${props.node.name} 节点详情`"
+    data-testid="node-card"
     class="node-card h-full w-full cursor-pointer border-none shadow-[0_0_0_1px] shadow-transparent transition-all duration-200 rounded-md bg-background/60 hover:bg-background hover:shadow-emerald-600/10 hover:shadow-[0_0_20px,0_0_0_1px] hover:-translate-y-0.5 hover:z-1"
     :class="[pickSurfaceClass('', 'backdrop-blur-sm'), !props.node.online && 'shadow-[0_0_0_1px] !shadow-red-600/20']"
-    @click="emit('click')"
-    @keydown.enter.self.prevent="emit('click')"
-    @keydown.space.self.prevent="emit('click')"
+    @click="handleCardClick"
   >
     <template #header>
       <div class="flex gap-2 min-w-0 items-center">
@@ -92,15 +101,22 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
             :class="[props.node.online ? 'bg-emerald-600' : 'bg-red-600']"
           />
         </div>
-        <div class="text-md font-bold flex-1 min-w-0 truncate" :title="props.node.public_remark ? `${props.node.name}\n${props.node.public_remark}` : props.node.name">
+        <RouterLink
+          :to="detailRoute"
+          :aria-label="`查看 ${props.node.name} 节点详情`"
+          :title="props.node.public_remark ? `${props.node.name}\n${props.node.public_remark}` : props.node.name"
+          class="node-card-link text-md font-bold flex-1 min-w-0 truncate rounded-sm text-foreground no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {{ props.node.name }}
-        </div>
+        </RouterLink>
       </div>
     </template>
 
     <template #header-extra>
       <div class="flex gap-1.5 items-center">
-        <NodeIpScores :node="node" />
+        <div class="relative z-10 flex items-center">
+          <NodeIpScores :node="node" />
+        </div>
         <img :src="getOSImage(props.node.os)" :alt="getOSName(props.node.os)" class="size-4">
         <img
           v-if="hasRegion(props.node.region)" :src="getFlagSrc(props.node.region)"
@@ -136,7 +152,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               <span>{{ memPercentage.toFixed(1) }}%</span>
             </div>
             <ProgressThin :percentage="memPercentage" :status="memStatus" :height="4" />
-            <DataTooltip :stop-click-propagation="false" placement="top" class="block" :content-class="[!props.node.swap && '!hidden']">
+            <DataTooltip :stop-click-propagation="false" placement="top" class="relative z-10 block" :content-class="[!props.node.swap && '!hidden']">
               <div class="text-[11px] text-muted-foreground truncate">
                 {{ formatBytes(props.node.ram ?? 0) }} / {{ formatBytes(props.node.mem_total ?? 0) }}
               </div>
@@ -170,9 +186,9 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               <span>{{ selectedTraffic?.percentage === null || selectedTraffic?.percentage === undefined ? '--' : `${selectedTraffic.percentage.toFixed(1)}%` }}</span>
             </div>
             <ProgressThin v-if="selectedTraffic?.percentage !== null && selectedTraffic?.percentage !== undefined" :percentage="Math.min(selectedTraffic.percentage, 100)" status="success" :height="4" />
-            <div v-else class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
+            <div v-else role="img" class="h-1 rounded bg-muted" aria-label="流量额度使用率不可判定" />
             <DataTooltip
-              :stop-click-propagation="false" placement="top" class="block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabindex="0" role="group"
+              :stop-click-propagation="false" placement="top" class="relative z-10 block rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" tabindex="0" role="group"
               :aria-label="`${trafficSourceLabel(selectedTraffic)}，${trafficMode}，上传 ${selectedTraffic?.up_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.up_bytes)}，下载 ${selectedTraffic?.down_bytes == null ? '暂无数据' : formatBytes(selectedTraffic.down_bytes)}`"
             >
               <div class="text-[11px] text-muted-foreground truncate">
@@ -199,7 +215,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
             </p>
           </div>
         </div>
-        <div v-if="externalTraffic" class="border-t border-border/60 pt-2 text-xs" aria-label="服务商记录流量">
+        <div v-if="externalTraffic" role="group" class="border-t border-border/60 pt-2 text-xs" aria-label="服务商记录流量">
           <div class="flex items-center justify-between gap-2">
             <span class="min-w-0 truncate text-muted-foreground" :title="externalTraffic.name">服务商流量 · {{ externalTraffic.name }}</span>
             <span v-if="externalTrafficStale" class="shrink-0 font-medium text-foreground">{{ externalTraffic.snapshot ? '上次值' : '待同步' }}</span>
@@ -222,7 +238,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
         <div class="relative text-[11px] text-muted-foreground">
           <div
             v-if="!props.node.online"
-            class="absolute inset-0 z-10 flex flex-col items-center justify-center space-y-1"
+            class="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center space-y-1"
           >
             <span class="text-sm text-red-600">离线</span>
             <div>{{ offlineTime }}</div>
@@ -249,7 +265,9 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
               <span class="truncate">
                 在线
               </span>
-              <NodeNetworkControls :node="node" compact />
+              <div class="relative z-10 flex items-center">
+                <NodeNetworkControls :node="node" compact />
+              </div>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <span class="truncate">
                 {{ props.node.uptime > 0 ? formatUptime(props.node.uptime) : '' }}
@@ -258,7 +276,7 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
             <div class="metric-row flex items-center justify-between">
               <span class="truncate">费用</span>
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-              <DataTooltip :stop-click-propagation="false" placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
+              <DataTooltip :stop-click-propagation="false" placement="left" class="relative z-10" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
                 <span class="flex flex-row gap-1 truncate">
                   <template v-for="(tag, index) in priceTags" :key="index">
                     <span v-if="index > 0">·</span>
@@ -268,13 +286,13 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
                 </span>
               </DataTooltip>
             </div>
-            <div class="route-line">
+            <div class="route-line z-10">
               <NodeReturnRoutes :node="node" />
             </div>
-            <NodeProbePanel :node="props.node" />
+            <NodeProbePanel :node="props.node" class="relative z-10" />
           </div>
         </div>
-        <div v-if="customTags.length > 0" class="flex shrink-0 flex-wrap gap-1.5 items-center">
+        <div v-if="customTags.length > 0" class="relative z-10 flex shrink-0 flex-wrap gap-1.5 items-center">
           <NodeTagBadge v-for="(tag, index) in customTags" :key="index" :text="tag.text" :color="tag.color" />
         </div>
       </div>
@@ -286,6 +304,13 @@ const customTags = computed(() => getNodeDisplayTags(props.node.tags))
 .node-card {
   position: relative;
   overflow: hidden;
+}
+
+.node-card-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
 }
 
 .node-card :deep(.ip-quality-trigger) {

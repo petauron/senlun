@@ -2,7 +2,6 @@
 import { Icon } from '@iconify/vue'
 import { useDebounceFn } from '@vueuse/core'
 import { computed, defineAsyncComponent, nextTick, onActivated, onDeactivated, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -28,7 +27,6 @@ const nodeItemStaggerLimit = 12
 const appStore = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const nodesStore = useNodesStore()
-const router = useRouter()
 
 onActivated(() => {
   if (appStore.homeScrollPosition > 0) {
@@ -110,13 +108,6 @@ const nodeList = computed(() => {
       ? -1
       : 1))
 })
-
-function handleNodeClick(node: typeof nodesStore.nodes[number]) {
-  router.push({
-    name: 'instance-detail',
-    params: { id: node.uuid },
-  })
-}
 
 function getNodeItemTransitionKey(node: typeof nodesStore.nodes[number]): string {
   return `${appStore.nodeSelectedGroup}-${node.uuid}`
@@ -223,14 +214,13 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
                 class="min-w-0"
                 :style="getNodeItemTransitionStyle(index)"
               >
-                <NodeCard :node="node" @click="handleNodeClick(node)" />
+                <NodeCard :node="node" />
               </div>
             </TransitionGroup>
             <NodeList
               v-else-if="nodeList.length !== 0 && appStore.nodeViewMode === 'list'"
               :nodes="nodeList"
               :transition-key="appStore.nodeSelectedGroup"
-              @click="handleNodeClick"
             />
             <div v-else class="text-muted-foreground text-center py-8">
               <Empty description="暂无节点" />

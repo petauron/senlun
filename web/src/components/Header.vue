@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import { computed, inject, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { DataTooltip } from '@/components/ui/data-tooltip'
@@ -64,24 +64,24 @@ const sitename = computed(() => appStore.publicSettings?.sitename || 'Senlun')
 </script>
 
 <template>
-  <div
+  <header
     class="transition-all duration-200 top-0 sticky z-10 border-b border-transparent"
     :class="isScrolled ? 'backdrop-blur-xl' : 'bg-transparent'"
   >
     <div class="px-4 flex-between h-14 max-w-[1280px] mx-auto">
-      <div
-        role="link" tabindex="0" :aria-label="`返回 ${sitename} 首页`"
-        class="flex items-center gap-3 cursor-pointer"
-        @click="router.push('/')" @keydown.enter.prevent="router.push('/')"
+      <RouterLink
+        to="/"
+        :aria-label="`返回 ${sitename} 首页`"
+        class="flex items-center gap-3 rounded-sm text-foreground no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Avatar class="size-8">
           <AvatarImage :src="siteFavicon" :alt="sitename" />
           <AvatarFallback>{{ sitename.slice(0, 1) }}</AvatarFallback>
         </Avatar>
-        <h3 class="m-0 text-lg font-semibold">
+        <span class="m-0 text-lg font-semibold">
           {{ sitename }}
-        </h3>
-      </div>
+        </span>
+      </RouterLink>
       <div class="flex items-center gap-2">
         <DataTooltip v-for="button in actionButtons" :key="button.action" :content="button.title" placement="left" content-class="whitespace-nowrap text-[11px] px-2">
           <Button
@@ -93,5 +93,5 @@ const sitename = computed(() => appStore.publicSettings?.sitename || 'Senlun')
         </DataTooltip>
       </div>
     </div>
-  </div>
+  </header>
 </template>

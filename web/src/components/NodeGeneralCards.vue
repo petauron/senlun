@@ -135,21 +135,21 @@ const financeDisclosure = computed(() =>
   <section class="overview">
     <div class="headline">
       <div>
-        <label>在线节点</label><strong>{{ online.length }}<small> / {{ nodes.length }}</small></strong>
+        <span class="stat-label">在线节点</span><strong>{{ online.length }}<small> / {{ nodes.length }}</small></strong>
       </div>
       <div>
-        <label>总速率</label><strong><i>↑</i> {{ fmt(sum('net_out', online), true).value
+        <span class="stat-label">总速率</span><strong><i>↑</i> {{ fmt(sum('net_out', online), true).value
         }}<small v-if="fmt(sum('net_out', online), true).unit !== fmt(sum('net_in', online), true).unit">{{
           fmt(sum('net_out', online), true).unit
         }}</small>
           <i>↓</i> {{ fmt(sum('net_in', online), true).value }}<small>{{ fmt(sum('net_in', online), true).unit }}</small></strong>
       </div>
     </div>
-    <button v-if="showRegions && !desktop" class="disclosure" :aria-expanded="trafficOpen" @click="trafficOpen = !trafficOpen">
+    <button v-if="showRegions && !desktop" type="button" class="disclosure" :aria-expanded="trafficOpen" @click="trafficOpen = !trafficOpen">
       地区流量 <span>{{ trafficOpen ? '−' : '+' }}</span>
     </button>
     <FlatMap v-if="showRegions && (desktop || trafficOpen)" :desktop="desktop" :nodes="globeNodes" />
-    <button v-if="!desktop" class="disclosure" :aria-expanded="resourcesOpen" @click="resourcesOpen = !resourcesOpen">
+    <button v-if="!desktop" type="button" class="disclosure" :aria-expanded="resourcesOpen" @click="resourcesOpen = !resourcesOpen">
       资源与费用 <span>{{ resourcesOpen ? '−' : '+' }}</span>
     </button>
     <div v-if="desktop || resourcesOpen" class="resources">
@@ -158,6 +158,7 @@ const financeDisclosure = computed(() =>
           <DataTooltip
             v-if="label === '累计流量'"
             as="button"
+            type="button"
             :content="
               `↑ ${
                 fmt(sum('net_total_up')).value
@@ -171,18 +172,19 @@ const financeDisclosure = computed(() =>
             placement="top"
             content-class="left-0 w-max max-w-[calc(100vw-2rem)] translate-x-0 whitespace-nowrap px-2 py-1.5 text-xs leading-normal"
           >
-            <label>{{ label }} ›</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b>
+            <span class="stat-label">{{ label }} ›</span><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }}</b>
           </DataTooltip><template v-else>
-            <label>{{ label }}</label><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }} / {{ fmt(total ?? 0).value }} {{ fmt(total ?? 0).unit }}</b>
+            <span class="stat-label">{{ label }}</span><b>{{ fmt(bytes).value }} {{ fmt(bytes).unit }} / {{ fmt(total ?? 0).value }} {{ fmt(total ?? 0).unit }}</b>
           </template>
         </div>
         <button
-          :id="`${financeId}-trigger`" aria-label="查看剩余价值详情"
+          :id="`${financeId}-trigger`"
+          type="button"
           :aria-expanded="openFinanceCard"
           :aria-controls="`${financeId}-panel`"
           @click="toggleFinanceCard"
         >
-          <label>剩余价值 ›</label><b>{{ formattedRemainingValue.value }} {{ formattedRemainingValue.unit }}</b>
+          <span class="stat-label">剩余价值<span aria-hidden="true"> ›</span></span><b>{{ formattedRemainingValue.value }} {{ formattedRemainingValue.unit }}</b><span class="sr-only">，查看剩余价值详情</span>
         </button>
       </div>
       <section
@@ -193,13 +195,13 @@ const financeDisclosure = computed(() =>
         @keydown.esc="closeFinanceCard"
       >
         <header>
-          <strong>价值详情</strong><button ref="closeFinanceButton" aria-label="关闭价值详情" @click="closeFinanceCard">
+          <strong>价值详情</strong><button ref="closeFinanceButton" type="button" aria-label="关闭价值详情" @click="closeFinanceCard">
             关闭
           </button>
         </header>
         <div class="amounts">
           <div v-for="item in financeSummaryItems" :key="item.label">
-            <label>{{ item.label }}</label><b>{{ item.symbol }}{{ item.value }}</b>
+            <span class="stat-label">{{ item.label }}</span><b>{{ item.symbol }}{{ item.value }}</b>
           </div>
         </div>
         <div v-if="exchangeRateRows.length" class="curr">
@@ -240,8 +242,8 @@ const financeDisclosure = computed(() =>
   gap: 44px;
   padding-bottom: 12px;
 }
-.headline label,
-.secondary label {
+.headline .stat-label,
+.secondary .stat-label {
   display: block;
   font-size: 12px;
   color: #a8b4c2;
@@ -373,8 +375,13 @@ const financeDisclosure = computed(() =>
   background: var(--card);
   border-color: var(--border);
 }
-.overview :is(label, .headline i, .headline small, .finance small, .finance p, .disclosure span) {
+.overview :is(.stat-label, .headline i, .headline small, .finance small, .finance p, .disclosure span) {
   color: var(--muted-foreground);
+}
+.overview button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .overview :is(.secondary, .disclosure, .rate-tools button) {
   border-color: var(--border);

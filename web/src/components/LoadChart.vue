@@ -951,7 +951,7 @@ onBeforeUnmount(() => {
 
     <!-- 内容区域 -->
     <Spinner :show="loading">
-      <p class="sr-only" role="status">
+      <p class="sr-only">
         {{ chartSummary }}
       </p>
       <p
