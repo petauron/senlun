@@ -924,17 +924,16 @@ test('detail switches, hover states, probe highlight, and tooltip cleanup work a
     expect(await probeSixHour.evaluate(element => getComputedStyle(element).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)')
     expect(await probeOneHour.evaluate(element => getComputedStyle(element).backgroundColor)).toBe('rgba(0, 0, 0, 0)')
 
-    // Desktop: hovering an already-selected preset button keeps its active pill background intact.
+    // Desktop: hovering an already-selected preset button keeps its settled active pill background intact.
     const presetV4 = presetGroup.getByRole('button', { name: 'V4', exact: true })
     const presetV6 = presetGroup.getByRole('button', { name: 'V6', exact: true })
+    const expectedActiveBg = await loadRangeList.getByRole('tab', { name: '实时', exact: true }).evaluate(element => getComputedStyle(element).backgroundColor)
     await presetV4.click()
     await expect(presetV4).toHaveAttribute('aria-pressed', 'true')
     await page.mouse.move(0, 0)
-    const selectedV4Bg = await presetV4.evaluate(element => getComputedStyle(element).backgroundColor)
-    expect(selectedV4Bg).not.toBe('rgba(0, 0, 0, 0)')
+    await expect.poll(() => presetV4.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(expectedActiveBg)
     await presetV4.hover()
-    const hoveredSelectedV4Bg = await presetV4.evaluate(element => getComputedStyle(element).backgroundColor)
-    expect(hoveredSelectedV4Bg).toBe(selectedV4Bg)
+    await expect.poll(() => presetV4.evaluate(element => getComputedStyle(element).backgroundColor)).toBe(expectedActiveBg)
     await presetV6.hover()
     await expect(presetV4).toHaveAttribute('aria-pressed', 'true')
     await expect(presetV6).toHaveAttribute('aria-pressed', 'false')

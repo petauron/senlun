@@ -277,6 +277,47 @@ const layoutOptions = [
   { value: 'split' as const, label: '分图' },
 ]
 
+function metricButtonClass(active: boolean) {
+  if (!props.detailInteractions) {
+    return [
+      'h-7 px-3 transition-colors duration-100 motion-reduce:transition-none',
+      active && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white',
+    ]
+  }
+  return [
+    'group/metric h-11 min-h-11 bg-transparent px-0.5 transition-none hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-7 sm:min-h-0 sm:px-3',
+    active
+      ? 'sm:bg-emerald-700 sm:font-semibold sm:text-white sm:hover:bg-emerald-700 sm:hover:text-white dark:sm:hover:bg-emerald-700 dark:sm:hover:text-white'
+      : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
+  ]
+}
+
+function presetButtonClass(active: boolean) {
+  if (!props.detailInteractions) {
+    return [
+      'h-8 px-3',
+      active && 'bg-background text-emerald-700 dark:text-emerald-400',
+    ]
+  }
+  return [
+    'group/preset h-11 min-h-11 bg-transparent px-0.5 transition-none hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-8 sm:min-h-0 sm:px-3',
+    active
+      ? 'sm:bg-background sm:font-semibold sm:text-emerald-700 sm:shadow-xs sm:hover:bg-background sm:hover:text-emerald-700 dark:sm:bg-input/40 dark:sm:text-emerald-400 dark:sm:hover:bg-input/40 dark:sm:hover:text-emerald-400'
+      : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
+  ]
+}
+
+function layoutButtonClass(active: boolean) {
+  if (!props.detailInteractions)
+    return active && 'bg-background text-emerald-700 dark:text-emerald-400'
+  return [
+    'transition-none active:not-aria-[haspopup]:translate-y-0',
+    active
+      ? 'bg-background font-semibold text-emerald-700 shadow-xs hover:bg-background hover:text-emerald-700 dark:bg-input/40 dark:text-emerald-400 dark:hover:bg-input/40 dark:hover:text-emerald-400'
+      : 'text-foreground/75 hover:bg-background/55 hover:text-foreground',
+  ]
+}
+
 const analysisTask = computed(() => tasks.value.find(task => task.id === analysisTaskId.value))
 const analysisSummary = computed(() => summaryByTask.value.get(analysisTaskId.value))
 const names = computed(() => new Map(data.value?.tasks.map(task => [task.id, task.name]) ?? []))
@@ -943,18 +984,8 @@ function exportPng(): void {
               >
                 <Button
                   v-for="option in metricOptions" :key="option.value" variant="ghost" size="xs"
-                  class="cursor-pointer rounded-md text-xs transition-colors duration-100 motion-reduce:transition-none"
-                  :class="detailInteractions
-                    ? [
-                        'group/metric h-11 min-h-11 bg-transparent px-0.5 hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-7 sm:min-h-0 sm:px-3',
-                        chartMetric === option.value
-                          ? 'sm:bg-emerald-700 sm:font-semibold sm:text-white sm:hover:bg-emerald-700 sm:hover:text-white dark:sm:hover:bg-emerald-700 dark:sm:hover:text-white'
-                          : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
-                      ]
-                    : [
-                        'h-7 px-3',
-                        chartMetric === option.value && 'bg-emerald-600 text-white hover:bg-emerald-600 hover:text-white dark:hover:bg-emerald-600 dark:hover:text-white',
-                      ]"
+                  class="cursor-pointer rounded-md text-xs"
+                  :class="metricButtonClass(chartMetric === option.value)"
                   :aria-pressed="chartMetric === option.value"
                   @click="chartMetric = option.value"
                 >
@@ -987,17 +1018,7 @@ function exportPng(): void {
                 <Button
                   v-for="preset in linePresets" :key="preset.label" variant="ghost" size="xs"
                   class="cursor-pointer rounded-md text-xs"
-                  :class="detailInteractions
-                    ? [
-                        'group/preset h-11 min-h-11 bg-transparent px-0.5 hover:bg-transparent dark:hover:bg-transparent active:not-aria-[haspopup]:translate-y-0 sm:h-8 sm:min-h-0 sm:px-3',
-                        isLinePresetSelected(preset.ids)
-                          ? 'sm:bg-background sm:font-semibold sm:text-emerald-700 sm:shadow-xs sm:hover:bg-background sm:hover:text-emerald-700 dark:sm:bg-input/40 dark:sm:text-emerald-400 dark:sm:hover:bg-input/40 dark:sm:hover:text-emerald-400'
-                          : 'sm:text-foreground/75 sm:hover:bg-background/55 sm:hover:text-foreground dark:sm:hover:bg-background/30',
-                      ]
-                    : [
-                        'h-8 px-3',
-                        isLinePresetSelected(preset.ids) && 'bg-background text-emerald-700 dark:text-emerald-400',
-                      ]"
+                  :class="presetButtonClass(isLinePresetSelected(preset.ids))"
                   :aria-pressed="isLinePresetSelected(preset.ids)"
                   @click="selectLines(preset.ids)"
                 >
@@ -1051,14 +1072,7 @@ function exportPng(): void {
                 <div role="group" aria-label="图表布局" class="flex items-center gap-1 rounded-md bg-muted/60 p-1">
                   <Button
                     v-for="option in layoutOptions" :key="option.value" variant="ghost" size="xs"
-                    :class="detailInteractions
-                      ? [
-                          'active:not-aria-[haspopup]:translate-y-0',
-                          chartLayout === option.value
-                            ? 'bg-background font-semibold text-emerald-700 shadow-xs hover:bg-background hover:text-emerald-700 dark:bg-input/40 dark:text-emerald-400 dark:hover:bg-input/40 dark:hover:text-emerald-400'
-                            : 'text-foreground/75 hover:bg-background/55 hover:text-foreground',
-                        ]
-                      : chartLayout === option.value && 'bg-background text-emerald-700 dark:text-emerald-400'"
+                    :class="layoutButtonClass(chartLayout === option.value)"
                     :aria-pressed="chartLayout === option.value"
                     @click="chartLayout = option.value"
                   >
