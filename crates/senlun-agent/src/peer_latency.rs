@@ -21,6 +21,7 @@ const MAX_CONCURRENT_PEERS: usize = 4;
 const MAX_ROUND_PAGES: usize = MAX_PEER_PROBE_TARGETS.div_ceil(MAX_PEER_PROBE_BATCH);
 const MAX_PLAN_BYTES: usize = 8 * 1024;
 const PROBE_DEADLINE: Duration = Duration::from_secs(3);
+const MAX_PEER_LATENCY_MS: f64 = 3000.0;
 
 pub(crate) async fn run(client: Client, target_client: Client, service_url: Url, token: String) {
     let Ok(endpoint) = service_url.join("api/v1/agents/peer-latency") else {
@@ -210,36 +211,74 @@ where
     }
 }
 
+fn clamp_peer_latency_ms(latency_ms: f64) -> Option<f64> {
+    if latency_ms.is_finite() && latency_ms >= 0.0 {
+        Some(latency_ms.min(MAX_PEER_LATENCY_MS))
+    } else {
+        None
+    }
+}
+
+fn status_from_error(error: Option<&str>) -> PeerProbeStatus {
+    match error {
+        Some("unavailable") => PeerProbeStatus::Unavailable,
+        Some("timeout") => PeerProbeStatus::Timeout,
+        _ => PeerProbeStatus::Failed,
+    }
+}
+
+fn outcome_from_latency(result: Result<f64, &'static str>) -> (PeerProbeStatus, Option<f64>) {
+    match result {
+        Ok(latency_ms) => match clamp_peer_latency_ms(latency_ms) {
+            Some(clamped) => (PeerProbeStatus::Ready, Some(clamped)),
+            None => (PeerProbeStatus::Failed, None),
+        },
+        Err(reason) => (status_from_error(Some(reason)), None),
+    }
+}
+
+fn outcome_from_probe_result(
+    result: senlun_protocol::ProbeResult,
+) -> (PeerProbeStatus, Option<f64>) {
+    if result.success {
+        outcome_from_latency(result.latency_ms.ok_or("probe_failed"))
+    } else {
+        (status_from_error(result.error.as_deref()), None)
+    }
+}
+
 async fn measure_address(
     client: &Client,
     kind: PeerProbeKind,
     address: IpAddr,
 ) -> (PeerProbeStatus, Option<f64>) {
-    let (kind, address) = match kind {
-        PeerProbeKind::Tcp => (ProbeKind::Tcp, SocketAddr::new(address, 443).to_string()),
-        PeerProbeKind::Icmp => (ProbeKind::Icmp, address.to_string()),
-    };
-    let task = ProbeTask {
-        id: String::new(),
-        name: "Node latency".into(),
-        kind,
-        target: address,
-        interval_seconds: DEFAULT_PEER_PROBE_INTERVAL_SECONDS,
-        timeout_seconds: PROBE_DEADLINE.as_secs(),
-        enabled: true,
-    };
-    match tokio::time::timeout(
-        PROBE_DEADLINE,
-        crate::probes::run_probe(client.clone(), task),
-    )
-    .await
-    {
-        Ok(result) if result.success => (PeerProbeStatus::Ready, result.latency_ms),
-        Ok(result) if result.error.as_deref() == Some("unavailable") => {
-            (PeerProbeStatus::Unavailable, None)
+    match kind {
+        // Peer TCP latency measures a single handshake within the 3s budget
+        // without regular probe high-latency retries consuming the remaining window.
+        PeerProbeKind::Tcp => {
+            let target = SocketAddr::new(address, 443).to_string();
+            outcome_from_latency(crate::probes::measure_tcp(&target, PROBE_DEADLINE).await)
         }
-        Ok(result) if result.error.as_deref() != Some("timeout") => (PeerProbeStatus::Failed, None),
-        _ => (PeerProbeStatus::Timeout, None),
+        PeerProbeKind::Icmp => {
+            let task = ProbeTask {
+                id: String::new(),
+                name: "Node latency".into(),
+                kind: ProbeKind::Icmp,
+                target: address.to_string(),
+                interval_seconds: DEFAULT_PEER_PROBE_INTERVAL_SECONDS,
+                timeout_seconds: PROBE_DEADLINE.as_secs(),
+                enabled: true,
+            };
+            match tokio::time::timeout(
+                PROBE_DEADLINE,
+                crate::probes::run_probe(client.clone(), task),
+            )
+            .await
+            {
+                Ok(result) => outcome_from_probe_result(result),
+                Err(_) => (PeerProbeStatus::Timeout, None),
+            }
+        }
     }
 }
 
@@ -453,5 +492,68 @@ mod tests {
         })
         .await;
         assert_eq!(sample.address, primary);
+    }
+
+    #[test]
+    fn peer_outcomes_accept_slow_single_handshake_and_clamp_to_service_bounds() {
+        assert_eq!(
+            outcome_from_latency(Ok(2000.0)),
+            (PeerProbeStatus::Ready, Some(2000.0))
+        );
+        assert_eq!(
+            outcome_from_latency(Ok(3001.5)),
+            (PeerProbeStatus::Ready, Some(3000.0))
+        );
+        assert_eq!(
+            outcome_from_latency(Ok(-1.0)),
+            (PeerProbeStatus::Failed, None)
+        );
+        assert_eq!(
+            outcome_from_latency(Ok(f64::NAN)),
+            (PeerProbeStatus::Failed, None)
+        );
+        assert_eq!(
+            outcome_from_latency(Err("timeout")),
+            (PeerProbeStatus::Timeout, None)
+        );
+        assert_eq!(
+            outcome_from_latency(Err("unavailable")),
+            (PeerProbeStatus::Unavailable, None)
+        );
+        assert_eq!(
+            outcome_from_latency(Err("connect")),
+            (PeerProbeStatus::Failed, None)
+        );
+
+        let result = |success: bool, latency_ms: Option<f64>, error: Option<&str>| {
+            senlun_protocol::ProbeResult {
+                task_id: String::new(),
+                sample_id: String::new(),
+                collected_at_unix_ms: 0,
+                latency_ms,
+                success,
+                error: error.map(str::to_owned),
+            }
+        };
+        assert_eq!(
+            outcome_from_probe_result(result(true, Some(30_000.0), None)),
+            (PeerProbeStatus::Ready, Some(3000.0))
+        );
+        assert_eq!(
+            outcome_from_probe_result(result(true, None, None)),
+            (PeerProbeStatus::Failed, None)
+        );
+        assert_eq!(
+            outcome_from_probe_result(result(false, None, Some("timeout"))),
+            (PeerProbeStatus::Timeout, None)
+        );
+        assert_eq!(
+            outcome_from_probe_result(result(false, None, Some("unavailable"))),
+            (PeerProbeStatus::Unavailable, None)
+        );
+        assert_eq!(
+            outcome_from_probe_result(result(false, None, Some("probe_failed"))),
+            (PeerProbeStatus::Failed, None)
+        );
     }
 }
