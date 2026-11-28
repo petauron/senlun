@@ -37,6 +37,7 @@ const MAX_SOURCES: i64 = 32;
 const POLL_INTERVAL_MS: i64 = 30 * 60 * 1_000;
 const MAX_RESPONSE_BYTES: usize = 128 * 1024;
 const MAX_SECRET_BYTES: usize = 4_096;
+const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -312,20 +313,36 @@ impl Storage {
         })?;
         rows.map(|row| {
             let (node_id, config, credential, snapshot, attempt, success, status) = row?;
-            let config: SourceConfig = serde_json::from_str(&config).map_err(|_| {
-                StorageError::InvalidInput("stored traffic configuration is invalid")
-            })?;
+            let (config, status) = match serde_json::from_str::<SourceConfig>(&config) {
+                Ok(parsed) => (parsed, status),
+                Err(_) => (
+                    SourceConfig {
+                        name: String::new(),
+                        enabled: false,
+                        auth_mode: AuthMode::None,
+                        traffic_url: String::new(),
+                        login_url: String::new(),
+                        refresh_url: String::new(),
+                        username_field: "email".to_owned(),
+                        password_field: "password".to_owned(),
+                        refresh_token_field: "refresh_token".to_owned(),
+                        access_pointer: "/data/access_token".to_owned(),
+                        refresh_pointer: "/data/refresh_token".to_owned(),
+                        up_pointer: String::new(),
+                        down_pointer: String::new(),
+                        used_pointer: String::new(),
+                        limit_pointer: String::new(),
+                        limit_unit: "bytes".to_owned(),
+                        reset_pointer: String::new(),
+                    },
+                    "invalid_configuration".to_owned(),
+                ),
+            };
             Ok(AdminSource {
                 node_id,
                 has_credential: config.auth_mode != AuthMode::None && !credential.is_empty(),
                 config,
-                snapshot: snapshot
-                    .map(|value| {
-                        serde_json::from_str(&value).map_err(|_| {
-                            StorageError::InvalidInput("stored traffic snapshot is invalid")
-                        })
-                    })
-                    .transpose()?,
+                snapshot: snapshot.and_then(|value| serde_json::from_str(&value).ok()),
                 last_attempt_unix_ms: u64::try_from(attempt).unwrap_or(0),
                 last_success_unix_ms: u64::try_from(success).unwrap_or(0),
                 status,
@@ -369,19 +386,13 @@ impl Storage {
         }
         let old_config: Option<SourceConfig> = old
             .as_ref()
-            .map(|(value, _)| {
-                serde_json::from_str(value).map_err(|_| {
-                    StorageError::InvalidInput("stored traffic configuration is invalid")
-                })
-            })
-            .transpose()?;
+            .and_then(|(value, _)| serde_json::from_str(value).ok());
         let changed_secret = !input.username.is_empty()
             || !input.password.is_empty()
             || !input.bearer_token.is_empty();
         let mut credential = old
             .as_ref()
-            .map(|(_, value)| key.decrypt(value))
-            .transpose()?
+            .and_then(|(_, value)| key.decrypt(value).ok())
             .unwrap_or_default();
         if !input.username.is_empty() || !input.password.is_empty() {
             if input.username.is_empty() || input.password.is_empty() {
@@ -465,7 +476,7 @@ impl Storage {
             .unwrap_or(i64::MAX)
             .saturating_sub(POLL_INTERVAL_MS);
         let mut statement = tx.prepare("SELECT s.node_id,s.config,s.credential,s.generation FROM external_traffic_sources s JOIN nodes n ON n.id=s.node_id
-            WHERE n.disabled_at_ms IS NULL AND json_extract(s.config,'$.enabled')=1 AND s.status!='authentication_required' AND s.last_attempt_ms<=?1
+            WHERE n.disabled_at_ms IS NULL AND CASE WHEN json_valid(s.config) THEN json_extract(s.config,'$.enabled')=1 ELSE 1 END AND s.status!='authentication_required' AND s.last_attempt_ms<=?1
             ORDER BY s.last_attempt_ms,s.node_id LIMIT 8")?;
         let rows = statement.query_map([due], |row| {
             Ok((
@@ -476,22 +487,31 @@ impl Storage {
             ))
         })?;
         let mut sources = Vec::new();
+        let mut invalid = Vec::new();
         for row in rows {
             let (node_id, config, encrypted_credential, generation) = row?;
-            sources.push(DueSource {
-                node_id,
-                config: serde_json::from_str(&config).map_err(|_| {
-                    StorageError::InvalidInput("stored traffic configuration is invalid")
-                })?,
-                encrypted_credential,
-                generation,
-            });
+            match serde_json::from_str(&config) {
+                Ok(config) => sources.push(DueSource {
+                    node_id,
+                    config,
+                    encrypted_credential,
+                    generation,
+                }),
+                Err(_) => invalid.push((node_id, generation)),
+            }
         }
         drop(statement);
+        let attempt_at = i64::try_from(now).unwrap_or(i64::MAX);
+        for (node_id, generation) in &invalid {
+            tx.execute(
+                "UPDATE external_traffic_sources SET last_attempt_ms=?2,status='invalid_configuration' WHERE node_id=?1 AND generation=?3",
+                params![node_id, attempt_at, generation],
+            )?;
+        }
         for source in &sources {
             tx.execute(
                 "UPDATE external_traffic_sources SET last_attempt_ms=?2 WHERE node_id=?1",
-                params![source.node_id, i64::try_from(now).unwrap_or(i64::MAX)],
+                params![source.node_id, attempt_at],
             )?;
         }
         tx.commit()?;
@@ -570,24 +590,37 @@ impl AppState {
     ///
     /// # Errors
     ///
-    /// Returns an error if the clock, storage, or credential encryption fails.
+    /// Returns an error if the clock or initial due-source claim fails.
     pub async fn maintain_external_traffic(&self) -> Result<(), String> {
         let now = crate::current_time().map_err(|error| error.message)?;
         let sources = self
             .database(move |storage| storage.claim_due_traffic_sources(now))
             .await
             .map_err(|error| error.message)?;
+        let poll = |config: SourceConfig, mut credential: Credential, now: u64| async move {
+            let result = poll_source(&config, &mut credential, now).await;
+            (credential, result)
+        };
+        self.sync_claimed_sources(sources, now, poll).await;
+        Ok(())
+    }
+
+    async fn sync_claimed_sources<F, Fut>(&self, sources: Vec<DueSource>, now: u64, mut poll: F)
+    where
+        F: FnMut(SourceConfig, Credential, u64) -> Fut,
+        Fut: Future<Output = (Credential, Result<TrafficSnapshot, &'static str>)>,
+    {
         for source in sources {
             let (snapshot, credential, status) = if let Some(key) = self.traffic_key.as_ref() {
                 match key.decrypt(&source.encrypted_credential) {
-                    Ok(mut credential) => {
-                        let result = poll_source(&source.config, &mut credential, now).await;
-                        let sealed = key
-                            .encrypt(&credential)
-                            .map_err(|error| error.to_string())?;
-                        match result {
-                            Ok(snapshot) => (Some(snapshot), Some(sealed), "ok"),
-                            Err(status) => (None, Some(sealed), status),
+                    Ok(credential) => {
+                        let (updated, result) = poll(source.config, credential, now).await;
+                        match key.encrypt(&updated) {
+                            Ok(sealed) => match result {
+                                Ok(snapshot) => (Some(snapshot), Some(sealed), "ok"),
+                                Err(status) => (None, Some(sealed), status),
+                            },
+                            Err(_) => (None, None, "credential_unavailable"),
                         }
                     }
                     Err(_) => (None, None, "credential_unavailable"),
@@ -597,21 +630,32 @@ impl AppState {
             };
             let node_id = source.node_id;
             let generation = source.generation;
-            self.database(move |storage| {
-                storage.complete_traffic_source(
-                    &node_id,
-                    &generation,
-                    credential.as_deref(),
-                    snapshot.as_ref(),
-                    status,
-                    now,
-                )
-            })
-            .await
-            .map_err(|error| error.message)?;
+            let logged_node_id = node_id.clone();
+            if let Err(error) = self
+                .database(move |storage| {
+                    storage.complete_traffic_source(
+                        &node_id,
+                        &generation,
+                        credential.as_deref(),
+                        snapshot.as_ref(),
+                        status,
+                        now,
+                    )
+                })
+                .await
+            {
+                tracing::warn!(
+                    node_id = %logged_node_id,
+                    error = %error.message,
+                    "could not persist external traffic poll result"
+                );
+            }
         }
-        Ok(())
     }
+}
+
+fn credential_fits_envelope(credential: &Credential) -> bool {
+    serde_json::to_vec(credential).is_ok_and(|bytes| bytes.len() <= MAX_SECRET_BYTES)
 }
 
 async fn poll_source(
@@ -619,46 +663,70 @@ async fn poll_source(
     credential: &mut Credential,
     now: u64,
 ) -> Result<TrafficSnapshot, &'static str> {
+    let request = |url, method, body: Option<Value>, token: Option<String>| async move {
+        request_json(&url, method, body.as_ref(), token.as_deref()).await
+    };
+    poll_source_with(config, credential, now, request).await
+}
+
+async fn poll_source_with<F, Fut>(
+    config: &SourceConfig,
+    credential: &mut Credential,
+    now: u64,
+    mut request: F,
+) -> Result<TrafficSnapshot, &'static str>
+where
+    F: FnMut(Url, reqwest::Method, Option<Value>, Option<String>) -> Fut,
+    Fut: Future<Output = Result<Value, &'static str>>,
+{
     let traffic_url = validate_url(&config.traffic_url).map_err(|_| "invalid_configuration")?;
+    let mut freshly_authenticated = false;
     let mut token = match config.auth_mode {
         AuthMode::None => None,
         AuthMode::Bearer => Some(credential.bearer_token.clone()),
         AuthMode::LoginRefresh => {
             if credential.access_token.is_empty() {
-                authenticate(config, credential).await?;
+                authenticate_with(config, credential, &mut request).await?;
+                freshly_authenticated = true;
             }
             Some(credential.access_token.clone())
         }
     };
     let mut response =
-        request_json(&traffic_url, reqwest::Method::GET, None, token.as_deref()).await;
+        request(traffic_url.clone(), reqwest::Method::GET, None, token.clone()).await;
     if matches!(response, Err("authentication_required"))
         && config.auth_mode == AuthMode::LoginRefresh
+        && !freshly_authenticated
     {
         if credential.refresh_token.is_empty() {
-            authenticate(config, credential).await?;
+            authenticate_with(config, credential, &mut request).await?;
         } else {
-            match refresh(config, credential).await {
+            match refresh_with(config, credential, &mut request).await {
                 Ok(()) => {}
                 // Only an explicit HTTP 401/403 permits one password-login attempt.
                 // Invalid refresh responses and transient failures never trigger login.
                 Err("refresh_http_authentication_rejected") => {
-                    authenticate(config, credential).await?;
+                    authenticate_with(config, credential, &mut request).await?;
                 }
                 Err(status) => return Err(status),
             }
         }
         token = Some(credential.access_token.clone());
-        response = request_json(&traffic_url, reqwest::Method::GET, None, token.as_deref()).await;
+        response = request(traffic_url, reqwest::Method::GET, None, token).await;
     }
     let value = response?;
     parse_snapshot(config, &value, now)
 }
 
-async fn authenticate(
+async fn authenticate_with<F, Fut>(
     config: &SourceConfig,
     credential: &mut Credential,
-) -> Result<(), &'static str> {
+    request: &mut F,
+) -> Result<(), &'static str>
+where
+    F: FnMut(Url, reqwest::Method, Option<Value>, Option<String>) -> Fut,
+    Fut: Future<Output = Result<Value, &'static str>>,
+{
     let url = validate_url(&config.login_url).map_err(|_| "invalid_configuration")?;
     let mut fields = serde_json::Map::new();
     fields.insert(
@@ -670,16 +738,36 @@ async fn authenticate(
         Value::String(credential.password.clone()),
     );
     let body = Value::Object(fields);
-    let value = request_json(&url, reqwest::Method::POST, Some(&body), None).await?;
-    let access = json_string(&value, &config.access_pointer).ok_or("authentication_required")?;
-    access.clone_into(&mut credential.access_token);
-    json_string(&value, &config.refresh_pointer)
-        .unwrap_or_default()
-        .clone_into(&mut credential.refresh_token);
+    let value = request(url, reqwest::Method::POST, Some(body), None).await?;
+    let access = match token_field(&value, &config.access_pointer) {
+        TokenField::Value(token) => token,
+        TokenField::Oversized => return Err("invalid_data"),
+        TokenField::Missing => return Err("authentication_required"),
+    };
+    let next_refresh = match token_field(&value, &config.refresh_pointer) {
+        TokenField::Value(token) => token,
+        TokenField::Missing => "",
+        TokenField::Oversized => return Err("invalid_data"),
+    };
+    let mut updated = credential.clone();
+    access.clone_into(&mut updated.access_token);
+    next_refresh.clone_into(&mut updated.refresh_token);
+    if !credential_fits_envelope(&updated) {
+        return Err("invalid_data");
+    }
+    *credential = updated;
     Ok(())
 }
 
-async fn refresh(config: &SourceConfig, credential: &mut Credential) -> Result<(), &'static str> {
+async fn refresh_with<F, Fut>(
+    config: &SourceConfig,
+    credential: &mut Credential,
+    request: &mut F,
+) -> Result<(), &'static str>
+where
+    F: FnMut(Url, reqwest::Method, Option<Value>, Option<String>) -> Fut,
+    Fut: Future<Output = Result<Value, &'static str>>,
+{
     let url = validate_url(&config.refresh_url).map_err(|_| "invalid_configuration")?;
     let mut fields = serde_json::Map::new();
     fields.insert(
@@ -687,7 +775,7 @@ async fn refresh(config: &SourceConfig, credential: &mut Credential) -> Result<(
         Value::String(credential.refresh_token.clone()),
     );
     let body = Value::Object(fields);
-    let value = request_json(&url, reqwest::Method::POST, Some(&body), None)
+    let value = request(url, reqwest::Method::POST, Some(body), None)
         .await
         .map_err(|status| match status {
             // request_json uses this status only for an HTTP 401/403 response.
@@ -696,13 +784,43 @@ async fn refresh(config: &SourceConfig, credential: &mut Credential) -> Result<(
             "invalid_data" => "authentication_required",
             status => status,
         })?;
-    let access = json_string(&value, &config.access_pointer).ok_or("authentication_required")?;
-    let next = json_string(&value, &config.refresh_pointer)
-        .unwrap_or(&credential.refresh_token)
-        .to_owned();
-    access.clone_into(&mut credential.access_token);
-    credential.refresh_token = next;
+    let access = match token_field(&value, &config.access_pointer) {
+        TokenField::Value(token) => token,
+        TokenField::Oversized => return Err("invalid_data"),
+        TokenField::Missing => return Err("authentication_required"),
+    };
+    let next = match token_field(&value, &config.refresh_pointer) {
+        TokenField::Value(token) => token.to_owned(),
+        TokenField::Missing => credential.refresh_token.clone(),
+        TokenField::Oversized => return Err("invalid_data"),
+    };
+    let mut updated = credential.clone();
+    access.clone_into(&mut updated.access_token);
+    updated.refresh_token = next;
+    if !credential_fits_envelope(&updated) {
+        return Err("invalid_data");
+    }
+    *credential = updated;
     Ok(())
+}
+
+enum TokenField<'a> {
+    Missing,
+    Oversized,
+    Value(&'a str),
+}
+
+fn token_field<'a>(value: &'a Value, pointer: &str) -> TokenField<'a> {
+    let Some(raw) = value.pointer(pointer).and_then(Value::as_str) else {
+        return TokenField::Missing;
+    };
+    if raw.is_empty() {
+        return TokenField::Missing;
+    }
+    if raw.len() > MAX_SECRET_BYTES {
+        return TokenField::Oversized;
+    }
+    TokenField::Value(raw)
 }
 
 fn json_string<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
@@ -771,27 +889,58 @@ fn parse_snapshot(
     })
 }
 
+fn extract_literal_ip(url: &Url) -> Option<IpAddr> {
+    let host = url.host_str()?;
+    let unbracketed = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    unbracketed.parse::<IpAddr>().ok()
+}
+
+enum OutboundTarget<'a> {
+    LiteralIp,
+    ResolvedDomain(&'a str, Vec<SocketAddr>),
+}
+
+async fn resolve_public_target(url: &Url) -> Result<OutboundTarget<'_>, &'static str> {
+    let host = url.host_str().ok_or("invalid_configuration")?;
+    let port = url.port_or_known_default().ok_or("invalid_configuration")?;
+    if let Some(ip) = extract_literal_ip(url) {
+        if !public_ip(ip) {
+            return Err("private_address_rejected");
+        }
+        return Ok(OutboundTarget::LiteralIp);
+    }
+    let addresses = tokio::time::timeout(DNS_TIMEOUT, lookup_host((host, port)))
+        .await
+        .map_err(|_| "provider_unavailable")?
+        .map_err(|_| "provider_unavailable")?;
+    let resolved: Vec<SocketAddr> = addresses
+        .map(|address| SocketAddr::new(address.ip(), port))
+        .collect();
+    if resolved.is_empty() {
+        return Err("provider_unavailable");
+    }
+    if resolved.iter().any(|address| !public_ip(address.ip())) {
+        return Err("private_address_rejected");
+    }
+    Ok(OutboundTarget::ResolvedDomain(host, resolved))
+}
+
 async fn request_json(
     url: &Url,
     method: reqwest::Method,
     body: Option<&Value>,
     token: Option<&str>,
 ) -> Result<Value, &'static str> {
-    let host = url.host_str().ok_or("invalid_configuration")?;
-    let port = url.port_or_known_default().ok_or("invalid_configuration")?;
-    let mut addresses = lookup_host((host, port))
-        .await
-        .map_err(|_| "provider_unavailable")?;
-    let first = addresses.next().ok_or("provider_unavailable")?;
-    if !public_ip(first.ip()) || addresses.any(|address| !public_ip(address.ip())) {
-        return Err("private_address_rejected");
-    }
+    let target = resolve_public_target(url).await?;
     let mut builder = Client::builder()
         .redirect(Policy::none())
         .timeout(Duration::from_secs(10))
         .no_proxy();
-    if host.parse::<IpAddr>().is_err() {
-        builder = builder.resolve(host, SocketAddr::new(first.ip(), port));
+    if let OutboundTarget::ResolvedDomain(host, addresses) = target {
+        builder = builder.resolve_to_addrs(host, &addresses);
     }
     let client = builder.build().map_err(|_| "provider_unavailable")?;
     let mut request = client.request(method, url.clone());
@@ -913,5 +1062,281 @@ mod tests {
         let response =
             json!({"data":{"up":"1.5","down":200,"billed":250,"quota":2,"reset":"next"}});
         assert!(parse_snapshot(&source, &response, 1).is_err());
+    }
+
+    fn state_with_key() -> (tempfile::TempDir, AppState, CredentialKey) {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("traffic.key");
+        fs::write(&key_path, [7_u8; 32]).unwrap();
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let mut config = crate::ServiceConfig::with_database(dir.path().join("senlun.db"));
+        config.traffic_key_file = Some(key_path.clone());
+        let state = AppState::open(&config).unwrap();
+        let key = CredentialKey::from_file(&key_path).unwrap();
+        (dir, state, key)
+    }
+
+    fn enroll_synthetic_node(state: &AppState, name: &str) -> String {
+        let now = crate::storage::unix_time_ms().unwrap();
+        let secret = state.storage.create_enrollment(600, now).unwrap();
+        let request = senlun_protocol::EnrollmentRequest {
+            protocol_version: senlun_protocol::PROTOCOL_VERSION,
+            node_name: name.to_owned(),
+            agent_version: "test".to_owned(),
+            region: "SG".to_owned(),
+            group: String::new(),
+        };
+        let token_hash = crate::storage::hash_token(&secret.token);
+        state
+            .storage
+            .enroll(&request, &token_hash, 100, now)
+            .unwrap()
+            .node_id
+    }
+
+    fn save_enabled_source(state: &AppState, key: &CredentialKey, node_id: &str, name: &str) {
+        let mut source = config();
+        source.name = name.to_owned();
+        source.traffic_url = "https://example.invalid/usage".to_owned();
+        let input = SourceInput {
+            config: source,
+            username: String::new(),
+            password: String::new(),
+            bearer_token: String::new(),
+        };
+        state
+            .storage
+            .save_traffic_source(node_id, input, key)
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn per_source_encrypt_and_persistence_failures_do_not_stall_remaining_sources() {
+        let (_dir, state, key) = state_with_key();
+        let node_a = enroll_synthetic_node(&state, "synthetic-a");
+        let node_b = enroll_synthetic_node(&state, "synthetic-b");
+        let node_c = enroll_synthetic_node(&state, "synthetic-c");
+        save_enabled_source(&state, &key, &node_a, "source-a");
+        save_enabled_source(&state, &key, &node_b, "source-b");
+        save_enabled_source(&state, &key, &node_c, "source-c");
+
+        let prior_snapshot = TrafficSnapshot {
+            up_bytes: 10,
+            down_bytes: 20,
+            used_bytes: 30,
+            limit_bytes: None,
+            reset_at: None,
+            fetched_at_unix_ms: 1_000,
+        };
+        let encoded_prior = serde_json::to_string(&prior_snapshot).unwrap();
+        state
+            .storage
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE external_traffic_sources SET snapshot=?2,last_success_ms=1000,status='ok' WHERE node_id=?1",
+                params![node_a, encoded_prior],
+            )
+            .unwrap();
+
+        let now = u64::try_from(POLL_INTERVAL_MS).unwrap() + 10_000;
+        let claimed = state.storage.claim_due_traffic_sources(now).unwrap();
+        assert_eq!(claimed.len(), 3);
+
+        // Fail persistence only for node_b; node_a fails encryption; node_c must still finish.
+        let trigger = format!(
+            "CREATE TRIGGER fail_source_b BEFORE UPDATE ON external_traffic_sources
+             WHEN NEW.node_id = '{node_b}' BEGIN SELECT RAISE(ABORT, 'synthetic db failure'); END;"
+        );
+        state
+            .storage
+            .connection()
+            .unwrap()
+            .execute_batch(&trigger)
+            .unwrap();
+
+        let poll = |cfg: SourceConfig, mut credential: Credential, ts: u64| async move {
+            if cfg.name == "source-a" {
+                credential.access_token = "a".repeat(MAX_SECRET_BYTES);
+            }
+            let snapshot = TrafficSnapshot {
+                up_bytes: 100,
+                down_bytes: 200,
+                used_bytes: 300,
+                limit_bytes: None,
+                reset_at: None,
+                fetched_at_unix_ms: ts,
+            };
+            (credential, Ok(snapshot))
+        };
+        state.sync_claimed_sources(claimed, now, poll).await;
+
+        let listed = state.storage.list_traffic_sources().unwrap();
+        let result_a = listed.iter().find(|item| item.node_id == node_a).unwrap();
+        assert_eq!(result_a.status, "credential_unavailable");
+        assert_eq!(result_a.last_success_unix_ms, 1_000);
+        assert_eq!(result_a.snapshot.as_ref().unwrap().used_bytes, 30);
+
+        let result_c = listed.iter().find(|item| item.node_id == node_c).unwrap();
+        assert_eq!(result_c.status, "ok");
+        assert_eq!(result_c.last_success_unix_ms, now);
+        assert_eq!(result_c.snapshot.as_ref().unwrap().used_bytes, 300);
+    }
+
+    #[test]
+    fn corrupt_stored_config_does_not_block_claiming_healthy_sources() {
+        let (_dir, state, key) = state_with_key();
+        let syntax_bad = enroll_synthetic_node(&state, "synthetic-syntax-bad");
+        let schema_bad = enroll_synthetic_node(&state, "synthetic-schema-bad");
+        let good_node = enroll_synthetic_node(&state, "synthetic-good");
+        save_enabled_source(&state, &key, &syntax_bad, "syntax-bad-source");
+        save_enabled_source(&state, &key, &schema_bad, "schema-bad-source");
+        save_enabled_source(&state, &key, &good_node, "good-source");
+        {
+            let db = state.storage.connection().unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources SET config='{broken json' WHERE node_id=?1",
+                [&syntax_bad],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE external_traffic_sources SET config='{\"enabled\":true}' WHERE node_id=?1",
+                [&schema_bad],
+            )
+            .unwrap();
+        }
+
+        let now = u64::try_from(POLL_INTERVAL_MS).unwrap() + 10_000;
+        let claimed = state.storage.claim_due_traffic_sources(now).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].node_id, good_node);
+        for node_id in [&syntax_bad, &schema_bad] {
+            let status: String = state
+                .storage
+                .connection()
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM external_traffic_sources WHERE node_id=?1",
+                    [node_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, "invalid_configuration");
+        }
+        let listed = state.storage.list_traffic_sources().unwrap();
+        assert_eq!(listed.len(), 3);
+        let broken = listed
+            .iter()
+            .find(|item| item.node_id == syntax_bad)
+            .unwrap();
+        assert_eq!(broken.status, "invalid_configuration");
+        save_enabled_source(&state, &key, &syntax_bad, "repaired-source");
+        let repaired = state.storage.list_traffic_sources().unwrap();
+        let fixed = repaired
+            .iter()
+            .find(|item| item.node_id == syntax_bad)
+            .unwrap();
+        assert_eq!(fixed.config.name, "repaired-source");
+    }
+
+    fn login_refresh_config() -> SourceConfig {
+        let mut source = config();
+        source.auth_mode = AuthMode::LoginRefresh;
+        source.traffic_url = "https://example.invalid/usage".to_owned();
+        source.login_url = "https://example.invalid/login".to_owned();
+        source.refresh_url = "https://example.invalid/refresh".to_owned();
+        source.username_field = "email".to_owned();
+        source.password_field = "password".to_owned();
+        source.refresh_token_field = "refresh_token".to_owned();
+        source.access_pointer = "/access".to_owned();
+        source.refresh_pointer = "/refresh".to_owned();
+        source
+    }
+
+    #[tokio::test]
+    async fn fresh_login_does_not_relogin_on_immediate_auth_rejection() {
+        let source = login_refresh_config();
+        let mut credential = Credential {
+            username: "synthetic-user".to_owned(),
+            password: "synthetic-password".to_owned(),
+            ..Credential::default()
+        };
+        let login_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&login_calls);
+        let request = move |url: Url, _method, _body, _token| {
+            let counter = std::sync::Arc::clone(&counter);
+            async move {
+                if url.path() == "/login" {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    return Ok(json!({"access": "fresh-access", "refresh": "fresh-refresh"}));
+                }
+                Err("authentication_required")
+            }
+        };
+        let Err(err) = poll_source_with(&source, &mut credential, 100, request).await else {
+            panic!("expected immediate 401/403 after fresh login to fail");
+        };
+        assert_eq!(err, "authentication_required");
+        assert_eq!(login_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn oversized_single_or_combined_tokens_return_invalid_data_and_preserve_credential() {
+        let source = login_refresh_config();
+        let base = Credential {
+            username: "synthetic-user".to_owned(),
+            password: "synthetic-password".to_owned(),
+            access_token: "kept-access".to_owned(),
+            refresh_token: "kept-refresh".to_owned(),
+            ..Credential::default()
+        };
+
+        let cases = [
+            ("a".repeat(MAX_SECRET_BYTES + 1), "small-refresh".to_owned()),
+            ("small-access".to_owned(), "r".repeat(MAX_SECRET_BYTES + 1)),
+            ("x".repeat(2_500), "y".repeat(2_500)),
+        ];
+        for (access, refresh) in cases {
+            let mut existing = base.clone();
+            let mut req = move |_url, _method, _body, _token| {
+                let access = access.clone();
+                let refresh = refresh.clone();
+                async move { Ok(json!({"access": access, "refresh": refresh})) }
+            };
+            let refresh_err = refresh_with(&source, &mut existing, &mut req)
+                .await
+                .unwrap_err();
+            assert_eq!(refresh_err, "invalid_data");
+            assert_eq!(existing.access_token, "kept-access");
+            assert_eq!(existing.refresh_token, "kept-refresh");
+
+            let auth_err = authenticate_with(&source, &mut existing, &mut req)
+                .await
+                .unwrap_err();
+            assert_eq!(auth_err, "invalid_data");
+            assert_eq!(existing.access_token, "kept-access");
+            assert_eq!(existing.refresh_token, "kept-refresh");
+        }
+    }
+
+    #[tokio::test]
+    async fn ipv6_literal_urls_parse_without_brackets_and_reject_non_public_addresses() {
+        let doc_v6 = Url::parse("https://[2001:db8::1]/usage").unwrap();
+        let loopback_v6 = Url::parse("https://[::1]/usage").unwrap();
+        let doc_v4 = Url::parse("https://198.51.100.10/usage").unwrap();
+        assert_eq!(
+            extract_literal_ip(&doc_v6),
+            Some("2001:db8::1".parse().unwrap())
+        );
+        assert_eq!(
+            extract_literal_ip(&loopback_v6),
+            Some("::1".parse().unwrap())
+        );
+        for url in [doc_v6, loopback_v6, doc_v4] {
+            let Err(status) = resolve_public_target(&url).await else {
+                panic!("non-public literal address must be rejected");
+            };
+            assert_eq!(status, "private_address_rejected");
+        }
     }
 }
