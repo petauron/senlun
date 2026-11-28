@@ -533,6 +533,7 @@ impl Storage {
         let Some(node_id) = node_id else {
             return Err(StorageError::Unauthorized);
         };
+        validate_snapshot_integers(snapshot)?;
 
         let duplicate: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM snapshots WHERE node_id=?1 AND sample_id=?2)
@@ -1234,6 +1235,45 @@ pub(crate) fn unix_time_ms() -> Result<u64, StorageError> {
         .as_millis()
         .try_into()
         .map_err(|_| StorageError::Database(rusqlite::Error::InvalidQuery))
+}
+
+pub(crate) fn validate_snapshot_integers(snapshot: &SystemSnapshot) -> Result<(), StorageError> {
+    let required = [
+        snapshot.collected_at_unix_ms,
+        snapshot.uptime_seconds,
+        snapshot.memory_total_bytes,
+        snapshot.memory_used_bytes,
+        snapshot.swap_total_bytes,
+        snapshot.swap_used_bytes,
+        snapshot.disk_total_bytes,
+        snapshot.disk_used_bytes,
+        snapshot.network_receive_bytes_per_second,
+        snapshot.network_transmit_bytes_per_second,
+        snapshot.network_total_received_bytes,
+        snapshot.network_total_transmitted_bytes,
+    ];
+    let out_of_range = |value: u64| i64::try_from(value).is_err();
+    if required.into_iter().any(out_of_range)
+        || [
+            snapshot.process_count,
+            snapshot.tcp_connection_count,
+            snapshot.udp_connection_count,
+        ]
+        .into_iter()
+        .flatten()
+        .any(out_of_range)
+        || snapshot.gpus.iter().flatten().any(|gpu| {
+            [gpu.memory_total_bytes, gpu.memory_used_bytes]
+                .into_iter()
+                .flatten()
+                .any(out_of_range)
+        })
+    {
+        return Err(StorageError::InvalidInput(
+            "snapshot integer field is out of range",
+        ));
+    }
+    Ok(())
 }
 
 fn to_i64(value: u64) -> Result<i64, StorageError> {

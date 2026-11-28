@@ -2,6 +2,7 @@
 //! cancelled callers do not discard queued samples or bypass deduplication.
 use crate::storage::{Storage, StorageError};
 use crate::{ApiError, HANDLER_TIMEOUT, map_storage_error, session_gate};
+use rusqlite::TransactionBehavior;
 use senlun_protocol::{ProbeBatch, SystemSnapshot};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{Semaphore, mpsc, oneshot};
@@ -120,8 +121,11 @@ impl Storage {
         &self,
         inputs: &[&Input],
     ) -> Result<Vec<Result<(), StorageError>>, StorageError> {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut db = self.connection()?;
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut results = Vec::with_capacity(inputs.len());
         for input in inputs {
             tx.execute_batch("SAVEPOINT ingest_item")?;
