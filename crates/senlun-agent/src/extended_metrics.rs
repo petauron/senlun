@@ -6,7 +6,7 @@ use std::io::Read;
 use std::time::Duration;
 #[cfg(any(target_os = "linux", test))]
 use std::time::Instant;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 use std::{fs, path::Path};
 
 use senlun_protocol::{GpuSnapshot, MAX_GPU_DEVICES};
@@ -15,7 +15,7 @@ use crate::system_command::{self, SystemCommand};
 
 #[cfg(any(target_os = "linux", test))]
 const MAX_PROC_BYTES: usize = 8 * 1024 * 1024;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 const MAX_PROCESS_ENTRIES: usize = 131_072;
 #[cfg(target_os = "linux")]
 const MAX_SMALL_FILE_BYTES: u64 = 4096;
@@ -115,18 +115,20 @@ fn collect_local(_gpu_enabled: bool) -> ExtendedSnapshot {
     ExtendedSnapshot::default()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", test))]
 fn count_processes(root: &Path, started: Instant) -> Option<u64> {
     let mut count = 0_u64;
     for (index, entry) in fs::read_dir(root).ok()?.enumerate() {
         if index >= MAX_PROCESS_ENTRIES || started.elapsed() > COUNTER_BUDGET {
             return None;
         }
-        let entry = entry.ok()?;
+        let Ok(entry) = entry else {
+            continue;
+        };
         let name = entry.file_name();
         if !name.is_empty()
             && name.as_encoded_bytes().iter().all(u8::is_ascii_digit)
-            && entry.file_type().ok()?.is_dir()
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
         {
             count += 1;
         }
@@ -469,5 +471,20 @@ mod tests {
         assert!(!collector.enabled);
         assert!(!collector.amd_enabled);
         assert!(!collector.nvidia_enabled);
+    }
+
+    #[test]
+    fn count_processes_skips_non_pid_files_and_detects_missing_root() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join("1")).unwrap();
+        fs::create_dir(root.path().join("42")).unwrap();
+        fs::create_dir(root.path().join("self")).unwrap();
+        fs::write(root.path().join("99"), b"not a directory").unwrap();
+
+        assert_eq!(count_processes(root.path(), Instant::now()), Some(2));
+        assert_eq!(
+            count_processes(&root.path().join("missing"), Instant::now()),
+            None
+        );
     }
 }
