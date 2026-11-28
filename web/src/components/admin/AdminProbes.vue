@@ -62,7 +62,10 @@ function resetDraft(): void {
 }
 
 function editTask(task: ProbeTask): void {
-  draft.value = { ...task, node_ids: [...task.node_ids] }
+  draft.value = {
+    ...task,
+    node_ids: [...task.node_ids],
+  }
   persistedNodeIds.value = [...task.node_ids]
   guardGlobalScope.value = shouldGuardGlobalScope(task)
   confirmGlobalScope.value = false

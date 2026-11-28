@@ -44,7 +44,11 @@ export function buildAssignableNodes(
     })
   }
 
-  for (const id of [...selectedIds, ...persistedIds]) {
+  const candidateIds = [
+    ...selectedIds,
+    ...persistedIds,
+  ]
+  for (const id of candidateIds) {
     if (seen.has(id))
       continue
     seen.add(id)

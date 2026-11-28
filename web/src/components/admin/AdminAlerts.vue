@@ -93,7 +93,11 @@ function resetRule(): void {
 }
 
 function editRule(item: AlertRule): void {
-  rule.value = { ...item, node_ids: [...item.node_ids], channel_ids: [...item.channel_ids] }
+  rule.value = {
+    ...item,
+    node_ids: [...item.node_ids],
+    channel_ids: [...item.channel_ids],
+  }
   persistedNodeIds.value = [...item.node_ids]
   guardGlobalScope.value = shouldGuardGlobalScope(item)
   confirmGlobalScope.value = false
