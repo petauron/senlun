@@ -14,6 +14,8 @@ pub const MAX_GPU_DEVICES: usize = 16;
 
 /// Fixed one-shot Shanghai TCP route monitoring; never an executable or command.
 pub const RETURN_ROUTE_SCHEMA_VERSION: u16 = 1;
+/// Fixed v1 Service running lease duration for return-route tasks.
+pub const RETURN_ROUTE_LEASE_MS: u64 = 480_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -64,6 +66,8 @@ pub struct ReturnRouteOutcome {
 
 /// Fixed one-shot IP streaming/AI unlock and Google region check; never an executable or command.
 pub const IP_UNLOCK_SCHEMA_VERSION: u16 = 1;
+/// Fixed v1 Service running lease duration for IP unlock tasks.
+pub const IP_UNLOCK_LEASE_MS: u64 = 120_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

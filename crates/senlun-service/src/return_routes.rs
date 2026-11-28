@@ -14,7 +14,8 @@ use axum::{
 use rusqlite::{Connection, Transaction};
 use rusqlite::{OptionalExtension, params};
 use senlun_protocol::{
-    RETURN_ROUTE_SCHEMA_VERSION, ReturnRouteClaim, ReturnRouteOutcome, ReturnRouteTask,
+    RETURN_ROUTE_LEASE_MS, RETURN_ROUTE_SCHEMA_VERSION, ReturnRouteClaim, ReturnRouteOutcome,
+    ReturnRouteTask,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -337,7 +338,21 @@ impl Storage {
             |r| r.get(0),
         )?;
         let task: Option<ReturnRouteTask> = if input.available && active < 2 {
-            tx.query_row("SELECT id,family,address FROM return_route_checks WHERE node_id=?1 AND state='pending' AND expires_at_ms>?2 ORDER BY created_at_ms LIMIT 1",params![node,integer(now)],|r|Ok(ReturnRouteTask{id:r.get(0)?,family:r.get(1)?,address:r.get(2)?,expires_at_unix_ms:now+480_000})).optional()?
+            tx.query_row(
+                "SELECT id,family,address FROM return_route_checks \
+                 WHERE node_id=?1 AND state='pending' AND expires_at_ms>?2 \
+                 ORDER BY created_at_ms LIMIT 1",
+                params![node, integer(now)],
+                |r| {
+                    Ok(ReturnRouteTask {
+                        id: r.get(0)?,
+                        family: r.get(1)?,
+                        address: r.get(2)?,
+                        expires_at_unix_ms: now.saturating_add(RETURN_ROUTE_LEASE_MS),
+                    })
+                },
+            )
+            .optional()?
         } else {
             None
         };
@@ -480,5 +495,106 @@ mod tests {
         decorate(&options, &mut invalidated);
         assert_eq!(invalidated["return_routes"][0]["address_changed"], true);
         assert_eq!(invalidated["return_routes"][0]["carriers"], json!([]));
+    }
+
+    #[test]
+    fn finish_accepts_server_anchored_timestamp_and_enforces_lease_expiry() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = Storage::open(&dir.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+        let now = 1_800_000_000_000_u64;
+        let secret = storage.create_enrollment(600, now).unwrap();
+        let enrolled = storage
+            .enroll(
+                &senlun_protocol::EnrollmentRequest {
+                    protocol_version: senlun_protocol::PROTOCOL_VERSION,
+                    node_name: "Route Lease QA".to_owned(),
+                    agent_version: "0.5.0".to_owned(),
+                    region: "SG".to_owned(),
+                    group: String::new(),
+                },
+                &crate::storage::hash_token(&secret.token),
+                100,
+                now,
+            )
+            .unwrap();
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO metrics.node_state(node_id,last_seen_at_ms) VALUES(?1,?2)",
+                params![enrolled.node_id, integer(now)],
+            )
+            .unwrap();
+        let mut options = NodeOptions {
+            id: enrolled.node_id.clone(),
+            name: "Route Lease QA".to_owned(),
+            currency: "CNY".to_owned(),
+            traffic_limit_type: "sum".to_owned(),
+            traffic_reset_day: 1,
+            ..NodeOptions::default()
+        };
+        storage
+            .save_node_options(&enrolled.node_id, &mut options)
+            .unwrap();
+        // Seed a synthetic RFC 5737 documentation IPv4 in the temp DB
+        // so the test never embeds a routable public IP address.
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE node_options SET data=json_set(data, '$.ipv4', ?2) WHERE node_id=?1",
+                params![enrolled.node_id, "198.51.100.10"],
+            )
+            .unwrap();
+
+        let claim = ReturnRouteClaim {
+            schema_version: RETURN_ROUTE_SCHEMA_VERSION,
+            agent_version: "0.5.0".to_owned(),
+            available: true,
+        };
+        assert!(
+            storage
+                .claim_route_check(&enrolled.agent_token, &claim, now)
+                .unwrap()
+                .is_none()
+        );
+        storage
+            .start_route_check(&enrolled.node_id, 4, now, 90)
+            .unwrap();
+        let claimed_at = now + 1000;
+        let task = storage
+            .claim_route_check(&enrolled.agent_token, &claim, claimed_at)
+            .unwrap()
+            .unwrap();
+        assert_eq!(task.expires_at_unix_ms, claimed_at + RETURN_ROUTE_LEASE_MS);
+
+        // New Agent derives checked_at from expires_at_unix_ms - TTL + monotonic elapsed.
+        let derived_checked_at = (task.expires_at_unix_ms - RETURN_ROUTE_LEASE_MS) + 25_000;
+        // Expired submission after the fixed v1 lease is still rejected by Service.
+        assert!(
+            storage
+                .finish_route_check(
+                    &enrolled.agent_token,
+                    ReturnRouteOutcome {
+                        id: task.id.clone(),
+                        report: Some(sample_report("198.51.100.10", derived_checked_at)),
+                        error: None,
+                    },
+                    task.expires_at_unix_ms,
+                )
+                .is_err()
+        );
+        // Valid submission within the lease succeeds regardless of Agent wall-clock skew.
+        storage
+            .finish_route_check(
+                &enrolled.agent_token,
+                ReturnRouteOutcome {
+                    id: task.id,
+                    report: Some(sample_report("198.51.100.10", derived_checked_at)),
+                    error: None,
+                },
+                claimed_at + 26_000,
+            )
+            .unwrap();
     }
 }

@@ -1,28 +1,32 @@
 //! One fixed, opt-in, one-shot Shanghai TCP monitoring task at a time.
 //! Existing Agent authentication stays in the HTTP client. The reviewed child
 //! receives only a parsed address/family, an empty environment and private tmp.
-use std::{net::IpAddr, path::Path, process::Stdio, time::Duration};
+use std::{
+    net::IpAddr,
+    path::Path,
+    process::Stdio,
+    time::{Duration, Instant},
+};
 
 use reqwest::{Client, StatusCode, Url};
 use senlun_protocol::{
-    CarrierRoute, RETURN_ROUTE_SCHEMA_VERSION, ReturnRouteClaim, ReturnRouteOutcome,
-    ReturnRouteReport, ReturnRouteTask,
+    CarrierRoute, RETURN_ROUTE_LEASE_MS, RETURN_ROUTE_SCHEMA_VERSION, ReturnRouteClaim,
+    ReturnRouteOutcome, ReturnRouteReport, ReturnRouteTask,
 };
 use tokio::{io::AsyncReadExt, process::Command, task::JoinHandle};
-use uuid::Uuid;
+
+use crate::task_lease::{
+    ClaimValidation, ResultDelivery, TaskLease, post_result, validate_claimed_task,
+};
 
 const COLLECTOR: &str = include_str!("shanghai-routes.sh");
 const REVISION: &str = "db52fc60523320fc4a34b5c369f28be38df21d13";
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(u64::MAX, |d| {
-            u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 const POLL: Duration = Duration::from_secs(15);
 const MAX_RESPONSE: usize = 16 * 1024;
+const COLLECT_TIMEOUT: Duration = Duration::from_secs(410);
+const MAX_SCRIPT_TIMEOUT_SECONDS: u64 = 390;
+// Reserve GNU `timeout -k 5s` kill grace plus 1s scheduling margin before outer deadline.
+const SCRIPT_KILL_MARGIN_SECONDS: u64 = 6;
 
 pub struct RouteRunner(JoinHandle<()>);
 impl RouteRunner {
@@ -79,30 +83,13 @@ async fn run(client: Client, url: Url, token: String) {
     let Ok(result_url) = url.join("api/v1/agents/return-routes/result") else {
         return;
     };
-    let mut pending: Option<ReturnRouteOutcome> = None;
-    let mut deadline = 0;
+    let mut pending: Option<(ReturnRouteOutcome, Instant)> = None;
     loop {
-        if let Some(outcome) = &pending {
-            if now_ms() >= deadline {
-                pending = None;
-            } else {
-                match client
-                    .post(result_url.clone())
-                    .bearer_auth(&token)
-                    .json(outcome)
-                    .send()
-                    .await
-                {
-                    Ok(response) if response.status() == StatusCode::UNAUTHORIZED => return,
-                    Ok(response)
-                        if response.status().is_success()
-                            || response.status() == StatusCode::CONFLICT
-                            || response.status() == StatusCode::BAD_REQUEST =>
-                    {
-                        pending = None;
-                    }
-                    _ => {}
-                }
+        if let Some((outcome, deadline)) = &pending {
+            match post_result(&client, &result_url, &token, outcome, *deadline).await {
+                ResultDelivery::Unauthorized => return,
+                ResultDelivery::Done => pending = None,
+                ResultDelivery::Retry => {}
             }
         }
         if pending.is_none() {
@@ -111,6 +98,7 @@ async fn run(client: Client, url: Url, token: String) {
                 agent_version: env!("CARGO_PKG_VERSION").to_owned(),
                 available: available(),
             };
+            let claim_started = Instant::now();
             if let Ok(mut response) = client
                 .post(claim_url.clone())
                 .bearer_auth(&token)
@@ -133,19 +121,40 @@ async fn run(client: Client, url: Url, token: String) {
                     if let Ok(Some(task)) =
                         serde_json::from_slice::<Option<ReturnRouteTask>>(&bytes)
                     {
-                        let now = now_ms();
-                        if task.expires_at_unix_ms > now
-                            && task.expires_at_unix_ms <= now.saturating_add(540_000)
-                            && Uuid::parse_str(&task.id).is_ok()
-                        {
-                            deadline = task.expires_at_unix_ms;
-                            let result = collect(&task).await;
-                            pending = Some(ReturnRouteOutcome {
-                                id: task.id,
-                                report: result.as_ref().ok().cloned(),
-                                error: result.err().map(str::to_owned),
-                            });
-                            continue;
+                        let claim_received = Instant::now();
+                        match validate_claimed_task(
+                            &task.id,
+                            task.expires_at_unix_ms,
+                            RETURN_ROUTE_LEASE_MS,
+                            claim_started,
+                            claim_received,
+                        ) {
+                            ClaimValidation::Ignore => {}
+                            ClaimValidation::InvalidTask { deadline } => {
+                                pending = Some((
+                                    ReturnRouteOutcome {
+                                        id: task.id,
+                                        report: None,
+                                        error: Some("invalid_task".to_owned()),
+                                    },
+                                    deadline,
+                                ));
+                                continue;
+                            }
+                            ClaimValidation::Ready(lease) => {
+                                let result = collect(&task, lease).await;
+                                if Instant::now() < lease.deadline {
+                                    pending = Some((
+                                        ReturnRouteOutcome {
+                                            id: task.id,
+                                            report: result.as_ref().ok().cloned(),
+                                            error: result.err().map(str::to_owned),
+                                        },
+                                        lease.deadline,
+                                    ));
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -155,7 +164,18 @@ async fn run(client: Client, url: Url, token: String) {
     }
 }
 
-async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static str> {
+fn script_timeout_seconds(remaining: Duration) -> Option<u64> {
+    remaining
+        .as_secs()
+        .checked_sub(SCRIPT_KILL_MARGIN_SECONDS)
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| seconds.min(MAX_SCRIPT_TIMEOUT_SECONDS))
+}
+
+async fn collect(
+    task: &ReturnRouteTask,
+    lease: TaskLease,
+) -> Result<ReturnRouteReport, &'static str> {
     let address: IpAddr = task.address.parse().map_err(|_| "invalid_task")?;
     if !matches!(
         (task.family, address),
@@ -163,11 +183,22 @@ async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static s
     ) {
         return Err("invalid_task");
     }
+    let collection_deadline = lease.collection_deadline(Instant::now(), COLLECT_TIMEOUT);
     let work = tempfile::tempdir().map_err(|_| "unavailable")?;
     let script = work.path().join("shanghai-routes.sh");
-    tokio::fs::write(&script, COLLECTOR)
-        .await
-        .map_err(|_| "unavailable")?;
+    tokio::time::timeout_at(
+        collection_deadline.into(),
+        tokio::fs::write(&script, COLLECTOR),
+    )
+    .await
+    .map_err(|_| "timeout")?
+    .map_err(|_| "unavailable")?;
+    let Some(script_timeout_secs) = collection_deadline
+        .checked_duration_since(Instant::now())
+        .and_then(script_timeout_seconds)
+    else {
+        return Err("timeout");
+    };
     let executable = ["/usr/bin/bash", "/bin/bash"]
         .into_iter()
         .find(|p| Path::new(p).is_file())
@@ -176,9 +207,10 @@ async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static s
         .into_iter()
         .find(|p| Path::new(p).is_file())
         .ok_or("unavailable")?;
+    let script_timeout = format!("{script_timeout_secs}s");
     let mut command = Command::new(timeout);
     command
-        .args(["-k", "5s", "390s", executable])
+        .args(["-k", "5s", &script_timeout, executable])
         .arg(&script)
         .arg(task.family.to_string())
         .arg(address.to_string())
@@ -195,7 +227,7 @@ async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static s
     let mut child = command.spawn().map_err(|_| "unavailable")?;
     let output = child.stdout.take().ok_or("unavailable")?;
     let mut bytes = Vec::new();
-    let result = tokio::time::timeout(Duration::from_secs(410), async {
+    let result = tokio::time::timeout_at(collection_deadline.into(), async {
         output
             .take((MAX_RESPONSE + 1) as u64)
             .read_to_end(&mut bytes)
@@ -216,7 +248,7 @@ async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static s
     })
     .await;
     match result {
-        Ok(Ok(())) => parse(&bytes, task),
+        Ok(Ok(())) => parse(&bytes, task, lease.checked_at_unix_ms(Instant::now())),
         Ok(Err(error)) => {
             let _ = child.kill().await;
             Err(error)
@@ -228,10 +260,14 @@ async fn collect(task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static s
     }
 }
 
-fn parse(bytes: &[u8], task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'static str> {
+fn parse(
+    bytes: &[u8],
+    task: &ReturnRouteTask,
+    checked_at_unix_ms: u64,
+) -> Result<ReturnRouteReport, &'static str> {
     let text = std::str::from_utf8(bytes).map_err(|_| "invalid_result")?;
     let mut lines = text.lines();
-    let checked = lines
+    let _checked = lines
         .next()
         .and_then(|v| v.strip_prefix("CHECKED_AT="))
         .and_then(|v| v.parse::<u64>().ok())
@@ -276,7 +312,40 @@ fn parse(bytes: &[u8], task: &ReturnRouteTask) -> Result<ReturnRouteReport, &'st
         protocol: "tcp".to_owned(),
         source: "TcpQuality".to_owned(),
         revision: REVISION.to_owned(),
-        checked_at_unix_ms: checked.saturating_mul(1000),
+        checked_at_unix_ms,
         carriers,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_uses_server_anchored_timestamp_while_validating_header() {
+        let task = ReturnRouteTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            family: 4,
+            address: "198.51.100.10".to_owned(),
+            expires_at_unix_ms: 1_700_000_480_000,
+        };
+        let output = concat!(
+            "CHECKED_AT=100\n",
+            "OK|上海|电信|tcp|telecom.example.test|CN2GIA\n",
+            "OK|上海|联通|tcp|unicom.example.test|4837\n",
+            "OK|上海|移动|tcp|mobile.example.test|CMI\n"
+        );
+        let report = parse(output.as_bytes(), &task, 1_700_000_012_345).unwrap();
+        assert_eq!(report.checked_at_unix_ms, 1_700_000_012_345);
+        assert!(parse(b"missing-header\n", &task, 1_700_000_012_345).is_err());
+    }
+
+    #[test]
+    fn script_timeout_reserves_kill_grace_before_deadline() {
+        assert_eq!(script_timeout_seconds(Duration::from_secs(410)), Some(390));
+        assert_eq!(script_timeout_seconds(Duration::from_secs(60)), Some(54));
+        assert_eq!(script_timeout_seconds(Duration::from_secs(7)), Some(1));
+        assert_eq!(script_timeout_seconds(Duration::from_millis(6_999)), None);
+        assert_eq!(script_timeout_seconds(Duration::ZERO), None);
+    }
 }

@@ -3,7 +3,7 @@
 //! an isolated, credential-free HTTPS client with bounded reads and timeouts.
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use reqwest::{
@@ -14,12 +14,15 @@ use reqwest::{
     tls,
 };
 use senlun_protocol::{
-    GoogleUnlockStatus, IP_UNLOCK_SCHEMA_VERSION, IpUnlockClaim, IpUnlockOutcome, IpUnlockReport,
-    IpUnlockTask, UnlockServiceStatus,
+    GoogleUnlockStatus, IP_UNLOCK_LEASE_MS, IP_UNLOCK_SCHEMA_VERSION, IpUnlockClaim,
+    IpUnlockOutcome, IpUnlockReport, IpUnlockTask, UnlockServiceStatus,
 };
 use serde_json::Value;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
+
+use crate::task_lease::{
+    ClaimValidation, ResultDelivery, TaskLease, post_result, validate_claimed_task,
+};
 
 const POLL: Duration = Duration::from_secs(15);
 const MAX_CONTROL_RESPONSE: usize = 16 * 1024;
@@ -54,14 +57,6 @@ const CHATGPT_UNSUPPORTED_REGIONS: &[&str] = &[
     "AF", "BY", "CN", "CU", "HK", "IR", "KP", "MO", "RU", "SY", "VE",
 ];
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(u64::MAX, |d| {
-            u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 pub struct UnlockRunner(JoinHandle<()>);
 
 impl UnlockRunner {
@@ -84,30 +79,13 @@ async fn run(client: Client, url: Url, token: String) {
     let Ok(result_url) = url.join("api/v1/agents/ip-unlock/result") else {
         return;
     };
-    let mut pending: Option<IpUnlockOutcome> = None;
-    let mut deadline = 0;
+    let mut pending: Option<(IpUnlockOutcome, Instant)> = None;
     loop {
-        if let Some(outcome) = &pending {
-            if now_ms() >= deadline {
-                pending = None;
-            } else {
-                match client
-                    .post(result_url.clone())
-                    .bearer_auth(&token)
-                    .json(outcome)
-                    .send()
-                    .await
-                {
-                    Ok(response) if response.status() == StatusCode::UNAUTHORIZED => return,
-                    Ok(response)
-                        if response.status().is_success()
-                            || response.status() == StatusCode::CONFLICT
-                            || response.status() == StatusCode::BAD_REQUEST =>
-                    {
-                        pending = None;
-                    }
-                    _ => {}
-                }
+        if let Some((outcome, deadline)) = &pending {
+            match post_result(&client, &result_url, &token, outcome, *deadline).await {
+                ResultDelivery::Unauthorized => return,
+                ResultDelivery::Done => pending = None,
+                ResultDelivery::Retry => {}
             }
         }
         if pending.is_none() {
@@ -116,6 +94,7 @@ async fn run(client: Client, url: Url, token: String) {
                 agent_version: env!("CARGO_PKG_VERSION").to_owned(),
                 available: true,
             };
+            let claim_started = Instant::now();
             if let Ok(mut response) = client
                 .post(claim_url.clone())
                 .bearer_auth(&token)
@@ -137,19 +116,40 @@ async fn run(client: Client, url: Url, token: String) {
                     }
                     let task: Option<IpUnlockTask> = serde_json::from_slice(&bytes).ok().flatten();
                     if let Some(task) = task {
-                        let now = now_ms();
-                        if task.expires_at_unix_ms > now
-                            && task.expires_at_unix_ms <= now.saturating_add(180_000)
-                            && Uuid::parse_str(&task.id).is_ok()
-                        {
-                            deadline = task.expires_at_unix_ms;
-                            let result = collect(&task).await;
-                            pending = Some(IpUnlockOutcome {
-                                id: task.id,
-                                report: result.as_ref().ok().cloned(),
-                                error: result.err().map(str::to_owned),
-                            });
-                            continue;
+                        let claim_received = Instant::now();
+                        match validate_claimed_task(
+                            &task.id,
+                            task.expires_at_unix_ms,
+                            IP_UNLOCK_LEASE_MS,
+                            claim_started,
+                            claim_received,
+                        ) {
+                            ClaimValidation::Ignore => {}
+                            ClaimValidation::InvalidTask { deadline } => {
+                                pending = Some((
+                                    IpUnlockOutcome {
+                                        id: task.id,
+                                        report: None,
+                                        error: Some("invalid_task".to_owned()),
+                                    },
+                                    deadline,
+                                ));
+                                continue;
+                            }
+                            ClaimValidation::Ready(lease) => {
+                                let result = collect(&task, lease).await;
+                                if Instant::now() < lease.deadline {
+                                    pending = Some((
+                                        IpUnlockOutcome {
+                                            id: task.id,
+                                            report: result.as_ref().ok().cloned(),
+                                            error: result.err().map(str::to_owned),
+                                        },
+                                        lease.deadline,
+                                    ));
+                                    continue;
+                                }
+                            }
                         }
                     }
                 }
@@ -205,7 +205,7 @@ async fn reddit_client(family: u8) -> Option<Client> {
     builder.build().ok()
 }
 
-async fn collect(task: &IpUnlockTask) -> Result<IpUnlockReport, &'static str> {
+async fn collect(task: &IpUnlockTask, lease: TaskLease) -> Result<IpUnlockReport, &'static str> {
     let expected: IpAddr = task.address.parse().map_err(|_| "invalid_task")?;
     if !matches!(
         (task.family, expected),
@@ -213,8 +213,12 @@ async fn collect(task: &IpUnlockTask) -> Result<IpUnlockReport, &'static str> {
     ) {
         return Err("invalid_task");
     }
-    let client = target_client(task.family)?;
-    tokio::time::timeout(TOTAL_TIMEOUT, async {
+    let collection_deadline = lease.collection_deadline(Instant::now(), TOTAL_TIMEOUT);
+    if Instant::now() >= collection_deadline {
+        return Err("timeout");
+    }
+    tokio::time::timeout_at(collection_deadline.into(), async {
+        let client = target_client(task.family)?;
         verify_egress(&client, task.family, expected).await?;
         let ((google, youtube), netflix, disney_plus, chatgpt, reddit, tiktok) = tokio::join!(
             probe_google_and_youtube(&client),
@@ -231,7 +235,7 @@ async fn collect(task: &IpUnlockTask) -> Result<IpUnlockReport, &'static str> {
         Ok(IpUnlockReport {
             family: task.family,
             address: expected.to_string(),
-            checked_at_unix_ms: now_ms(),
+            checked_at_unix_ms: lease.checked_at_unix_ms(Instant::now()),
             google,
             services,
         })
