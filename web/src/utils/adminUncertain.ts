@@ -21,11 +21,12 @@ export interface PendingUncertainTrafficRemoveLock {
   resyncError: string
 }
 
-export type MonitoringConfigDeleteKind = 'probes' | 'channels' | 'alert-rules'
+export type AlertConfigDeleteKind = 'channels' | 'alert-rules'
+export type MonitoringConfigDeleteKind = 'probes' | AlertConfigDeleteKind
 
-export interface PendingUncertainConfigDeleteLock {
+export interface PendingUncertainConfigDeleteLock<K extends MonitoringConfigDeleteKind = MonitoringConfigDeleteKind> {
   key: string
-  kind: MonitoringConfigDeleteKind
+  kind: K
   id: string
   name: string
   message: string
@@ -54,8 +55,8 @@ function defaultAdminNodesViewState(): AdminNodesViewState {
 export const enrollUncertainLock = ref<string | null>(null)
 export const nodeDangerUncertainLocks = ref<Record<string, PendingUncertainDangerLock>>({})
 export const trafficRemoveUncertainLocks = ref<Record<string, PendingUncertainTrafficRemoveLock>>({})
-export const probeDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock>>({})
-export const alertConfigDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock>>({})
+export const probeDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock<'probes'>>>({})
+export const alertConfigDeleteUncertainLocks = ref<Record<string, PendingUncertainConfigDeleteLock<AlertConfigDeleteKind>>>({})
 export const adminNodesViewState = ref<AdminNodesViewState>(defaultAdminNodesViewState())
 
 export function isSameActiveSession(startGeneration: number, loggedIn: boolean): boolean {
@@ -100,7 +101,7 @@ export function setTrafficRemoveUncertainLock(
 export function setProbeDeleteUncertainLock(
   startGeneration: number,
   loggedIn: boolean,
-  entry: PendingUncertainConfigDeleteLock,
+  entry: PendingUncertainConfigDeleteLock<'probes'>,
 ): boolean {
   if (!isSameActiveSession(startGeneration, loggedIn))
     return false
@@ -114,7 +115,7 @@ export function setProbeDeleteUncertainLock(
 export function setAlertConfigDeleteUncertainLock(
   startGeneration: number,
   loggedIn: boolean,
-  entry: PendingUncertainConfigDeleteLock,
+  entry: PendingUncertainConfigDeleteLock<AlertConfigDeleteKind>,
 ): boolean {
   if (!isSameActiveSession(startGeneration, loggedIn))
     return false

@@ -6,6 +6,7 @@ import {
   cloneAlertRule,
   cloneNotificationChannel,
   cloneProbeTask,
+  createClientUuid,
   isAlertRuleDraftDirty,
   isChannelDraftDirty,
   isProbeDraftDirty,
@@ -282,7 +283,39 @@ describe('admin editing helpers', () => {
       missingCount: 1,
       warningLabel: '含 1 个已失效、1 个已停用渠道',
     })
-    expect(summarizeAlertChannels(['stale-ch'], channels).label).toBe('通知渠道：1 个（均已失效）')
+    expect(summarizeAlertChannels(['ch-2'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 1,
+      enabledCount: 0,
+      disabledCount: 1,
+      missingCount: 0,
+      warningLabel: '含 1 个已停用渠道',
+    })
+    expect(summarizeAlertChannels(['stale-ch'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 1,
+      enabledCount: 0,
+      disabledCount: 0,
+      missingCount: 1,
+      warningLabel: '含 1 个已失效渠道',
+    })
+    expect(summarizeAlertChannels(['ch-2', 'stale-ch'], channels)).toEqual({
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: 2,
+      enabledCount: 0,
+      disabledCount: 1,
+      missingCount: 1,
+      warningLabel: '含 1 个已失效、1 个已停用渠道',
+    })
+
+    const uuid1 = createClientUuid()
+    const uuid2 = createClientUuid()
+    expect(uuid1).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(uuid2).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+    expect(uuid1).not.toBe(uuid2)
   })
 
   it('tracks dirty state accurately for probe, channel, and alert rule drafts', () => {

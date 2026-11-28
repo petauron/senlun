@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth'
 import {
   buildAssignableNodes,
   cloneProbeTask,
+  createClientUuid,
   isProbeDraftDirty,
   requiresGlobalScopeConfirmation,
   scrollAndFocusHeading,
@@ -33,11 +34,11 @@ import { ApiError, getSharedApi } from '@/utils/api'
 import { getSessionGeneration } from '@/utils/session'
 
 interface PendingUncertainProbeSave {
-  id: string
+  targetId: string
+  wasExisting: boolean
   name: string
   submitted: ProbeTask
   revision: number
-  existingIdsBeforeSubmit: string[]
   message: string
   resyncError: string
 }
@@ -68,13 +69,14 @@ function blank(): ProbeTask {
 
 const draft = ref<ProbeTask>(blank())
 const baseline = ref<ProbeTask>(blank())
-const persistedNodeIds = ref<string[]>([])
-const guardGlobalScope = ref(false)
+const pendingCreateId = ref('')
 const confirmGlobalScope = ref(false)
 const editRevision = ref(0)
+const refreshBusy = ref(false)
 const removingTarget = ref<PendingProbeRemoveTarget | null>(null)
 const formHeadingRef = ref<HTMLElement | null>(null)
 const pendingUncertainSave = ref<PendingUncertainProbeSave | null>(null)
+const saveValidationError = ref('')
 const pendingDeleteLocks = probeDeleteUncertainLocks
 
 const saveAction = useAdminAction(props.refresh)
@@ -96,9 +98,36 @@ const {
   needsResync: deleteNeedsResync,
 } = deleteAction
 
-const busy = computed(() => saveBusy.value || deleteBusy.value)
+const busy = computed(() => saveBusy.value || deleteBusy.value || refreshBusy.value)
 const hasUnsavedChanges = computed(() => isProbeDraftDirty(draft.value, baseline.value, confirmGlobalScope.value))
+const liveEditingTask = computed(() => {
+  const lookupId = draft.value.id || pendingCreateId.value
+  if (!lookupId)
+    return undefined
+  return props.probes.find(task => task.id === lookupId)
+})
 const editingTaskMissing = computed(() => Boolean(draft.value.id) && !props.probes.some(task => task.id === draft.value.id))
+
+// Always derive #312 persisted scope guard and persisted node IDs from the latest server snapshot (or unconfirmed create submission).
+const persistedScopeSource = computed(() => {
+  if (liveEditingTask.value)
+    return liveEditingTask.value
+  if (draft.value.id)
+    return baseline.value
+  if (pendingUncertainSave.value && pendingUncertainSave.value.targetId === pendingCreateId.value)
+    return pendingUncertainSave.value.submitted
+  return undefined
+})
+const persistedNodeIds = computed(() => persistedScopeSource.value?.node_ids ?? [])
+const guardGlobalScope = computed(() => persistedScopeSource.value
+  ? shouldGuardGlobalScope(persistedScopeSource.value)
+  : false)
+const persistedScopeSignature = computed(() => {
+  const source = persistedScopeSource.value
+  if (!source)
+    return ''
+  return `${source.id}|${source.enabled ? '1' : '0'}|${[...source.node_ids].sort().join(',')}`
+})
 
 const visibleNodes = computed(() => props.nodes.filter(node => !node.hidden && !node.disabled))
 const assignableNodes = computed(() => buildAssignableNodes(props.nodes, draft.value.node_ids, persistedNodeIds.value))
@@ -124,6 +153,11 @@ const removingTargetInvalidReason = computed(() => {
     return `探测任务「${target.name}」在最新同步中已不存在，本次确认已失效，无法执行。`
   return ''
 })
+const removingDiscardsActiveDraft = computed(() => Boolean(
+  removingTarget.value
+  && draft.value.id === removingTarget.value.id
+  && hasUnsavedChanges.value,
+))
 const saveAlert = computed(() => {
   const pending = pendingUncertainSave.value
   if (pending) {
@@ -153,25 +187,28 @@ function scopeSummary(task: ProbeTask): NodeTargetScopeSummary {
   return summarizeNodeTargetScope(task.node_ids, props.nodes)
 }
 
+function focusFormHeading(): void {
+  void nextTick(() => scrollAndFocusHeading(formHeadingRef.value))
+}
+
 function applyResetDraft(clearFeedback = true): void {
   draft.value = blank()
   baseline.value = blank()
-  persistedNodeIds.value = []
-  guardGlobalScope.value = false
+  pendingCreateId.value = ''
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
+  saveValidationError.value = ''
   if (clearFeedback)
     saveAction.clearFeedback()
 }
 
 function applyEditTask(task: ProbeTask, clearFeedback = true): void {
-  const copy = cloneProbeTask(task)
-  draft.value = copy
+  draft.value = cloneProbeTask(task)
   baseline.value = cloneProbeTask(task)
-  persistedNodeIds.value = [...task.node_ids]
-  guardGlobalScope.value = shouldGuardGlobalScope(task)
+  pendingCreateId.value = ''
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
+  saveValidationError.value = ''
   if (clearFeedback)
     saveAction.clearFeedback()
 }
@@ -186,13 +223,19 @@ watch(() => draft.value.node_ids.length, (count) => {
     confirmGlobalScope.value = false
 })
 
+watch(persistedScopeSignature, (next, prev) => {
+  if (next !== prev)
+    confirmGlobalScope.value = false
+})
+
 watch(
   [
     draft,
     confirmGlobalScope,
   ],
   () => {
-    editRevision.value++
+    if (!refreshBusy.value)
+      editRevision.value++
   },
   { deep: true, flush: 'sync' },
 )
@@ -259,13 +302,17 @@ const unregisterDraft = draftRegistry?.register({
   isDirty: () => hasUnsavedChanges.value,
   isBusy: () => busy.value,
   requestRefresh: triggerEl => draftGuard.requestRefresh(async () => {
-    const editingId = draft.value.id
+    const confirmedId = draft.value.id
+    const confirmedRevision = editRevision.value
+    refreshBusy.value = true
     saveAction.clearFeedback()
     try {
       await props.refresh()
+      if (draft.value.id !== confirmedId || editRevision.value !== confirmedRevision)
+        return
       pendingUncertainSave.value = null
-      const live = editingId
-        ? props.probes.find(task => task.id === editingId)
+      const live = confirmedId
+        ? props.probes.find(task => task.id === confirmedId)
         : undefined
       if (live)
         applyEditTask(live, false)
@@ -276,6 +323,9 @@ const unregisterDraft = draftRegistry?.register({
       saveError.value = cause instanceof Error
         ? cause.message
         : String(cause)
+    }
+    finally {
+      refreshBusy.value = false
     }
   }, triggerEl),
 })
@@ -293,17 +343,15 @@ function editTask(task: ProbeTask, event?: MouseEvent): void {
   if (triggerEl)
     triggerEl.focus()
   if (draft.value.id === task.id) {
-    void nextTick(() => scrollAndFocusHeading(formHeadingRef.value))
+    focusFormHeading()
     return
   }
   draftGuard.requestSwitch(
     task.id,
     `探测任务「${task.name}」`,
-    () => {
-      applyEditTask(task)
-      void nextTick(() => scrollAndFocusHeading(formHeadingRef.value))
-    },
+    () => applyEditTask(task),
     triggerEl,
+    focusFormHeading,
   )
 }
 
@@ -355,6 +403,7 @@ function unlockUncertainDelete(key: string): void {
 async function save(): Promise<void> {
   if (editingTaskMissing.value)
     return
+  saveValidationError.value = ''
   const scopeError = validateScopedNodeSelection({
     guardGlobalScope: guardGlobalScope.value,
     selectedIds: draft.value.node_ids,
@@ -363,19 +412,24 @@ async function save(): Promise<void> {
     nodes: props.nodes,
   })
   if (scopeError) {
-    saveError.value = scopeError
+    saveValidationError.value = scopeError
     saveSuccess.value = ''
     return
   }
-  const submitted = cloneProbeTask(draft.value)
+  const wasExisting = Boolean(draft.value.id)
+  if (!wasExisting && !pendingCreateId.value)
+    pendingCreateId.value = createClientUuid()
+  const targetId = wasExisting
+    ? draft.value.id
+    : pendingCreateId.value
+  const submitted = cloneProbeTask({
+    ...draft.value,
+    id: targetId,
+  })
   const submittedRevision = editRevision.value
-  const existingIdsBeforeSubmit = props.probes.map(task => task.id)
   pendingUncertainSave.value = null
   const result = await saveAction.run(async () => {
-    await getSharedApi().post('admin/probes', {
-      ...submitted,
-      id: submitted.id || undefined,
-    })
+    await getSharedApi().post('admin/probes', submitted)
   }, {
     message: '已保存探测任务',
     onCommitted: () => {
@@ -384,11 +438,11 @@ async function save(): Promise<void> {
   })
   if (result === 'uncertain') {
     pendingUncertainSave.value = {
-      id: submitted.id,
+      targetId,
+      wasExisting,
       name: submitted.name,
       submitted,
       revision: submittedRevision,
-      existingIdsBeforeSubmit,
       message: saveError.value,
       resyncError: '',
     }
@@ -396,6 +450,7 @@ async function save(): Promise<void> {
 }
 
 async function resyncSave(): Promise<void> {
+  saveValidationError.value = ''
   const pending = pendingUncertainSave.value
   if (!pending) {
     await saveAction.resync('已重新同步最新状态')
@@ -405,23 +460,37 @@ async function resyncSave(): Promise<void> {
   const ok = await saveAction.resync({
     verify: () => {
       pendingUncertainSave.value = null
-      if (pending.id) {
-        const fresh = props.probes.find(task => task.id === pending.id)
-        if (!fresh) {
-          return {
-            resolved: true,
-            message: `已核实：探测任务「${pending.name}」已不存在`,
+      const fresh = props.probes.find(task => task.id === pending.targetId)
+      if (!fresh) {
+        return {
+          resolved: true,
+          message: pending.wasExisting
+            ? `已核实：探测任务「${pending.name}」已不存在`
+            : `已同步最新状态：列表中尚未出现新探测任务「${pending.name}」，已保留当前输入与同一标识，请核对后再决定是否重新保存。`,
+        }
+      }
+      const applied = !isProbeDraftDirty(pending.submitted, fresh, false)
+      const sameDraftContext = pending.wasExisting
+        ? draft.value.id === pending.targetId
+        : !draft.value.id && pendingCreateId.value === pending.targetId
+      const editedAfterSubmit = sameDraftContext && editRevision.value !== pending.revision
+      if (applied) {
+        if (sameDraftContext) {
+          if (editedAfterSubmit) {
+            if (!pending.wasExisting) {
+              draft.value.id = fresh.id
+              pendingCreateId.value = ''
+            }
+            baseline.value = cloneProbeTask(fresh)
+          }
+          else if (pending.wasExisting) {
+            applyEditTask(fresh, false)
+          }
+          else {
+            applyResetDraft(false)
           }
         }
-        const applied = !isProbeDraftDirty(pending.submitted, fresh, false)
-        if (applied) {
-          const editedAfterSubmit = draft.value.id === pending.id && editRevision.value !== pending.revision
-          if (draft.value.id === pending.id) {
-            if (editedAfterSubmit)
-              baseline.value = cloneProbeTask(fresh)
-            else
-              applyEditTask(fresh, false)
-          }
+        if (pending.wasExisting) {
           return {
             resolved: true,
             message: editedAfterSubmit
@@ -431,28 +500,19 @@ async function resyncSave(): Promise<void> {
         }
         return {
           resolved: true,
-          message: `已同步最新状态：服务端探测任务「${pending.name}」与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。`,
-        }
-      }
-      const previousIds = new Set(pending.existingIdsBeforeSubmit)
-      const created = props.probes.find(task => !previousIds.has(task.id) && !isProbeDraftDirty({
-        ...pending.submitted,
-        id: task.id,
-      }, task, false))
-      if (created) {
-        const editedAfterSubmit = editRevision.value !== pending.revision
-        if (!editedAfterSubmit)
-          applyResetDraft(false)
-        return {
-          resolved: true,
           message: editedAfterSubmit
-            ? `已核实：新探测任务「${pending.name}」已创建；您之后在表单中的新输入已保留。`
+            ? `已核实：新探测任务「${pending.name}」已创建；您之后的新修改已保留，尚未保存。`
             : `已核实：新探测任务「${pending.name}」已在服务端创建`,
         }
       }
+      if (sameDraftContext && !pending.wasExisting) {
+        draft.value.id = fresh.id
+        pendingCreateId.value = ''
+        baseline.value = cloneProbeTask(fresh)
+      }
       return {
         resolved: true,
-        message: `已同步最新状态：列表中尚未出现新探测任务「${pending.name}」，已保留当前输入，请核对后再决定是否重新保存。`,
+        message: `已同步最新状态：服务端探测任务「${pending.name}」与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。`,
       }
     },
   })
@@ -501,7 +561,7 @@ async function remove(): Promise<void> {
   }
 }
 
-async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<void> {
+async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>): Promise<void> {
   if (!entry) {
     await deleteAction.resync('已重新同步最新状态')
     return
@@ -535,7 +595,8 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
     },
   })
   if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
-    if (draft.value.id === entry.id)
+    // Read-only resync must preserve dirty user edits (surfaced via editingTaskMissing) rather than wiping them.
+    if (draft.value.id === entry.id && !hasUnsavedChanges.value)
       applyResetDraft(false)
     return
   }
@@ -571,7 +632,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
       <p v-if="!probes.length" class="text-sm text-muted-foreground">
         尚无探测任务。Agent 会按配置主动探测并上报结果。
       </p>
-      <ul v-else class="space-y-2">
+      <ul v-else aria-label="探测任务列表" class="space-y-2">
         <li
           v-for="task in probes"
           :key="task.id"
@@ -680,6 +741,9 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
               取消编辑
             </Button>
           </div>
+          <p v-if="saveValidationError" role="alert" class="text-sm text-destructive">
+            {{ saveValidationError }}
+          </p>
           <p v-if="saveAlert" role="alert" class="text-sm text-destructive">
             {{ saveAlert }}
           </p>
@@ -726,6 +790,9 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
           <DialogTitle>删除探测任务</DialogTitle>
           <DialogDescription>确认删除“{{ removingTarget?.name }}”？Agent 将停止执行此任务。</DialogDescription>
         </DialogHeader>
+        <p v-if="removingDiscardsActiveDraft && !removingTargetInvalidReason" class="text-sm text-muted-foreground">
+          当前表单中针对此探测任务的未保存修改也会一并丢弃。
+        </p>
         <p v-if="removingTargetInvalidReason" role="alert" class="text-sm text-destructive">
           {{ removingTargetInvalidReason }}
         </p>

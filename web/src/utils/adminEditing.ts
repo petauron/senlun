@@ -386,17 +386,32 @@ export function summarizeAlertChannels(
         disabledCount++
     }
   }
-  let label = `通知渠道：${uniqueIds.length} 个（均已失效）`
-  if (knownNames.length === 1 && uniqueIds.length === 1)
-    label = `通知渠道：${knownNames[0]}`
-  else if (knownNames.length > 0)
-    label = `通知渠道：${knownNames[0]} 等 ${uniqueIds.length} 个`
-
   const warningParts: string[] = []
   if (missingCount > 0)
     warningParts.push(`${missingCount} 个已失效`)
   if (disabledCount > 0)
     warningParts.push(`${disabledCount} 个已停用`)
+  const warningLabel = warningParts.length > 0
+    ? `含 ${warningParts.join('、')}渠道`
+    : ''
+
+  // Zero enabled delivery channels means alerts only record in-app (matches backend notifications.rs).
+  if (enabledCount === 0) {
+    return {
+      mode: 'in-app-only',
+      label: '仅站内记录（无启用外发渠道）',
+      totalCount: uniqueIds.length,
+      enabledCount,
+      disabledCount,
+      missingCount,
+      warningLabel,
+    }
+  }
+
+  let label = `通知渠道：${knownNames[0]} 等 ${uniqueIds.length} 个`
+  if (knownNames.length === 1 && uniqueIds.length === 1)
+    label = `通知渠道：${knownNames[0]}`
+
   return {
     mode: 'channels',
     label,
@@ -404,10 +419,23 @@ export function summarizeAlertChannels(
     enabledCount,
     disabledCount,
     missingCount,
-    warningLabel: warningParts.length > 0
-      ? `含 ${warningParts.join('、')}渠道`
-      : '',
+    warningLabel,
   }
+}
+
+export function createClientUuid(): string {
+  const bytes = new Uint8Array(16)
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes)
+  }
+  else {
+    for (let index = 0; index < bytes.length; index++)
+      bytes[index] = Math.floor(Math.random() * 256)
+  }
+  bytes[6] = (bytes[6]! & 0x0F) | 0x40
+  bytes[8] = (bytes[8]! & 0x3F) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 export function scrollAndFocusHeading(el: HTMLElement | null): void {

@@ -32,6 +32,7 @@ export interface PendingSwitchAction {
   targetId: string
   targetLabel: string
   apply: () => void
+  onConfirmFocus?: () => void
 }
 
 export type PendingDraftAction = PendingLeaveAction | PendingRefreshAction | PendingSwitchAction
@@ -50,6 +51,7 @@ export function useAdminDraftGuard(options: UseAdminDraftGuardOptions) {
   const isOpen = computed(() => pending.value !== null)
   let resolveLeave: ((leave: boolean) => void) | null = null
   let discardFocusTarget: HTMLElement | null = null
+  let confirmedFocusCallback: (() => void) | null = null
   let beforeUnloadBound = false
 
   function handleBeforeUnload(event: BeforeUnloadEvent): void {
@@ -81,6 +83,7 @@ export function useAdminDraftGuard(options: UseAdminDraftGuardOptions) {
   }
 
   function cancel(): void {
+    confirmedFocusCallback = null
     if (pending.value?.kind === 'leave') {
       settleLeave(false)
       return
@@ -93,19 +96,35 @@ export function useAdminDraftGuard(options: UseAdminDraftGuardOptions) {
     if (!action)
       return
     if (action.kind === 'leave') {
+      confirmedFocusCallback = null
       settleLeave(true)
       return
     }
     pending.value = null
     if (action.kind === 'switch') {
+      if (action.onConfirmFocus) {
+        confirmedFocusCallback = action.onConfirmFocus
+        discardFocusTarget = null
+      }
+      else {
+        confirmedFocusCallback = null
+      }
       action.apply()
       return
     }
+    confirmedFocusCallback = null
     void action.run()
   }
 
   function restoreFocus(event: Event): void {
     event.preventDefault()
+    const afterConfirm = confirmedFocusCallback
+    confirmedFocusCallback = null
+    if (afterConfirm) {
+      discardFocusTarget = null
+      afterConfirm()
+      return
+    }
     if (discardFocusTarget?.isConnected)
       discardFocusTarget.focus()
     discardFocusTarget = null
@@ -126,11 +145,13 @@ export function useAdminDraftGuard(options: UseAdminDraftGuardOptions) {
     targetLabel: string,
     apply: () => void,
     triggerEl?: HTMLElement | null,
+    onConfirmFocus?: () => void,
   ): void {
     if (options.isBusy())
       return
     if (!options.isLoggedIn() || !options.isDirty()) {
       apply()
+      onConfirmFocus?.()
       return
     }
     cancel()
@@ -140,6 +161,7 @@ export function useAdminDraftGuard(options: UseAdminDraftGuardOptions) {
       targetId,
       targetLabel,
       apply,
+      onConfirmFocus,
     }
   }
 

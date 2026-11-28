@@ -2,7 +2,7 @@
 import type { RouteLocationNormalized } from 'vue-router'
 import type { AlertRule, Incident, ManagedNode, NotificationChannel } from '@/utils/admin'
 import type { AlertChannelSummary, NodeTargetScopeSummary } from '@/utils/adminEditing'
-import type { PendingUncertainConfigDeleteLock } from '@/utils/adminUncertain'
+import type { AlertConfigDeleteKind, PendingUncertainConfigDeleteLock } from '@/utils/adminUncertain'
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,6 +18,7 @@ import {
   buildSelectableChannels,
   cloneAlertRule,
   cloneNotificationChannel,
+  createClientUuid,
   isAlertRuleDraftDirty,
   isChannelDraftDirty,
   pruneMissingChannels,
@@ -39,28 +40,28 @@ import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { getSessionGeneration } from '@/utils/session'
 
 interface PendingUncertainChannelSave {
-  id: string
+  targetId: string
+  wasExisting: boolean
   name: string
   enabled: boolean
   urlChanged: boolean
   revision: number
-  existingIdsBeforeSubmit: string[]
   message: string
   resyncError: string
 }
 
 interface PendingUncertainRuleSave {
-  id: string
+  targetId: string
+  wasExisting: boolean
   name: string
   submitted: AlertRule
   revision: number
-  existingIdsBeforeSubmit: string[]
   message: string
   resyncError: string
 }
 
 interface PendingAlertRemoveTarget {
-  kind: 'channels' | 'alert-rules'
+  kind: AlertConfigDeleteKind
   id: string
   name: string
 }
@@ -96,21 +97,23 @@ function emptyRule(): AlertRule {
 
 const channel = ref<NotificationChannel>(emptyChannel())
 const channelBaseline = ref<NotificationChannel>(emptyChannel())
+const pendingNewChannelId = ref('')
 const channelEditRevision = ref(0)
 const pendingUncertainChannelSave = ref<PendingUncertainChannelSave | null>(null)
 const channelFormHeadingRef = ref<HTMLElement | null>(null)
 
 const rule = ref<AlertRule>(emptyRule())
 const ruleBaseline = ref<AlertRule>(emptyRule())
+const pendingNewRuleId = ref('')
 const ruleEditRevision = ref(0)
-const persistedNodeIds = ref<string[]>([])
-const guardGlobalScope = ref(false)
 const confirmGlobalScope = ref(false)
 const pendingUncertainRuleSave = ref<PendingUncertainRuleSave | null>(null)
+const ruleValidationError = ref('')
 const ruleFormHeadingRef = ref<HTMLElement | null>(null)
 
+const refreshBusy = ref(false)
 const removingTarget = ref<PendingAlertRemoveTarget | null>(null)
-const lastDeleteKind = ref<'channels' | 'alert-rules' | null>(null)
+const lastDeleteKind = ref<AlertConfigDeleteKind | null>(null)
 const pendingDeleteLocks = alertConfigDeleteUncertainLocks
 
 const channelAction = useAdminAction(props.refresh)
@@ -140,12 +143,39 @@ const {
   needsResync: deleteNeedsResync,
 } = deleteAction
 
-const busy = computed(() => channelBusy.value || ruleBusy.value || deleteBusy.value)
+const busy = computed(() => channelBusy.value || ruleBusy.value || deleteBusy.value || refreshBusy.value)
 const hasUnsavedChannel = computed(() => isChannelDraftDirty(channel.value, channelBaseline.value))
 const hasUnsavedRule = computed(() => isAlertRuleDraftDirty(rule.value, ruleBaseline.value, confirmGlobalScope.value))
 const hasAnyUnsavedChanges = computed(() => hasUnsavedChannel.value || hasUnsavedRule.value)
+const liveEditingRule = computed(() => {
+  const lookupId = rule.value.id || pendingNewRuleId.value
+  if (!lookupId)
+    return undefined
+  return props.rules.find(item => item.id === lookupId)
+})
 const editingChannelMissing = computed(() => Boolean(channel.value.id) && !props.channels.some(item => item.id === channel.value.id))
 const editingRuleMissing = computed(() => Boolean(rule.value.id) && !props.rules.some(item => item.id === rule.value.id))
+
+// Always derive #312 persisted scope guard and persisted node IDs from the latest server snapshot (or unconfirmed create submission).
+const persistedRuleScopeSource = computed(() => {
+  if (liveEditingRule.value)
+    return liveEditingRule.value
+  if (rule.value.id)
+    return ruleBaseline.value
+  if (pendingUncertainRuleSave.value && pendingUncertainRuleSave.value.targetId === pendingNewRuleId.value)
+    return pendingUncertainRuleSave.value.submitted
+  return undefined
+})
+const persistedNodeIds = computed(() => persistedRuleScopeSource.value?.node_ids ?? [])
+const guardGlobalScope = computed(() => persistedRuleScopeSource.value
+  ? shouldGuardGlobalScope(persistedRuleScopeSource.value)
+  : false)
+const persistedRuleScopeSignature = computed(() => {
+  const source = persistedRuleScopeSource.value
+  if (!source)
+    return ''
+  return `${source.id}|${source.enabled ? '1' : '0'}|${[...source.node_ids].sort().join(',')}`
+})
 
 const dirtyDraftSummary = computed(() => {
   if (hasUnsavedChannel.value && hasUnsavedRule.value)
@@ -209,6 +239,17 @@ const removingTargetInvalidReason = computed(() => {
   return ''
 })
 
+const removingDraftWarning = computed(() => {
+  const target = removingTarget.value
+  if (!target || removingTargetInvalidReason.value)
+    return ''
+  if (target.kind === 'channels' && channel.value.id === target.id && hasUnsavedChannel.value)
+    return '当前通知渠道表单中针对此渠道的未保存修改也会一并丢弃（不影响告警规则草稿）。'
+  if (target.kind === 'alert-rules' && rule.value.id === target.id && hasUnsavedRule.value)
+    return '当前告警规则表单中针对此规则的未保存修改也会一并丢弃（不影响通知渠道草稿）。'
+  return ''
+})
+
 const removingDialogTitle = computed(() => removingTarget.value?.kind === 'channels'
   ? '删除通知渠道'
   : '删除告警规则')
@@ -268,9 +309,18 @@ function ruleChannelSummary(item: AlertRule): AlertChannelSummary {
   return summarizeAlertChannels(item.channel_ids, props.channels)
 }
 
+function focusChannelFormHeading(): void {
+  void nextTick(() => scrollAndFocusHeading(channelFormHeadingRef.value))
+}
+
+function focusRuleFormHeading(): void {
+  void nextTick(() => scrollAndFocusHeading(ruleFormHeadingRef.value))
+}
+
 function applyResetChannel(clearFeedback = true): void {
   channel.value = emptyChannel()
   channelBaseline.value = emptyChannel()
+  pendingNewChannelId.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
@@ -279,6 +329,7 @@ function applyResetChannel(clearFeedback = true): void {
 function applyEditChannel(item: NotificationChannel, clearFeedback = true): void {
   channel.value = cloneNotificationChannel(item)
   channelBaseline.value = cloneNotificationChannel(item)
+  pendingNewChannelId.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
@@ -287,10 +338,10 @@ function applyEditChannel(item: NotificationChannel, clearFeedback = true): void
 function applyResetRule(clearFeedback = true): void {
   rule.value = emptyRule()
   ruleBaseline.value = emptyRule()
-  persistedNodeIds.value = []
-  guardGlobalScope.value = false
+  pendingNewRuleId.value = ''
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
+  ruleValidationError.value = ''
   if (clearFeedback)
     ruleAction.clearFeedback()
 }
@@ -298,10 +349,10 @@ function applyResetRule(clearFeedback = true): void {
 function applyEditRule(item: AlertRule, clearFeedback = true): void {
   rule.value = cloneAlertRule(item)
   ruleBaseline.value = cloneAlertRule(item)
-  persistedNodeIds.value = [...item.node_ids]
-  guardGlobalScope.value = shouldGuardGlobalScope(item)
+  pendingNewRuleId.value = ''
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
+  ruleValidationError.value = ''
   if (clearFeedback)
     ruleAction.clearFeedback()
 }
@@ -311,8 +362,14 @@ watch(() => rule.value.node_ids.length, (count) => {
     confirmGlobalScope.value = false
 })
 
+watch(persistedRuleScopeSignature, (next, prev) => {
+  if (next !== prev)
+    confirmGlobalScope.value = false
+})
+
 watch(channel, () => {
-  channelEditRevision.value++
+  if (!refreshBusy.value)
+    channelEditRevision.value++
 }, { deep: true, flush: 'sync' })
 
 watch(
@@ -321,7 +378,8 @@ watch(
     confirmGlobalScope,
   ],
   () => {
-    ruleEditRevision.value++
+    if (!refreshBusy.value)
+      ruleEditRevision.value++
   },
   { deep: true, flush: 'sync' },
 )
@@ -416,31 +474,37 @@ const unregisterDraft = draftRegistry?.register({
   isDirty: () => hasAnyUnsavedChanges.value,
   isBusy: () => busy.value,
   requestRefresh: triggerEl => draftGuard.requestRefresh(async () => {
-    const editingChannelId = channel.value.id
-    const editingRuleId = rule.value.id
+    const confirmedChannelId = channel.value.id
+    const confirmedChannelRevision = channelEditRevision.value
+    const confirmedRuleId = rule.value.id
+    const confirmedRuleRevision = ruleEditRevision.value
     const hadDirtyChannel = hasUnsavedChannel.value
     const hadDirtyRule = hasUnsavedRule.value
+    refreshBusy.value = true
     channelAction.clearFeedback()
     ruleAction.clearFeedback()
     try {
       await props.refresh()
-      pendingUncertainChannelSave.value = null
-      pendingUncertainRuleSave.value = null
-      const liveChannel = editingChannelId
-        ? props.channels.find(item => item.id === editingChannelId)
-        : undefined
-      if (liveChannel)
-        applyEditChannel(liveChannel, false)
-      else
-        applyResetChannel(false)
-
-      const liveRule = editingRuleId
-        ? props.rules.find(item => item.id === editingRuleId)
-        : undefined
-      if (liveRule)
-        applyEditRule(liveRule, false)
-      else
-        applyResetRule(false)
+      if (channel.value.id === confirmedChannelId && channelEditRevision.value === confirmedChannelRevision) {
+        pendingUncertainChannelSave.value = null
+        const liveChannel = confirmedChannelId
+          ? props.channels.find(item => item.id === confirmedChannelId)
+          : undefined
+        if (liveChannel)
+          applyEditChannel(liveChannel, false)
+        else
+          applyResetChannel(false)
+      }
+      if (rule.value.id === confirmedRuleId && ruleEditRevision.value === confirmedRuleRevision) {
+        pendingUncertainRuleSave.value = null
+        const liveRule = confirmedRuleId
+          ? props.rules.find(item => item.id === confirmedRuleId)
+          : undefined
+        if (liveRule)
+          applyEditRule(liveRule, false)
+        else
+          applyResetRule(false)
+      }
     }
     catch (cause) {
       const detail = cause instanceof Error
@@ -450,6 +514,9 @@ const unregisterDraft = draftRegistry?.register({
         channelError.value = detail
       if (hadDirtyRule || !hadDirtyChannel)
         ruleError.value = detail
+    }
+    finally {
+      refreshBusy.value = false
     }
   }, triggerEl),
 })
@@ -467,22 +534,20 @@ function editChannel(item: NotificationChannel, event?: MouseEvent): void {
   if (triggerEl)
     triggerEl.focus()
   if (channel.value.id === item.id) {
-    void nextTick(() => scrollAndFocusHeading(channelFormHeadingRef.value))
+    focusChannelFormHeading()
     return
   }
   if (!hasUnsavedChannel.value) {
     applyEditChannel(item)
-    void nextTick(() => scrollAndFocusHeading(channelFormHeadingRef.value))
+    focusChannelFormHeading()
     return
   }
   draftGuard.requestSwitch(
     `channel:${item.id}`,
     `通知渠道「${item.name}」`,
-    () => {
-      applyEditChannel(item)
-      void nextTick(() => scrollAndFocusHeading(channelFormHeadingRef.value))
-    },
+    () => applyEditChannel(item),
     triggerEl,
+    focusChannelFormHeading,
   )
 }
 
@@ -515,22 +580,20 @@ function editRule(item: AlertRule, event?: MouseEvent): void {
   if (triggerEl)
     triggerEl.focus()
   if (rule.value.id === item.id) {
-    void nextTick(() => scrollAndFocusHeading(ruleFormHeadingRef.value))
+    focusRuleFormHeading()
     return
   }
   if (!hasUnsavedRule.value) {
     applyEditRule(item)
-    void nextTick(() => scrollAndFocusHeading(ruleFormHeadingRef.value))
+    focusRuleFormHeading()
     return
   }
   draftGuard.requestSwitch(
     `rule:${item.id}`,
     `告警规则「${item.name}」`,
-    () => {
-      applyEditRule(item)
-      void nextTick(() => scrollAndFocusHeading(ruleFormHeadingRef.value))
-    },
+    () => applyEditRule(item),
     triggerEl,
+    focusRuleFormHeading,
   )
 }
 
@@ -556,6 +619,7 @@ function cancelRuleEdit(event?: MouseEvent): void {
 
 function clearMissingChannels(): void {
   rule.value.channel_ids = pruneMissingChannels(rule.value.channel_ids, props.channels)
+  ruleValidationError.value = ''
   ruleError.value = ''
 }
 
@@ -588,16 +652,21 @@ function unlockUncertainDelete(key: string): void {
 async function saveChannel(): Promise<void> {
   if (editingChannelMissing.value)
     return
-  const payload = cloneNotificationChannel(channel.value)
+  const wasExisting = Boolean(channel.value.id)
+  if (!wasExisting && !pendingNewChannelId.value)
+    pendingNewChannelId.value = createClientUuid()
+  const targetId = wasExisting
+    ? channel.value.id
+    : pendingNewChannelId.value
+  const payload = cloneNotificationChannel({
+    ...channel.value,
+    id: targetId,
+  })
   const submittedRevision = channelEditRevision.value
   const urlChanged = payload.url !== channelBaseline.value.url
-  const existingIdsBeforeSubmit = props.channels.map(item => item.id)
   pendingUncertainChannelSave.value = null
   const result = await channelAction.run(async () => {
-    await getSharedApi().post('admin/channels', {
-      ...payload,
-      id: payload.id || undefined,
-    })
+    await getSharedApi().post('admin/channels', payload)
   }, {
     message: '已保存通知渠道',
     onCommitted: () => {
@@ -605,14 +674,14 @@ async function saveChannel(): Promise<void> {
     },
   })
   if (result === 'uncertain') {
-    // Store minimal metadata only (never copy webhook URL / tokens into secondary state or alerts).
+    // Store minimal metadata only (never copy webhook URL / tokens into secondary state, shared locks, or alerts).
     pendingUncertainChannelSave.value = {
-      id: payload.id,
+      targetId,
+      wasExisting,
       name: payload.name,
       enabled: Boolean(payload.enabled),
       urlChanged,
       revision: submittedRevision,
-      existingIdsBeforeSubmit,
       message: channelError.value,
       resyncError: '',
     }
@@ -629,60 +698,57 @@ async function resyncChannel(): Promise<void> {
   const ok = await channelAction.resync({
     verify: () => {
       pendingUncertainChannelSave.value = null
-      if (pending.id) {
-        const fresh = props.channels.find(item => item.id === pending.id)
-        if (!fresh) {
-          return {
-            resolved: true,
-            message: `已核实：通知渠道「${pending.name}」已不存在`,
-          }
-        }
-        const metaMatches = fresh.name === pending.name && Boolean(fresh.enabled) === pending.enabled
-        const editedAfterSubmit = channel.value.id === pending.id && channelEditRevision.value !== pending.revision
-        if (metaMatches && !pending.urlChanged) {
-          if (channel.value.id === pending.id) {
-            if (editedAfterSubmit)
-              channelBaseline.value = cloneNotificationChannel(fresh)
-            else
-              applyEditChannel(fresh, false)
-          }
-          return {
-            resolved: true,
-            message: editedAfterSubmit
-              ? `已核实：上次提交的通知渠道「${pending.name}」修改已在服务端生效；您之后的新修改已保留，尚未保存。`
-              : `已核实：通知渠道「${pending.name}」的修改已在服务端生效`,
-          }
-        }
-        if (channel.value.id === pending.id && !editedAfterSubmit && !isChannelDraftDirty(channel.value, fresh)) {
-          applyEditChannel(fresh, false)
-          return {
-            resolved: true,
-            message: `已核实：通知渠道「${pending.name}」的修改已在服务端生效`,
-          }
-        }
+      const fresh = props.channels.find(item => item.id === pending.targetId)
+      if (!fresh) {
         return {
           resolved: true,
-          message: `已同步最新状态：服务端通知渠道「${pending.name}」与刚才提交不一致或包含 URL 变更，已保留当前输入，请核对后再决定是否重新保存。`,
+          message: pending.wasExisting
+            ? `已核实：通知渠道「${pending.name}」已不存在`
+            : `已同步最新状态：列表中尚未出现本次提交的新通知渠道「${pending.name}」，已保留当前输入与同一标识，请核对后再决定是否重新保存。`,
         }
       }
-      const previousIds = new Set(pending.existingIdsBeforeSubmit)
-      const created = props.channels.find(item => !previousIds.has(item.id)
-        && item.name === pending.name
-        && Boolean(item.enabled) === pending.enabled)
-      if (created) {
-        const editedAfterSubmit = channelEditRevision.value !== pending.revision
-        if (!editedAfterSubmit)
+      const sameDraftContext = pending.wasExisting
+        ? channel.value.id === pending.targetId
+        : !channel.value.id && pendingNewChannelId.value === pending.targetId
+      const editedAfterSubmit = sameDraftContext && channelEditRevision.value !== pending.revision
+      const exactUneditedMatch = sameDraftContext
+        && !editedAfterSubmit
+        && !isChannelDraftDirty({
+          ...channel.value,
+          id: fresh.id,
+        }, fresh)
+      if (exactUneditedMatch) {
+        if (pending.wasExisting)
+          applyEditChannel(fresh, false)
+        else
           applyResetChannel(false)
         return {
           resolved: true,
-          message: editedAfterSubmit
-            ? `已核实：新通知渠道「${pending.name}」已创建；您之后在表单中的新输入已保留。`
+          message: pending.wasExisting
+            ? `已核实：通知渠道「${pending.name}」的修改已在服务端生效`
             : `已核实：新通知渠道「${pending.name}」已在服务端创建`,
+        }
+      }
+      const metaMatches = fresh.name === pending.name && Boolean(fresh.enabled) === pending.enabled
+      if (sameDraftContext && !pending.wasExisting) {
+        channel.value.id = fresh.id
+        pendingNewChannelId.value = ''
+        channelBaseline.value = cloneNotificationChannel(fresh)
+      }
+      else if (sameDraftContext && metaMatches && !pending.urlChanged) {
+        channelBaseline.value = cloneNotificationChannel(fresh)
+      }
+      if (metaMatches && !pending.urlChanged && editedAfterSubmit) {
+        return {
+          resolved: true,
+          message: pending.wasExisting
+            ? `已核实：上次提交的通知渠道「${pending.name}」修改已在服务端生效；您之后的新修改已保留，尚未保存。`
+            : `已核实：新通知渠道「${pending.name}」已创建；您之后的新修改已保留，尚未保存。`,
         }
       }
       return {
         resolved: true,
-        message: `已同步最新状态：列表中尚未出现新通知渠道「${pending.name}」，已保留当前输入，请核对后再决定是否重新保存。`,
+        message: `已同步最新状态：服务端已存在该标识对应的通知渠道「${pending.name}」，但当前表单包含未核实或更新后的修改（含 URL 变更），已保留当前输入，请核对后再决定是否重新保存。`,
       }
     },
   })
@@ -693,6 +759,7 @@ async function resyncChannel(): Promise<void> {
 async function saveRule(): Promise<void> {
   if (editingRuleMissing.value)
     return
+  ruleValidationError.value = ''
   const scopeError = validateScopedNodeSelection({
     guardGlobalScope: guardGlobalScope.value,
     selectedIds: rule.value.node_ids,
@@ -701,25 +768,30 @@ async function saveRule(): Promise<void> {
     nodes: props.nodes,
   })
   if (scopeError) {
-    ruleError.value = scopeError
+    ruleValidationError.value = scopeError
     ruleSuccess.value = ''
     return
   }
   const channelValidationError = validateAlertDraftChannels(rule.value.channel_ids, props.channels)
   if (channelValidationError) {
-    ruleError.value = channelValidationError
+    ruleValidationError.value = channelValidationError
     ruleSuccess.value = ''
     return
   }
-  const submitted = cloneAlertRule(rule.value)
+  const wasExisting = Boolean(rule.value.id)
+  if (!wasExisting && !pendingNewRuleId.value)
+    pendingNewRuleId.value = createClientUuid()
+  const targetId = wasExisting
+    ? rule.value.id
+    : pendingNewRuleId.value
+  const submitted = cloneAlertRule({
+    ...rule.value,
+    id: targetId,
+  })
   const submittedRevision = ruleEditRevision.value
-  const existingIdsBeforeSubmit = props.rules.map(item => item.id)
   pendingUncertainRuleSave.value = null
   const result = await ruleAction.run(async () => {
-    await getSharedApi().post('admin/alert-rules', {
-      ...submitted,
-      id: submitted.id || undefined,
-    })
+    await getSharedApi().post('admin/alert-rules', submitted)
   }, {
     message: '已保存告警规则',
     onCommitted: () => {
@@ -728,11 +800,11 @@ async function saveRule(): Promise<void> {
   })
   if (result === 'uncertain') {
     pendingUncertainRuleSave.value = {
-      id: submitted.id,
+      targetId,
+      wasExisting,
       name: submitted.name,
       submitted,
       revision: submittedRevision,
-      existingIdsBeforeSubmit,
       message: ruleError.value,
       resyncError: '',
     }
@@ -740,6 +812,7 @@ async function saveRule(): Promise<void> {
 }
 
 async function resyncRule(): Promise<void> {
+  ruleValidationError.value = ''
   const pending = pendingUncertainRuleSave.value
   if (!pending) {
     await ruleAction.resync('已重新同步最新状态')
@@ -749,23 +822,37 @@ async function resyncRule(): Promise<void> {
   const ok = await ruleAction.resync({
     verify: () => {
       pendingUncertainRuleSave.value = null
-      if (pending.id) {
-        const fresh = props.rules.find(item => item.id === pending.id)
-        if (!fresh) {
-          return {
-            resolved: true,
-            message: `已核实：告警规则「${pending.name}」已不存在`,
+      const fresh = props.rules.find(item => item.id === pending.targetId)
+      if (!fresh) {
+        return {
+          resolved: true,
+          message: pending.wasExisting
+            ? `已核实：告警规则「${pending.name}」已不存在`
+            : `已同步最新状态：列表中尚未出现新告警规则「${pending.name}」，已保留当前输入与同一标识，请核对后再决定是否重新保存。`,
+        }
+      }
+      const applied = !isAlertRuleDraftDirty(pending.submitted, fresh, false)
+      const sameDraftContext = pending.wasExisting
+        ? rule.value.id === pending.targetId
+        : !rule.value.id && pendingNewRuleId.value === pending.targetId
+      const editedAfterSubmit = sameDraftContext && ruleEditRevision.value !== pending.revision
+      if (applied) {
+        if (sameDraftContext) {
+          if (editedAfterSubmit) {
+            if (!pending.wasExisting) {
+              rule.value.id = fresh.id
+              pendingNewRuleId.value = ''
+            }
+            ruleBaseline.value = cloneAlertRule(fresh)
+          }
+          else if (pending.wasExisting) {
+            applyEditRule(fresh, false)
+          }
+          else {
+            applyResetRule(false)
           }
         }
-        const applied = !isAlertRuleDraftDirty(pending.submitted, fresh, false)
-        if (applied) {
-          const editedAfterSubmit = rule.value.id === pending.id && ruleEditRevision.value !== pending.revision
-          if (rule.value.id === pending.id) {
-            if (editedAfterSubmit)
-              ruleBaseline.value = cloneAlertRule(fresh)
-            else
-              applyEditRule(fresh, false)
-          }
+        if (pending.wasExisting) {
           return {
             resolved: true,
             message: editedAfterSubmit
@@ -775,28 +862,19 @@ async function resyncRule(): Promise<void> {
         }
         return {
           resolved: true,
-          message: `已同步最新状态：服务端告警规则「${pending.name}」与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。`,
-        }
-      }
-      const previousIds = new Set(pending.existingIdsBeforeSubmit)
-      const created = props.rules.find(item => !previousIds.has(item.id) && !isAlertRuleDraftDirty({
-        ...pending.submitted,
-        id: item.id,
-      }, item, false))
-      if (created) {
-        const editedAfterSubmit = ruleEditRevision.value !== pending.revision
-        if (!editedAfterSubmit)
-          applyResetRule(false)
-        return {
-          resolved: true,
           message: editedAfterSubmit
-            ? `已核实：新告警规则「${pending.name}」已创建；您之后在表单中的新输入已保留。`
+            ? `已核实：新告警规则「${pending.name}」已创建；您之后的新修改已保留，尚未保存。`
             : `已核实：新告警规则「${pending.name}」已在服务端创建`,
         }
       }
+      if (sameDraftContext && !pending.wasExisting) {
+        rule.value.id = fresh.id
+        pendingNewRuleId.value = ''
+        ruleBaseline.value = cloneAlertRule(fresh)
+      }
       return {
         resolved: true,
-        message: `已同步最新状态：列表中尚未出现新告警规则「${pending.name}」，已保留当前输入，请核对后再决定是否重新保存。`,
+        message: `已同步最新状态：服务端告警规则「${pending.name}」与刚才提交不一致，已保留当前输入，请核对后再决定是否重新保存。`,
       }
     },
   })
@@ -858,7 +936,7 @@ async function remove(): Promise<void> {
   }
 }
 
-async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<void> {
+async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfigDeleteKind>): Promise<void> {
   if (!entry) {
     await deleteAction.resync('已重新同步最新状态')
     return
@@ -898,11 +976,12 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
     },
   })
   if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
+    // Read-only resync must preserve dirty user edits (surfaced via editing*Missing) rather than wiping them.
     if (entry.kind === 'channels') {
-      if (channel.value.id === entry.id)
+      if (channel.value.id === entry.id && !hasUnsavedChannel.value)
         applyResetChannel(false)
     }
-    else if (rule.value.id === entry.id) {
+    else if (rule.value.id === entry.id && !hasUnsavedRule.value) {
       applyResetRule(false)
     }
     return
@@ -939,7 +1018,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
       <p v-if="removingTarget === null && lastDeleteKind === 'channels' && deleteSuccess" role="status" class="text-sm text-success">
         {{ deleteSuccess }}
       </p>
-      <ul v-if="channels.length" class="space-y-2">
+      <ul v-if="channels.length" aria-label="通知渠道列表" class="space-y-2">
         <li
           v-for="item in channels"
           :key="item.id"
@@ -1044,7 +1123,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
       <p v-if="!rules.length" class="text-sm text-muted-foreground">
         尚无告警规则。选择告警条件即可启用站内告警，通知渠道可按需配置。
       </p>
-      <ul v-else class="space-y-2">
+      <ul v-else aria-label="告警规则列表" class="space-y-2">
         <li
           v-for="item in rules"
           :key="item.id"
@@ -1169,6 +1248,9 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
               取消编辑
             </Button>
           </div>
+          <p v-if="ruleValidationError" role="alert" class="text-sm text-destructive">
+            {{ ruleValidationError }}
+          </p>
           <p v-if="ruleAlert" role="alert" class="text-sm text-destructive">
             {{ ruleAlert }}
           </p>
@@ -1259,6 +1341,9 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock): Promise<v
           <DialogTitle>{{ removingDialogTitle }}</DialogTitle>
           <DialogDescription>确认删除“{{ removingTarget?.name }}”？此操作会影响后续告警通知。</DialogDescription>
         </DialogHeader>
+        <p v-if="removingDraftWarning" class="text-sm text-muted-foreground">
+          {{ removingDraftWarning }}
+        </p>
         <p v-if="removingTargetInvalidReason" role="alert" class="text-sm text-destructive">
           {{ removingTargetInvalidReason }}
         </p>
