@@ -20,7 +20,13 @@ import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
 import { ADMIN_DRAFT_REGISTRY_KEY, useAdminDraftGuard } from '@/composables/useAdminDraftGuard'
 import { useAuthStore } from '@/stores/auth'
-import { cloneNodeDraft, createNodeDraftSnapshot, isNodeDraftDirty, shouldSyncNodeDraftFromServer } from '@/utils/adminDraft'
+import {
+  cloneNodeDraft,
+  createNodeDraftSnapshot,
+  formatNodeDraftBackup,
+  isNodeDraftDirty,
+  shouldSyncNodeDraftFromServer,
+} from '@/utils/adminDraft'
 import { normalizePublicRemark, validatePublicRemark } from '@/utils/adminEditing'
 import {
   filterManagedNodes,
@@ -153,22 +159,6 @@ const missingRequestedId = computed(() => selection.value.mode === 'missing'
   ? selection.value.requestedId
   : '')
 
-const disappearedNode = computed<{ id: string, name: string } | null>(() => {
-  if (selection.value.mode === 'removed') {
-    const id = selection.value.removedId
-    const name = loadedNodeId.value === id && draft.value?.name
-      ? draft.value.name
-      : id
-    return { id, name }
-  }
-  if (selection.value.mode === 'missing' && loadedNodeId.value === selection.value.requestedId) {
-    const id = selection.value.requestedId
-    const name = draft.value?.name || id
-    return { id, name }
-  }
-  return null
-})
-
 const revokedGuidanceText = computed(() => isDesktop.value
   ? '此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，请展开上方“接入节点”生成一次性注册令牌以注册独立新节点。'
   : '此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，可点击下方按钮打开接入节点面板，或返回节点列表展开“接入节点”生成一次性注册令牌以注册独立新节点。')
@@ -189,6 +179,7 @@ const showEditorPane = computed(() => isDesktop.value || selection.value.mode !=
 const draft = ref<NodeDraftForm | null>(null)
 const savedBaseline = ref<NodeDraftSnapshot | null>(null)
 const loadedNodeId = ref<string | null>(null)
+const removedNodeLabel = ref<{ id: string, name: string } | null>(null)
 const expires = ref('')
 const quotaGiB = ref<number | string>(0)
 const ttlHours = ref(24)
@@ -204,6 +195,31 @@ const enrollExpanded = ref(props.nodes.length === 0 || Boolean(enrollUncertain.v
 const pendingUncertainSaves = ref<Record<string, PendingUncertainNodeSave>>({})
 const pendingUncertainDangers = nodeDangerUncertainLocks
 let forceResetNextSync = false
+
+const disappearedNode = computed<{ id: string, name: string } | null>(() => {
+  if (selection.value.mode === 'removed') {
+    const id = selection.value.removedId
+    const name = (loadedNodeId.value === id && draft.value?.name)
+      || (removedNodeLabel.value?.id === id && removedNodeLabel.value.name)
+      || id
+    return { id, name }
+  }
+  if (selection.value.mode === 'missing') {
+    const id = selection.value.requestedId
+    if (loadedNodeId.value === id)
+      return { id, name: draft.value?.name || id }
+    if (removedNodeLabel.value?.id === id)
+      return { id, name: removedNodeLabel.value.name }
+  }
+  return null
+})
+
+const removedDraftBackup = computed(() => formatNodeDraftBackup({
+  draft: draft.value,
+  expires: expires.value,
+  quotaGiB: quotaGiB.value,
+  newTagText: newTagText.value,
+}, newTagColor.value))
 
 watch(
   [
@@ -411,6 +427,7 @@ watch(selected, (node, prevNode) => {
   const prevId = prevNode?.id ?? null
   if (node) {
     pinnedNodeId.value = node.id
+    removedNodeLabel.value = null
     lastInteractedNodeId.value = node.id
     adminNodesViewState.value = {
       ...adminNodesViewState.value,
@@ -427,8 +444,13 @@ watch(selected, (node, prevNode) => {
     }
   }
   // Preserve draft snapshot read-only when the currently loaded/pinned node disappears concurrently.
-  if (!node && disappearedNode.value)
+  if (!node && disappearedNode.value) {
+    removedNodeLabel.value = {
+      id: disappearedNode.value.id,
+      name: prevNode?.name || disappearedNode.value.name,
+    }
     return
+  }
   const shouldSync = shouldSyncNodeDraftFromServer({
     incomingNodeId: nextId,
     loadedNodeId: loadedNodeId.value,
@@ -589,6 +611,7 @@ const unregisterDraft = draftRegistry?.register({
   isBusy: () => busy.value,
   requestRefresh: triggerEl => draftGuard.requestRefresh(async () => {
     const activeId = selected.value?.id
+    const removedId = disappearedNode.value?.id ?? null
     forceResetNextSync = true
     saveAction.clearFeedback()
     pageStatusNotice.value = ''
@@ -599,12 +622,16 @@ const unregisterDraft = draftRegistry?.register({
         delete nextSaves[activeId]
         pendingUncertainSaves.value = nextSaves
       }
+      if (removedId && disappearedNode.value?.id === removedId)
+        loadDraftFromNode(undefined)
     }
     catch (cause) {
-      forceResetNextSync = false
       saveError.value = cause instanceof Error
         ? cause.message
         : String(cause)
+    }
+    finally {
+      forceResetNextSync = false
     }
   }, triggerEl),
 })
@@ -749,6 +776,7 @@ function dismissRemovedNode(event?: MouseEvent): void {
     targetLabel,
     () => {
       pinnedNodeId.value = null
+      removedNodeLabel.value = null
       loadDraftFromNode(undefined)
       if (queryNodeId.value)
         void clearNodeQuery()
@@ -827,6 +855,8 @@ async function finishDeletedNodeNavigation(deletedId: string, bannerMessage?: st
     pageStatusNotice.value = bannerMessage
   if (pinnedNodeId.value === deletedId)
     pinnedNodeId.value = null
+  if (removedNodeLabel.value?.id === deletedId)
+    removedNodeLabel.value = null
   if (loadedNodeId.value === deletedId)
     loadDraftFromNode(undefined)
   if (lastSavedNodeSummary.value?.nodeId === deletedId)
@@ -1327,14 +1357,22 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       <div v-if="showEditorPane" class="space-y-4">
         <CardX v-if="disappearedNode" title="节点已被移除" content-class="space-y-4">
           <p role="alert" class="text-sm text-destructive">
-            节点「{{ disappearedNode.name }}」（ID：{{ disappearedNode.id }}）在最新同步中已不存在，无法继续保存。为避免误改其他节点，已暂停自动切换编辑对象{{ hasUnsavedChanges ? '；下方已以只读方式保留您的未保存输入供复制。' : '。' }}
+            节点「{{ disappearedNode.name }}」（ID：{{ disappearedNode.id }}）在最新同步中已不存在，无法继续保存。为避免误改其他节点，已暂停自动切换编辑对象{{ hasUnsavedChanges ? '；下方已以只读方式完整保留您的未保存草稿供复制。' : '。' }}
           </p>
-          <div v-if="hasUnsavedChanges && draft" class="grid gap-3 rounded-lg border border-border/80 bg-muted/20 p-4 sm:grid-cols-2">
-            <label class="grid gap-1.5 text-sm">名称（只读保留）<Input :model-value="draft.name" readonly class="h-11" /></label>
-            <label class="grid gap-1.5 text-sm">分组（只读保留）<Input :model-value="draft.group" readonly class="h-11" /></label>
-            <label class="grid gap-1.5 text-sm">地区代码（只读保留）<Input :model-value="draft.region" readonly class="h-11" /></label>
-            <label class="grid gap-1.5 text-sm">小面板标签（只读保留）<Input :model-value="draft.tags" readonly class="h-11" /></label>
-            <label class="grid gap-1.5 text-sm sm:col-span-2">公开备注<textarea :value="draft.public_remark" readonly rows="3" class="rounded-md border border-input bg-background px-3 py-2" /></label>
+          <p v-if="saveError" role="alert" class="text-sm text-destructive">
+            {{ saveError }}
+          </p>
+          <div v-if="hasUnsavedChanges && removedDraftBackup" class="grid gap-1.5 text-sm">
+            <label for="removed-node-draft-backup" class="font-medium">
+              未保存的节点草稿快照（只读，可复制）
+            </label>
+            <textarea
+              id="removed-node-draft-backup"
+              :value="removedDraftBackup"
+              readonly
+              rows="10"
+              class="rounded-md border border-input bg-muted/20 px-3 py-2 font-mono text-xs"
+            />
           </div>
           <div class="flex flex-wrap gap-2">
             <Button type="button" variant="outline" class="min-h-11" :disabled="busy" @click="dismissRemovedNode">

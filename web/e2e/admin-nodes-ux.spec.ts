@@ -274,6 +274,7 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
   const initialState = await (await page.request.get('/api/admin/state')).json()
   let nodes = buildSyntheticNodes(initialState.nodes[0])
   let holdNextGet = false
+  let failNextGet = false
   let releaseHeldGet: (() => void) | null = null
   let deleteCalls = 0
 
@@ -285,6 +286,14 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
       })
       // Remove Alpha SG while slow GET is in flight.
       nodes = nodes.filter(item => item.id !== 'aa112233-0000-0000-0000-000000000001')
+    }
+    if (failNextGet) {
+      failNextGet = false
+      await route.fulfill({
+        status: 503,
+        json: { error: 'Synthetic removed-state refresh failure' },
+      })
+      return
     }
     await route.fulfill({
       json: {
@@ -325,14 +334,17 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
     await discardDialog.getByRole('button', { name: '放弃修改并刷新' }).click()
     await expect(remarkInput).toHaveValue('Primary Singapore edge')
 
-    // Start a slow top GET while clean, edit Alpha SG and open Delete dialog while GET is pending, then let GET remove Alpha SG:
+    // Start a slow top GET while clean, edit Alpha SG (including billing, quota, unadded tag, and remark) and open Delete dialog while GET is pending, then let GET remove Alpha SG:
     // 1) Delete dialog stays bound to Alpha SG, shows invalidation alert, disables confirm, and never targets Beta JP.
-    // 2) Editor enters explicit removed state for Alpha SG (does NOT silently switch to Beta JP), disables saving, and keeps unsaved text read-only until user explicitly switches.
+    // 2) Editor enters explicit removed state for Alpha SG (does NOT silently switch to Beta JP), disables saving, and keeps a complete read-only copyable draft snapshot.
     holdNextGet = true
     await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect.poll(() => releaseHeldGet !== null).toBe(true)
 
     await remarkInput.fill('Concurrent edit preserved after Alpha removal')
+    await page.getByLabel('每周期价格').fill('88.5')
+    await page.getByLabel('每周期额度（GiB；0 为不限）').fill('512')
+    await page.getByLabel('标签文字').fill('PendingTag10G')
     await page.getByRole('button', { name: '删除节点' }).click()
     const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
     await expect(deleteDialog).toContainText('Alpha SG')
@@ -346,15 +358,33 @@ test('dirty default desktop edit survives viewport narrowing across 1024px and s
     await expect(deleteDialog).toBeHidden()
 
     await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('alert')).toContainText('节点「Alpha SG」')
+    await expect(page.getByRole('alert').filter({ hasText: '节点「Alpha SG」' })).toBeVisible()
     await expect(page.getByRole('button', { name: '保存节点' })).toHaveCount(0)
-    await expect(page.getByLabel('公开备注')).toHaveValue('Concurrent edit preserved after Alpha removal')
-    await expect(page.getByLabel('公开备注')).toHaveAttribute('readonly', '')
+    const backupSnapshot = page.getByLabel('未保存的节点草稿快照（只读，可复制）')
+    await expect(backupSnapshot).toHaveAttribute('readonly', '')
+    await expect(backupSnapshot).toHaveValue(/Concurrent edit preserved after Alpha removal/)
+    await expect(backupSnapshot).toHaveValue(/88\.5/)
+    await expect(backupSnapshot).toHaveValue(/512/)
+    await expect(backupSnapshot).toHaveValue(/PendingTag10G/)
 
-    // Explicitly switching to Beta JP protects the preserved removed-node draft behind the discard prompt before switching.
-    await page.getByRole('list', { name: '可管理节点' }).getByRole('button', { name: /Beta JP/ }).click()
+    // Top "discard & refresh" in removed state: failed refresh keeps backup; succeeded refresh discards backup while keeping removed context so switching no longer re-prompts.
+    failNextGet = true
+    await page.getByRole('button', { name: '刷新', exact: true }).click()
     await expect(discardDialog).toBeVisible()
-    await discardDialog.getByRole('button', { name: '放弃修改并切换' }).click()
+    await discardDialog.getByRole('button', { name: '放弃修改并刷新' }).click()
+    await expect(page.getByRole('alert').filter({ hasText: 'Synthetic removed-state refresh failure' })).toBeVisible()
+    await expect(backupSnapshot).toBeVisible()
+
+    await page.getByRole('button', { name: '刷新', exact: true }).click()
+    await expect(discardDialog).toBeVisible()
+    await discardDialog.getByRole('button', { name: '放弃修改并刷新' }).click()
+    await expect(backupSnapshot).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toHaveCount(0)
+    await expect(page.getByRole('alert')).toContainText('节点「Alpha SG」')
+
+    // Now that dirty removed draft was explicitly discarded on refresh, clicking Beta JP switches cleanly without another discard dialog.
+    await page.getByRole('list', { name: '可管理节点' }).getByRole('button', { name: /Beta JP/ }).click()
+    await expect(discardDialog).toHaveCount(0)
     await expect(page.getByRole('heading', { name: 'Beta JP', exact: true })).toBeVisible()
     await expect(page.getByLabel('公开备注')).toHaveValue('Hidden Tokyo staging')
   }
