@@ -25,6 +25,12 @@ export interface TooltipPosition {
   placement: DataTooltipPlacement
 }
 
+export interface TooltipBridgeInsets {
+  size: number
+  start: number
+  end: number
+}
+
 const DEFAULT_OFFSET_PX = 8
 const DEFAULT_VIEWPORT_PADDING_PX = 8
 
@@ -106,5 +112,49 @@ export function computeTooltipPosition(
     top: Math.round(clamp(raw.top, padding, maxTop)),
     left: Math.round(clamp(raw.left, padding, maxLeft)),
     placement,
+  }
+}
+
+export function computeTooltipBridgeInsets(
+  trigger: RectLike,
+  tooltip: SizeLike,
+  position: TooltipPosition,
+): TooltipBridgeInsets {
+  if (position.placement === 'top' || position.placement === 'bottom') {
+    const size = position.placement === 'bottom'
+      ? Math.max(0, Math.floor(position.top - trigger.bottom))
+      : Math.max(0, Math.floor(trigger.top - (position.top + tooltip.height)))
+    const clampedStart = clamp(trigger.left - position.left, 0, tooltip.width)
+    const clampedEnd = clamp(trigger.right - position.left, clampedStart, tooltip.width)
+    if (clampedEnd - clampedStart >= 8) {
+      return {
+        size,
+        start: Math.ceil(clampedStart),
+        end: Math.ceil(tooltip.width - clampedEnd),
+      }
+    }
+    return {
+      size,
+      start: 0,
+      end: 0,
+    }
+  }
+
+  const size = position.placement === 'right'
+    ? Math.max(0, Math.floor(position.left - trigger.right))
+    : Math.max(0, Math.floor(trigger.left - (position.left + tooltip.width)))
+  const clampedStart = clamp(trigger.top - position.top, 0, tooltip.height)
+  const clampedEnd = clamp(trigger.bottom - position.top, clampedStart, tooltip.height)
+  if (clampedEnd - clampedStart >= 8) {
+    return {
+      size,
+      start: Math.ceil(clampedStart),
+      end: Math.ceil(tooltip.height - clampedEnd),
+    }
+  }
+  return {
+    size,
+    start: 0,
+    end: 0,
   }
 }
