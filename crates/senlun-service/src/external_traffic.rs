@@ -1666,9 +1666,9 @@ mod tests {
                 }
             }
         };
-        let err = poll_source_with(&source, &mut credential, 100, request)
-            .await
-            .unwrap_err();
+        let Err(err) = poll_source_with(&source, &mut credential, 100, request).await else {
+            panic!("expected non-JSON refresh response to require authentication");
+        };
         assert_eq!(err, "authentication_required");
         assert_eq!(login_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
