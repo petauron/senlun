@@ -1008,7 +1008,9 @@ test('instance detail realtime load poll does not cancel slow in-flight request 
       await new Promise<void>((resolve) => {
         releaseRealtime.push(resolve)
       })
-      const cpu = seq === 1 ? 73.4 : 41.2
+      const cpu = seq === 1
+        ? 73.4
+        : 41.2
       try {
         await route.fulfill({
           json: {
