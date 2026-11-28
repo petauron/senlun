@@ -212,11 +212,6 @@ impl Storage {
             .map_err(|_| StorageError::Database(rusqlite::Error::InvalidQuery))
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_connection_busy(&self) -> bool {
-        self.connection.try_lock().is_err()
-    }
-
     pub(crate) fn create_enrollment(
         &self,
         ttl_seconds: u64,
