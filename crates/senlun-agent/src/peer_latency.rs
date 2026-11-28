@@ -534,9 +534,8 @@ mod tests {
         async fn serve_status(status: &str) -> Url {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
-            let response = format!(
-                "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-            );
+            let response =
+                format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
             tokio::spawn(async move {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let mut buf = [0_u8; 1024];
