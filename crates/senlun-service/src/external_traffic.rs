@@ -166,7 +166,7 @@ fn parse_stored_source(
         None => (None, false),
     };
     if !config_corrupt && snapshot_corrupt && matches!(status.as_str(), "ok" | "pending") {
-        status = "invalid_data".to_owned();
+        "invalid_data".clone_into(&mut status);
     }
     (config, snapshot, status, config_corrupt, snapshot_corrupt)
 }
