@@ -47,8 +47,18 @@ curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 --max-files
 printf '%s  %s\n' '351491ece557ad4c26143b33a38d8b0b50a1872c7b073839e22ee8845771f928' "$work/core.sh" | sha256sum -c - >&2
 # Preflight above prevents the upstream dependency helpers from installing tools.
 # A private HOME/TMPDIR and empty environment prevent inherited credentials/options.
-timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xterm LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
+kill_managed_group() {
+ [ "${SENLUN_DEDICATED_PGID:-0}" = 1 ] && [ -r /proc/self/stat ] || return 0
+ IFS= read -r stat < /proc/self/stat || return 0
+ IFS=' ' read -r _ ppid pgrp _ <<< "${stat##*) }"
+ case "$pgrp" in ''|*[!0-9]*) return 0 ;; esac
+ [ "$pgrp" = "$ppid" ] && [ "$pgrp" -gt 1 ] || return 0
+ kill -KILL -- -"$pgrp" 2>/dev/null || true
+}
+timeout --foreground -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xterm LANG=C.UTF-8 bash "$work/core.sh" --route --route-protocol tcp --province sh -p 1 -v"$family" --debug > "$work/run.log" 2>&1 || {
  tail -c 2048 "$work/run.log" >&2
+ rm -rf -- "$work"
+ kill_managed_group
  exit 4
 }
 archive=$(find "$work" -maxdepth 1 -type f -name 'tcpquality-results.*.tar.gz' -print | head -n 1)
