@@ -2,7 +2,7 @@
 //! Existing Agent authentication stays in the HTTP client. The reviewed child
 //! receives only a parsed address/family, an empty environment and private tmp.
 use std::{
-    net::IpAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
     path::Path,
     process::Stdio,
     time::{Duration, Instant},
@@ -22,6 +22,10 @@ use crate::task_lease::{
 const COLLECTOR: &str = include_str!("shanghai-routes.sh");
 const REVISION: &str = "db52fc60523320fc4a34b5c369f28be38df21d13";
 const POLL: Duration = Duration::from_secs(15);
+const AVAILABILITY_REFRESH: Duration = Duration::from_mins(1);
+const EGRESS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const EGRESS_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_EGRESS_BODY: usize = 128;
 const MAX_RESPONSE: usize = 16 * 1024;
 const COLLECT_TIMEOUT: Duration = Duration::from_secs(410);
 const MAX_SCRIPT_TIMEOUT_SECONDS: u64 = 390;
@@ -38,6 +42,35 @@ impl RouteRunner {
 impl Drop for RouteRunner {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+struct AvailabilityCache {
+    checked_at: Option<Instant>,
+    available: bool,
+}
+
+impl AvailabilityCache {
+    fn new() -> Self {
+        Self {
+            checked_at: None,
+            available: false,
+        }
+    }
+
+    async fn get(&mut self) -> bool {
+        if self
+            .checked_at
+            .is_some_and(|checked_at| checked_at.elapsed() < AVAILABILITY_REFRESH)
+        {
+            return self.available;
+        }
+        let available = tokio::task::spawn_blocking(available)
+            .await
+            .unwrap_or(false);
+        self.available = available;
+        self.checked_at = Some(Instant::now());
+        available
     }
 }
 
@@ -84,6 +117,7 @@ async fn run(client: Client, url: Url, token: String) {
         return;
     };
     let mut pending: Option<(ReturnRouteOutcome, Instant)> = None;
+    let mut availability = AvailabilityCache::new();
     loop {
         if let Some((outcome, deadline)) = &pending {
             match post_result(&client, &result_url, &token, outcome, *deadline).await {
@@ -96,7 +130,7 @@ async fn run(client: Client, url: Url, token: String) {
             let claim = ReturnRouteClaim {
                 schema_version: RETURN_ROUTE_SCHEMA_VERSION,
                 agent_version: env!("CARGO_PKG_VERSION").to_owned(),
-                available: available(),
+                available: availability.get().await,
             };
             let claim_started = Instant::now();
             if let Ok(mut response) = client
@@ -164,6 +198,61 @@ async fn run(client: Client, url: Url, token: String) {
     }
 }
 
+fn parse_egress_ip(body: &[u8], expected: IpAddr) -> Result<(), &'static str> {
+    let text = std::str::from_utf8(body).map_err(|_| "collection_failed")?;
+    let actual: IpAddr = text.trim().parse().map_err(|_| "collection_failed")?;
+    if actual != expected {
+        return Err("collection_failed");
+    }
+    Ok(())
+}
+
+async fn verify_egress(family: u8, expected: IpAddr) -> Result<(), &'static str> {
+    let (bind, url) = match family {
+        4 => (IpAddr::V4(Ipv4Addr::UNSPECIFIED), "https://api.ipify.org"),
+        6 => (IpAddr::V6(Ipv6Addr::UNSPECIFIED), "https://api6.ipify.org"),
+        _ => return Err("invalid_task"),
+    };
+    let client = Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .local_address(bind)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .connect_timeout(EGRESS_CONNECT_TIMEOUT)
+        .timeout(EGRESS_REQUEST_TIMEOUT)
+        .pool_max_idle_per_host(0)
+        .user_agent(concat!("senlun-agent/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|_| "unavailable")?;
+    let mut response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| "collection_failed")?;
+    if !response.status().is_success() {
+        return Err("collection_failed");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| "collection_failed")? {
+        if body.len().saturating_add(chunk.len()) > MAX_EGRESS_BODY {
+            return Err("collection_failed");
+        }
+        body.extend_from_slice(&chunk);
+    }
+    parse_egress_ip(&body, expected)
+}
+
+async fn verify_egress_by(
+    family: u8,
+    expected: IpAddr,
+    deadline: Instant,
+) -> Result<(), &'static str> {
+    tokio::time::timeout_at(deadline.into(), verify_egress(family, expected))
+        .await
+        .map_err(|_| "timeout")?
+}
+
 fn script_timeout_seconds(remaining: Duration) -> Option<u64> {
     remaining
         .as_secs()
@@ -184,6 +273,7 @@ async fn collect(
         return Err("invalid_task");
     }
     let collection_deadline = lease.collection_deadline(Instant::now(), COLLECT_TIMEOUT);
+    verify_egress_by(task.family, address, collection_deadline).await?;
     let work = tempfile::tempdir().map_err(|_| "unavailable")?;
     let script = work.path().join("shanghai-routes.sh");
     tokio::time::timeout_at(
@@ -248,7 +338,10 @@ async fn collect(
     })
     .await;
     match result {
-        Ok(Ok(())) => parse(&bytes, task, lease.checked_at_unix_ms(Instant::now())),
+        Ok(Ok(())) => {
+            verify_egress_by(task.family, address, collection_deadline).await?;
+            parse(&bytes, task, lease.checked_at_unix_ms(Instant::now()))
+        }
         Ok(Err(error)) => {
             let _ = child.kill().await;
             Err(error)
@@ -258,6 +351,18 @@ async fn collect(
             Err("timeout")
         }
     }
+}
+
+fn is_valid_carrier_target(target: &str) -> bool {
+    !target.is_empty()
+        && target.len() <= 253
+        && target
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b".-:".contains(&c))
+}
+
+fn is_valid_carrier_label(label: &str) -> bool {
+    !label.is_empty() && label.len() <= 64 && !label.chars().any(char::is_control)
 }
 
 fn parse(
@@ -292,14 +397,15 @@ fn parse(
         }
         let known =
             values[0] == "OK" && !matches!(values[5], "Hidden" | "Unknown" | "未知" | "-" | "");
-        if values[4].len() > 253 || values[5].len() > 64 {
+        let label = if known { values[5] } else { "未知" };
+        if !is_valid_carrier_target(values[4]) || !is_valid_carrier_label(label) {
             return Err("invalid_result");
         }
         carriers.push(CarrierRoute {
             carrier: carrier.to_owned(),
             target: values[4].to_owned(),
             status: if known { "ok" } else { "unknown" }.to_owned(),
-            label: if known { values[5] } else { "未知" }.to_owned(),
+            label: label.to_owned(),
         });
     }
     if carriers.len() != 3 {
@@ -347,5 +453,61 @@ mod tests {
         assert_eq!(script_timeout_seconds(Duration::from_secs(7)), Some(1));
         assert_eq!(script_timeout_seconds(Duration::from_millis(6_999)), None);
         assert_eq!(script_timeout_seconds(Duration::ZERO), None);
+    }
+
+    #[test]
+    fn egress_ip_comparison_canonicalizes_ipv6_and_rejects_mismatch() {
+        let expected_v6: IpAddr = "2001:db8::1".parse().unwrap();
+        let expanded_v6 = b"2001:0DB8:0000:0000:0000:0000:0000:0001\n";
+        assert!(parse_egress_ip(expanded_v6, expected_v6).is_ok());
+        assert!(parse_egress_ip(b"2001:db8::2\n", expected_v6).is_err());
+        assert!(parse_egress_ip(b"not-an-ip", expected_v6).is_err());
+
+        let expected_v4: IpAddr = "198.51.100.10".parse().unwrap();
+        assert!(parse_egress_ip(b"198.51.100.10\n", expected_v4).is_ok());
+        assert!(parse_egress_ip(b"198.51.100.11", expected_v4).is_err());
+    }
+
+    #[test]
+    fn parse_matches_service_target_and_label_validation() {
+        let task = ReturnRouteTask {
+            id: uuid::Uuid::new_v4().to_string(),
+            family: 4,
+            address: "198.51.100.10".to_owned(),
+            expires_at_unix_ms: 1_700_000_480_000,
+        };
+        let valid = concat!(
+            "CHECKED_AT=1700000000\n",
+            "OK|上海|电信|tcp|telecom.example.test|CN2GIA\n",
+            "OK|上海|联通|tcp|unicom.example.test|4837\n",
+            "OK|上海|移动|tcp|2001:db8::1|CMI\n"
+        );
+        assert!(parse(valid.as_bytes(), &task, 1_700_000_012_345).is_ok());
+
+        for invalid in [
+            concat!(
+                "CHECKED_AT=1700000000\n",
+                "OK|上海|电信|tcp||CN2GIA\n",
+                "OK|上海|联通|tcp|unicom.example.test|4837\n",
+                "OK|上海|移动|tcp|mobile.example.test|CMI\n"
+            ),
+            concat!(
+                "CHECKED_AT=1700000000\n",
+                "OK|上海|电信|tcp|bad target/path|CN2GIA\n",
+                "OK|上海|联通|tcp|unicom.example.test|4837\n",
+                "OK|上海|移动|tcp|mobile.example.test|CMI\n"
+            ),
+            concat!(
+                "CHECKED_AT=1700000000\n",
+                "OK|上海|电信|tcp|telecom.example.test|CN2\x07GIA\n",
+                "OK|上海|联通|tcp|unicom.example.test|4837\n",
+                "OK|上海|移动|tcp|mobile.example.test|CMI\n"
+            ),
+        ] {
+            assert_eq!(
+                parse(invalid.as_bytes(), &task, 1_700_000_012_345).err(),
+                Some("invalid_result")
+            );
+        }
     }
 }
