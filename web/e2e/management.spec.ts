@@ -267,6 +267,72 @@ test('local traffic correction previews units, requires confirmation and preserv
   }
 })
 
+test('local traffic correction shows readable approximate summaries with expandable exact bytes and preserves BigInt submission', async ({ page }) => {
+  await login(page, '/admin?section=nodes')
+  const id = await waitForNode(page.request)
+  const submittedPayloads: Array<Record<string, unknown>> = []
+
+  await page.route(`**/api/admin/nodes/${id}/traffic-correction`, async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        json: {
+          node_id: id,
+          name: 'e2e-node',
+          baseline: {
+            sample_id: 'synthetic-sample-1',
+            cycle_start_ms: Date.UTC(2026, 10, 1, 0, 0, 0),
+            used_up_bytes: '131642089473',
+            used_down_bytes: '198234685442',
+            audit_cursor: '0',
+            traffic_limit_type: 'sum',
+            traffic_reset_day: 1,
+          },
+          sampled_at_ms: Date.UTC(2026, 10, 28, 12, 0, 0),
+          traffic_limit_bytes: '429496729600',
+        },
+      })
+      return
+    }
+    submittedPayloads.push(route.request().postDataJSON())
+    await route.fulfill({ json: { ok: true } })
+  })
+
+  await page.goto(`/admin?section=nodes&node=${id}`)
+  await page.getByRole('button', { name: '校正本周期本地流量', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText('上传 约 122.60 GiB / 下载 约 184.62 GiB')
+  await expect(dialog).toContainText('计费已用 约 307.22 GiB · 额度 400 GiB')
+  await expect(dialog.getByText('131,642,089,473 B')).toBeHidden()
+  await expect(dialog.getByLabel('目标上传已用量')).toHaveValue('122.601249695755541324615478515625')
+  await expect(dialog.getByLabel('目标下载已用量')).toHaveValue('184.62043762393295764923095703125')
+
+  await dialog.getByText('查看精确字节与采样基线', { exact: true }).click()
+  await expect(dialog.getByText('上传：131,642,089,473 B（122.601249695755541324615478515625 GiB）')).toBeVisible()
+  await expect(dialog.getByText('下载：198,234,685,442 B（184.62043762393295764923095703125 GiB）')).toBeVisible()
+  await expect(dialog.getByText('计费已用：329,876,774,915 B（307.221687319688498973846435546875 GiB）')).toBeVisible()
+  await expect(dialog.getByText(/采样基线：2026-11-28 12:00:00 UTC/)).toBeVisible()
+  await dialog.getByText('查看精确字节与采样基线', { exact: true }).click()
+  await expect(dialog.getByText('131,642,089,473 B')).toBeHidden()
+
+  await dialog.getByLabel('目标上传已用量').fill('130')
+  await dialog.getByLabel('校正原因').fill('Synthetic approximate summary check')
+  await dialog.getByRole('button', { name: '预览校正', exact: true }).click()
+  const preview = dialog.getByRole('region', { name: '本地流量校正预览' })
+  await expect(preview).toContainText('上传：约 122.60 GiB → 130 GiB')
+  await expect(preview).toContainText('计费已用：约 307.22 GiB → 约 314.62 GiB')
+  await preview.getByText('查看精确字节变更（实际提交值）', { exact: true }).click()
+  await expect(preview).toContainText('139,586,437,120 B')
+  await expect(preview).toContainText('337,821,122,562 B')
+
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
+  await dialog.getByRole('button', { name: '确认校正本地流量' }).click()
+  await expect(dialog).toBeHidden()
+  expect(submittedPayloads).toHaveLength(1)
+  expect(submittedPayloads[0]!.used_up_bytes).toBe('139586437120')
+  expect(submittedPayloads[0]!.used_down_bytes).toBe('198234685442')
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})
+
 test('notification channels require an explicit opt-in and remain disabled when created', async ({ page }, testInfo) => {
   await login(page, '/admin?section=alerts')
   const name = `e2e-disabled-${testInfo.project.name}`

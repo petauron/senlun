@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ManagedNode, ProbeTask } from '@/utils/admin'
-import type { NodeTargetScopeSummary } from '@/utils/adminEditing'
+import type { NodeScopeMode, NodeTargetScopeSummary } from '@/utils/adminEditing'
 import type { PendingUncertainConfigDeleteLock } from '@/utils/adminUncertain'
 import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import AdminNodeScopeSelector from '@/components/admin/AdminNodeScopeSelector.vue'
 import ProbeHistory from '@/components/ProbeHistory.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,8 @@ import {
   buildAssignableNodes,
   cloneProbeTask,
   createClientUuid,
+  effectiveScopedNodeIds,
+  initialNodeScopeMode,
   isProbeDraftDirty,
   requiresGlobalScopeConfirmation,
   scrollAndFocusHeading,
@@ -69,6 +72,8 @@ function blank(): ProbeTask {
 
 const draft = ref<ProbeTask>(blank())
 const baseline = ref<ProbeTask>(blank())
+const scopeMode = ref<NodeScopeMode>('scoped')
+const selectorResetNonce = ref(0)
 const pendingCreateId = ref('')
 const seenPendingCreateId = ref('')
 const removedTaskName = ref('')
@@ -102,7 +107,14 @@ const {
 } = deleteAction
 
 const busy = computed(() => saveBusy.value || deleteBusy.value || refreshBusy.value)
-const hasUnsavedChanges = computed(() => isProbeDraftDirty(draft.value, baseline.value, confirmGlobalScope.value))
+const baselineScopeMode = computed(() => initialNodeScopeMode(baseline.value))
+const hasUnsavedChanges = computed(() => isProbeDraftDirty(
+  draft.value,
+  baseline.value,
+  confirmGlobalScope.value,
+  scopeMode.value,
+  baselineScopeMode.value,
+))
 const effectiveEditingId = computed(() => draft.value.id || pendingCreateId.value)
 const liveEditingTask = computed(() => effectiveEditingId.value
   ? props.probes.find(task => task.id === effectiveEditingId.value)
@@ -156,7 +168,7 @@ const visibleNodes = computed(() => props.nodes.filter(node => !node.hidden && !
 const assignableNodes = computed(() => buildAssignableNodes(props.nodes, draft.value.node_ids, persistedNodeIds.value))
 const needsGlobalConfirmation = computed(() => requiresGlobalScopeConfirmation(
   guardGlobalScope.value,
-  draft.value.node_ids,
+  scopeMode.value,
   draft.value.enabled,
 ))
 const resultNode = ref(visibleNodes.value[0]?.id ?? '')
@@ -217,6 +229,8 @@ function focusFormHeading(): void {
 function applyResetDraft(clearFeedback = true): void {
   draft.value = blank()
   baseline.value = blank()
+  scopeMode.value = 'scoped'
+  selectorResetNonce.value++
   pendingCreateId.value = ''
   seenPendingCreateId.value = ''
   removedTaskName.value = ''
@@ -231,6 +245,8 @@ function applyResetDraft(clearFeedback = true): void {
 function applyEditTask(task: ProbeTask, clearFeedback = true): void {
   draft.value = cloneProbeTask(task)
   baseline.value = cloneProbeTask(task)
+  scopeMode.value = initialNodeScopeMode(task)
+  selectorResetNonce.value++
   pendingCreateId.value = ''
   seenPendingCreateId.value = ''
   removedTaskName.value = ''
@@ -258,8 +274,8 @@ watch(visibleNodes, (nodes) => {
     resultNode.value = nodes[0]?.id ?? ''
 })
 
-watch(() => draft.value.node_ids.length, (count) => {
-  if (count > 0)
+watch(scopeMode, (mode) => {
+  if (mode !== 'all')
     confirmGlobalScope.value = false
 })
 
@@ -271,6 +287,7 @@ watch(persistedScopeSignature, (next, prev) => {
 watch(
   [
     draft,
+    scopeMode,
     confirmGlobalScope,
   ],
   () => {
@@ -308,7 +325,7 @@ watch(
       applyEditTask(live, false)
       return
     }
-    if (!isProbeDraftDirty(draft.value, live, false))
+    if (!isProbeDraftDirty(draft.value, live, false, scopeMode.value, initialNodeScopeMode(live)))
       baseline.value = cloneProbeTask(live)
   },
 )
@@ -424,6 +441,21 @@ function cancelEdit(event?: MouseEvent): void {
   )
 }
 
+function handleScopeModeUpdate(value: NodeScopeMode): void {
+  scopeMode.value = value
+  saveValidationError.value = ''
+}
+
+function handleSelectedNodesUpdate(value: string[]): void {
+  draft.value.node_ids = value
+  saveValidationError.value = ''
+}
+
+function handleConfirmGlobalUpdate(value: boolean): void {
+  confirmGlobalScope.value = value
+  saveValidationError.value = ''
+}
+
 function openRemove(task: ProbeTask): void {
   if (busy.value)
     return
@@ -459,6 +491,7 @@ async function save(): Promise<void> {
   saveValidationError.value = ''
   const scopeError = validateScopedNodeSelection({
     guardGlobalScope: guardGlobalScope.value,
+    scopeMode: scopeMode.value,
     selectedIds: draft.value.node_ids,
     enabled: draft.value.enabled,
     confirmGlobalScope: confirmGlobalScope.value,
@@ -478,6 +511,7 @@ async function save(): Promise<void> {
   const submitted = cloneProbeTask({
     ...draft.value,
     id: targetId,
+    node_ids: effectiveScopedNodeIds(scopeMode.value, draft.value.node_ids),
   })
   const submittedRevision = editRevision.value
   pendingUncertainSave.value = null
@@ -781,23 +815,22 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
         <p class="text-xs text-muted-foreground">
           显示顺序越小越靠前；相同数值按创建顺序排列，探测任务本身不受影响。
         </p>
-        <fieldset :disabled="busy" class="space-y-2">
-          <legend class="mb-2 text-sm font-medium">
-            执行节点
-          </legend>
-          <div class="grid max-h-64 gap-2 overflow-auto rounded-md border p-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label v-for="node in assignableNodes" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm" :class="node.revoked || node.missing ? 'text-destructive' : ''"><input v-model="draft.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.label }}</label>
-          </div>
-          <p class="text-xs text-muted-foreground">
-            不选择时应用于所有活动节点，包括之后注册的节点。
-          </p>
-          <div v-if="needsGlobalConfirmation" class="space-y-2 rounded-md border border-destructive/40 p-3 text-xs">
-            <p class="text-destructive">
-              当前未指定任何节点且将启用此任务。为避免静默扩大探测范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。
-            </p>
-            <label class="flex min-h-9 items-center gap-2 text-sm"><input v-model="confirmGlobalScope" type="checkbox" class="size-4 accent-primary">确认改为应用于所有活动节点</label>
-          </div>
-        </fieldset>
+        <AdminNodeScopeSelector
+          id-prefix="probe-nodes"
+          legend="执行节点"
+          :nodes="props.nodes"
+          :options="assignableNodes"
+          :scope-mode="scopeMode"
+          :selected-ids="draft.node_ids"
+          :disabled="busy"
+          :needs-global-confirmation="needsGlobalConfirmation"
+          :confirm-global-scope="confirmGlobalScope"
+          global-confirm-warning="当前任务将应用于所有活动节点（含之后注册）且处于启用状态。为避免静默扩大探测范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。"
+          :reset-nonce="selectorResetNonce"
+          @update:scope-mode="handleScopeModeUpdate"
+          @update:selected-ids="handleSelectedNodesUpdate"
+          @update:confirm-global-scope="handleConfirmGlobalUpdate"
+        />
         <div class="space-y-2">
           <div class="flex flex-wrap items-center gap-2">
             <Button type="submit" class="min-h-11" :disabled="busy || editingTaskMissing">

@@ -48,6 +48,10 @@ const settings = ref<SiteSettings>(normalizeSiteSettings({
 }))
 const savedSettings = ref<SiteSettings | null>(null)
 const pendingUncertainSettings = ref<PendingUncertainSiteSave | null>(null)
+const expandedSiteDisclosures = ref({
+  ipInfo: false,
+  dailyRates: false,
+})
 const loading = ref(false)
 const loadError = ref('')
 const activeSectionDraft = shallowRef<RegisteredSectionDraft | null>(null)
@@ -203,8 +207,13 @@ function resetSiteDraftToSaved(): void {
 }
 
 watch(section, (nextSection, prevSection) => {
-  if (prevSection === 'site' && nextSection !== 'site')
+  if (prevSection === 'site' && nextSection !== 'site') {
     resetSiteDraftToSaved()
+    expandedSiteDisclosures.value = {
+      ipInfo: false,
+      dailyRates: false,
+    }
+  }
 })
 
 function requestTopRefresh(event: MouseEvent): void {
@@ -401,18 +410,76 @@ async function logout(): Promise<void> {
             <label class="grid gap-2 text-sm">首页头部展示模式
               <SelectControl v-model="settings.earth_view_mode" aria-label="首页头部展示模式" :disabled="settingsBusy" :options="[{ value: 'maps', label: '平面地图' }, { value: 'cards', label: '仅汇总卡片' }, { value: 'hide', label: '隐藏头部' }]" />
             </label>
-            <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.private_site" type="checkbox" class="size-4 accent-primary">私有站点：登录后才能查看监控数据</label>
-            <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.ip_info_enabled" type="checkbox" class="size-4 accent-primary" aria-describedby="ip-info-privacy">启用 IP 信息查询（仅管理员）</label>
-            <label class="flex min-h-11 items-center gap-2 text-sm"><input v-model="settings.daily_exchange_rates" type="checkbox" class="size-4 accent-primary">每日汇率（Frankfurter）</label>
-            <p class="text-sm text-muted-foreground">
-              启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；第三方会看到访客 IP。保存后刷新首页生效。
-            </p>
-            <p id="ip-info-privacy" class="text-sm text-muted-foreground">
-              默认关闭。启用后，管理员查看 IP 信息时会将已登记的节点公网 IP 发送给 Net.Coffee，查询归属、原生性与全球延迟。不发送 Senlun 凭据或主机指标；第三方结果可能不准确或暂时不可用。节点地址请在“节点”中登记，中国大陆节点不查询。
-            </p>
-            <p class="text-sm text-muted-foreground">
-              关闭私有站点后，未隐藏节点的监控数据对访客公开。
-            </p>
+            <div class="space-y-3">
+              <div class="space-y-1.5 rounded-md border p-3">
+                <label class="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    v-model="settings.private_site"
+                    type="checkbox"
+                    class="size-4 accent-primary"
+                    aria-describedby="private-site-privacy"
+                  >
+                  私有站点：登录后才能查看监控数据
+                </label>
+                <p id="private-site-privacy" class="pl-6 text-sm text-muted-foreground">
+                  关闭私有站点后，未隐藏节点的监控数据对访客公开。
+                </p>
+              </div>
+              <div class="space-y-1.5 rounded-md border p-3">
+                <label class="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    v-model="settings.ip_info_enabled"
+                    type="checkbox"
+                    class="size-4 accent-primary"
+                    aria-describedby="ip-info-privacy"
+                  >
+                  启用 IP 信息查询（仅管理员）
+                </label>
+                <p id="ip-info-privacy" class="pl-6 text-sm text-muted-foreground">
+                  <span>默认关闭。启用后，管理员查看 IP 信息时会将已登记的节点公网 IP 发送给 Net.Coffee，查询归属、原生性与全球延迟。</span>
+                  <span :class="expandedSiteDisclosures.ipInfo ? 'inline' : 'sr-only sm:not-sr-only sm:inline'">不发送 Senlun 凭据或主机指标；第三方结果可能不准确或暂时不可用。节点地址请在“节点”中登记，中国大陆节点不查询。</span>
+                </p>
+                <div class="pl-6 sm:hidden">
+                  <button
+                    type="button"
+                    class="inline-flex min-h-9 items-center text-xs font-medium text-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-expanded="expandedSiteDisclosures.ipInfo"
+                    aria-controls="ip-info-privacy"
+                    :aria-label="expandedSiteDisclosures.ipInfo ? '收起完整说明：IP 信息查询' : '查看完整说明：IP 信息查询'"
+                    @click="expandedSiteDisclosures.ipInfo = !expandedSiteDisclosures.ipInfo"
+                  >
+                    {{ expandedSiteDisclosures.ipInfo ? '收起完整说明' : '查看完整说明' }}
+                  </button>
+                </div>
+              </div>
+              <div class="space-y-1.5 rounded-md border p-3">
+                <label class="flex min-h-11 items-center gap-2 text-sm">
+                  <input
+                    v-model="settings.daily_exchange_rates"
+                    type="checkbox"
+                    class="size-4 accent-primary"
+                    aria-describedby="daily-exchange-rates-privacy"
+                  >
+                  每日汇率（Frankfurter）
+                </label>
+                <p id="daily-exchange-rates-privacy" class="pl-6 text-sm text-muted-foreground">
+                  <span>启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；</span>
+                  <span :class="expandedSiteDisclosures.dailyRates ? 'inline' : 'sr-only sm:not-sr-only sm:inline'">第三方会看到访客 IP。保存后刷新首页生效。</span>
+                </p>
+                <div class="pl-6 sm:hidden">
+                  <button
+                    type="button"
+                    class="inline-flex min-h-9 items-center text-xs font-medium text-foreground underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    :aria-expanded="expandedSiteDisclosures.dailyRates"
+                    aria-controls="daily-exchange-rates-privacy"
+                    :aria-label="expandedSiteDisclosures.dailyRates ? '收起完整说明：每日汇率' : '查看完整说明：每日汇率'"
+                    @click="expandedSiteDisclosures.dailyRates = !expandedSiteDisclosures.dailyRates"
+                  >
+                    {{ expandedSiteDisclosures.dailyRates ? '收起完整说明' : '查看完整说明' }}
+                  </button>
+                </div>
+              </div>
+            </div>
           </fieldset>
           <div class="flex flex-wrap items-center gap-2">
             <Button type="submit" class="min-h-11" :disabled="settingsBusy">

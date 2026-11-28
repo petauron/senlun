@@ -190,6 +190,10 @@ test('probes management highlights active edits, syncs dynamic #312 scope after 
   await expect(page.getByRole('alert').filter({ hasText: '已撤销或不存在' })).toBeVisible()
   await page.getByLabel('Revoked JP（凭据已撤销）').uncheck()
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
+  await expect(page.getByLabel('确认改为应用于所有活动节点')).toHaveCount(0)
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
   await expect(page.getByLabel('确认改为应用于所有活动节点')).toBeVisible()
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
@@ -219,15 +223,22 @@ test('probes management highlights active edits, syncs dynamic #312 scope after 
   await expect(globalRow).toHaveAttribute('data-editing', 'true')
   await expect(page.getByRole('heading', { name: '编辑探测任务' })).toBeFocused()
 
-  // Dynamic #312 scope sync: Global Ping starts global (guardGlobalScope=false), user narrows to Alpha SG -> 502 (server saved [Alpha]),
-  // 1) Even BEFORE resync, unchecking Alpha SG and clicking Save MUST block silent widening with ZERO global POST!
+  // Dynamic #312 scope sync: Global Ping starts in global ('all') mode (guardGlobalScope=false), user switches to scoped Alpha SG -> 502 (server saved [Alpha]),
+  // 1) Even BEFORE resync, unchecking Alpha SG blocks empty scoped save AND switching back to global blocks silent widening with ZERO global POST!
   // 2) After resync, newer edit is preserved AND #312 guard remains active against silent widening.
+  await expect(page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true })).toBeChecked()
+  await page.getByRole('radio', { name: '指定节点', exact: true }).check()
   await page.getByLabel('Alpha SG', { exact: true }).check()
   saveReturn502 = true
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Synthetic probe save 502' })).toBeVisible()
   const postsAfter502 = probeSavePosts
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  expect(probeSavePosts).toBe(postsAfter502)
+
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
   await nameInput.fill('Global Ping Newer Edit')
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
@@ -459,9 +470,15 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
 
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
   await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  expect(submittedProbeIds).toHaveLength(2)
+
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
+  await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
   expect(submittedProbeIds).toHaveLength(2)
 
+  await page.getByRole('radio', { name: '指定节点', exact: true }).check()
   await page.getByLabel('Alpha SG', { exact: true }).check()
   await page.getByRole('button', { name: '保存任务' }).click()
   await expect(page.getByRole('status').filter({ hasText: '已保存探测任务' })).toBeVisible()
@@ -499,6 +516,11 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
 
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
   await page.getByRole('button', { name: '保存规则' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  expect(submittedRuleIds).toHaveLength(1)
+
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
+  await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
   expect(submittedRuleIds).toHaveLength(1)
 
@@ -535,6 +557,7 @@ test('new probe, channel, and rule drafts reuse stable client UUIDs across 502 r
   await expect(page.getByRole('alert').filter({ hasText: 'Second channel created before 502' })).toBeVisible()
 
   await ruleNameInput.fill('Sibling Rule Refresh')
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('status').filter({ hasText: '已保存告警规则' })).toBeVisible()
 
@@ -775,14 +798,21 @@ test('alerts management isolates channel and rule drafts, shows in-app-only zero
   const updatedBackupChannelRow = channelList.getByRole('listitem').filter({ hasText: 'Backup Hook Saved Later' })
   await expect(updatedBackupChannelRow).toBeVisible()
 
-  // 7. Dynamic #312 rule scope sync after 502: In-App Global Rule narrowed to Alpha SG -> 502 (applied) -> uncheck Alpha SG BEFORE resync MUST NOT send global POST -> resync preserves edit AND still blocks silent widening!
+  // 7. Dynamic #312 rule scope sync after 502: In-App Global Rule starts in 'all' mode -> narrowed to Alpha SG -> 502 (applied) -> uncheck Alpha SG blocks empty scoped save AND switching to global BEFORE resync MUST NOT send global POST -> resync preserves edit AND still blocks silent widening!
   await globalRuleRow.getByRole('button', { name: '编辑' }).click()
+  await expect(page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true })).toBeChecked()
+  await page.getByRole('radio', { name: '指定节点', exact: true }).check()
   await page.getByLabel('Alpha SG', { exact: true }).check()
   ruleSave502 = true
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: 'Rule save 502 after narrowing scope' })).toBeVisible()
   const rulePostsAfter502 = ruleSavePosts
   await page.getByLabel('Alpha SG', { exact: true }).uncheck()
+  await page.getByRole('button', { name: '保存规则' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  expect(ruleSavePosts).toBe(rulePostsAfter502)
+
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
   await ruleNameInput.fill('In-App Global Rule Newer')
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
@@ -817,5 +847,255 @@ test('alerts management isolates channel and rule drafts, shows in-app-only zero
   await page.getByRole('button', { name: '保存规则' }).click()
   await expect(page).toHaveURL(/\/login\?redirect=/)
   await expect(discardDialog).toBeHidden()
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})
+
+test('shared node scope selector preserves hidden selections across filters, supports pause/re-enable guards, and site settings pair accessible disclosures', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const initialState = await (await page.request.get('/api/admin/state')).json()
+  const baseNode = initialState.nodes[0]
+  const nodes = [
+    {
+      ...baseNode,
+      id: '11111111-0000-0000-0000-000000000011',
+      name: 'Tokyo-Edge-01',
+      region: 'JP',
+      group: 'EastAsia',
+      hidden: false,
+      disabled: false,
+    },
+    {
+      ...baseNode,
+      id: '11111111-0000-0000-0000-000000000012',
+      name: 'Tokyo-Core-02',
+      region: 'JP',
+      group: 'EastAsia',
+      hidden: false,
+      disabled: false,
+    },
+    {
+      ...baseNode,
+      id: '11111111-0000-0000-0000-000000000013',
+      name: 'Singapore-Pop-01',
+      region: 'SG',
+      group: 'SEA',
+      hidden: false,
+      disabled: false,
+    },
+    {
+      ...baseNode,
+      id: '11111111-0000-0000-0000-000000000014',
+      name: 'Revoked-Edge-99',
+      region: 'JP',
+      group: 'EastAsia',
+      hidden: false,
+      disabled: true,
+    },
+  ]
+  const probes: Array<Record<string, unknown>> = [
+    {
+      id: 'aaaaaaaa-0000-0000-0000-000000000101',
+      name: 'Paused Global Probe',
+      weight: 0,
+      kind: 'tcp',
+      target: 'example.com:443',
+      interval_seconds: 60,
+      timeout_seconds: 5,
+      enabled: false,
+      node_ids: [],
+    },
+    {
+      id: 'aaaaaaaa-0000-0000-0000-000000000102',
+      name: 'Scoped Revoked Probe',
+      weight: 1,
+      kind: 'icmp',
+      target: 'example.com',
+      interval_seconds: 60,
+      timeout_seconds: 5,
+      enabled: true,
+      node_ids: [
+        '11111111-0000-0000-0000-000000000011',
+        '11111111-0000-0000-0000-000000000014',
+      ],
+    },
+  ]
+  const rules: Array<Record<string, unknown>> = []
+  const probePayloads: Array<Record<string, unknown>> = []
+  const rulePayloads: Array<Record<string, unknown>> = []
+
+  await page.route('**/api/v1/nodes/*/probes*', route => route.fulfill({
+    json: EMPTY_PROBE_HISTORY,
+  }))
+  await page.route('**/api/admin/state', route => route.fulfill({
+    json: {
+      ...initialState,
+      nodes,
+      probes,
+      alert_rules: rules,
+      channels: [],
+    },
+  }))
+  await page.route('**/api/admin/probes', async (route) => {
+    const body = route.request().postDataJSON()
+    probePayloads.push(body)
+    const idx = probes.findIndex(item => item.id === body.id)
+    if (idx >= 0)
+      probes[idx] = { ...probes[idx], ...body }
+    else
+      probes.push(body)
+    await route.fulfill({ json: { ok: true } })
+  })
+  await page.route('**/api/admin/alert-rules', async (route) => {
+    const body = route.request().postDataJSON()
+    rulePayloads.push(body)
+    rules.push(body)
+    await route.fulfill({ json: { ok: true } })
+  })
+
+  // 1. Probes: default scoped blocks empty, search preserves hidden selection, filtered select/deselect keep hidden SG, zero-match filter still saves hidden SG cleanly!
+  await page.goto('/admin?section=probes')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
+
+  await expect(page.getByRole('radio', { name: '指定节点', exact: true })).toBeChecked()
+  await page.getByLabel('名称', { exact: true }).fill('Filtered Scope Probe')
+  await page.getByLabel('目标', { exact: true }).fill('example.com')
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '至少选择 1 台活动节点' })).toBeVisible()
+  expect(probePayloads).toHaveLength(0)
+
+  await page.getByLabel('Tokyo-Edge-01', { exact: true }).check()
+  await page.getByLabel('Singapore-Pop-01', { exact: true }).check()
+
+  const probeSearch = page.getByLabel('筛选执行节点')
+  await probeSearch.fill('Tokyo')
+  await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: '已选 2 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
+
+  await page.getByRole('button', { name: '全选筛选结果', exact: true }).click()
+  await expect(page.getByLabel('Tokyo-Core-02', { exact: true })).toBeChecked()
+  await expect(page.getByRole('status').filter({ hasText: '已选 3 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
+
+  await page.getByRole('button', { name: '取消勾选筛选结果', exact: true }).click()
+  await expect(page.getByLabel('Tokyo-Edge-01', { exact: true })).not.toBeChecked()
+  await expect(page.getByLabel('Tokyo-Core-02', { exact: true })).not.toBeChecked()
+  await expect(page.getByRole('status').filter({ hasText: '已选 1 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
+
+  // Search box clear button clears ONLY search term and returns focus without touching selection.
+  await page.getByRole('button', { name: '清空搜索词', exact: true }).click()
+  await expect(probeSearch).toHaveValue('')
+  await expect(probeSearch).toBeFocused()
+  await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toBeChecked()
+
+  // Switching to global and back before saving restores stashed scoped selection.
+  await page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true }).check()
+  await page.getByRole('radio', { name: '指定节点', exact: true }).check()
+  await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toBeChecked()
+
+  // Zero-match filter while a hidden node is selected MUST still save that exact hidden selection (never widens to global, no UI-only scopeMode in API body).
+  await probeSearch.fill('NoMatchRegion')
+  await expect(page.getByText('当前筛选无匹配节点。')).toBeVisible()
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已保存探测任务' })).toBeVisible()
+  expect(probePayloads).toHaveLength(1)
+  expect(probePayloads[0]!.node_ids).toEqual(['11111111-0000-0000-0000-000000000013'])
+  expect(probePayloads[0]).not.toHaveProperty('scopeMode')
+
+  // 2. Filter UI controls (search / selected-only) do NOT mark a clean loaded task dirty; removing unavailable node & pausing preserves valid scoped target.
+  const probeList = page.getByRole('list', { name: '探测任务列表' })
+  await probeList.getByRole('listitem').filter({ hasText: 'Scoped Revoked Probe' }).getByRole('button', { name: '编辑' }).click()
+  await probeSearch.fill('Tokyo')
+  await page.getByRole('button', { name: /仅查看已选/ }).click()
+  await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toHaveCount(0)
+  await page.getByRole('button', { name: '移除失效节点', exact: true }).click()
+  await page.getByLabel('启用任务').uncheck()
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已保存探测任务' })).toBeVisible()
+  expect(probePayloads[1]!.enabled).toBe(false)
+  expect(probePayloads[1]!.node_ids).toEqual(['11111111-0000-0000-0000-000000000011'])
+
+  // 3. Reopening a paused empty-target task loads in 'all' mode and requires #312 confirmation before re-enabling.
+  await probeList.getByRole('listitem').filter({ hasText: 'Paused Global Probe' }).getByRole('button', { name: '编辑' }).click()
+  await expect(page.getByRole('radio', { name: '所有活动节点（含之后注册）', exact: true })).toBeChecked()
+  await page.getByLabel('启用任务').check()
+  await expect(page.getByLabel('确认改为应用于所有活动节点')).toBeVisible()
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('alert').filter({ hasText: '静默扩大到所有活动节点' })).toBeVisible()
+  expect(probePayloads).toHaveLength(2)
+  await page.getByLabel('确认改为应用于所有活动节点').check()
+  await page.getByRole('button', { name: '保存任务' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已保存探测任务' })).toBeVisible()
+  expect(probePayloads[2]!.enabled).toBe(true)
+  expect(probePayloads[2]!.node_ids).toEqual([])
+
+  // 4. Alerts reuses the same selector cleanly on both desktop and mobile without horizontal overflow.
+  await page.goto('/admin?section=alerts')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
+  await expect(page.getByRole('radio', { name: '指定节点', exact: true })).toBeChecked()
+  await page.getByLabel('规则名称', { exact: true }).fill('Filtered Alert Rule')
+  await page.getByLabel('Tokyo-Edge-01', { exact: true }).check()
+  await page.getByLabel('Singapore-Pop-01', { exact: true }).check()
+  await page.getByLabel('筛选监测节点').fill('JP')
+  await page.getByRole('button', { name: '取消勾选筛选结果', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已选 1 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
+  await page.getByRole('button', { name: '保存规则' }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已保存告警规则' })).toBeVisible()
+  expect(rulePayloads).toHaveLength(1)
+  expect(rulePayloads[0]!.node_ids).toEqual(['11111111-0000-0000-0000-000000000013'])
+  expect(rulePayloads[0]).not.toHaveProperty('scopeMode')
+
+  // 5. Site settings pairs all three switches with verbatim disclosures and aria-describedby; mobile expands without dirtying draft.
+  await page.goto('/admin?section=site')
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0)
+
+  const privateCheckbox = page.getByLabel('私有站点：登录后才能查看监控数据')
+  const ipCheckbox = page.getByLabel('启用 IP 信息查询（仅管理员）')
+  const ratesCheckbox = page.getByLabel('每日汇率（Frankfurter）')
+
+  await expect(privateCheckbox).toHaveAttribute('aria-describedby', 'private-site-privacy')
+  await expect(ipCheckbox).toHaveAttribute('aria-describedby', 'ip-info-privacy')
+  await expect(ratesCheckbox).toHaveAttribute('aria-describedby', 'daily-exchange-rates-privacy')
+
+  const privateDesc = page.locator('#private-site-privacy')
+  const ipDesc = page.locator('#ip-info-privacy')
+  const ratesDesc = page.locator('#daily-exchange-rates-privacy')
+  await expect(privateDesc).toContainText('关闭私有站点后，未隐藏节点的监控数据对访客公开。')
+  await expect(ipDesc).toContainText('第三方结果可能不准确或暂时不可用。节点地址请在“节点”中登记，中国大陆节点不查询。')
+  await expect(ratesDesc).toContainText('访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；第三方会看到访客 IP。保存后刷新首页生效。')
+
+  const positions = await Promise.all([
+    privateCheckbox.boundingBox(),
+    privateDesc.boundingBox(),
+    ipCheckbox.boundingBox(),
+    ipDesc.boundingBox(),
+    ratesCheckbox.boundingBox(),
+    ratesDesc.boundingBox(),
+  ])
+  for (const box of positions)
+    expect(box).not.toBeNull()
+  expect(positions[0]!.y).toBeLessThan(positions[1]!.y)
+  expect(positions[1]!.y).toBeLessThan(positions[2]!.y)
+  expect(positions[2]!.y).toBeLessThan(positions[3]!.y)
+  expect(positions[3]!.y).toBeLessThan(positions[4]!.y)
+  expect(positions[4]!.y).toBeLessThan(positions[5]!.y)
+
+  const compact = await page.evaluate(() => innerWidth < 640)
+  const ipExpandButton = page.getByRole('button', { name: '查看完整说明：IP 信息查询', exact: true })
+  const ratesExpandButton = page.getByRole('button', { name: '查看完整说明：每日汇率', exact: true })
+  if (compact) {
+    await expect(ipExpandButton).toBeVisible()
+    await expect(ipExpandButton).toHaveAttribute('aria-expanded', 'false')
+    await ipExpandButton.click()
+    await expect(page.getByRole('button', { name: '收起完整说明：IP 信息查询', exact: true })).toHaveAttribute('aria-expanded', 'true')
+    await expect(ratesExpandButton).toBeVisible()
+    await ratesExpandButton.click()
+    await expect(page.getByRole('button', { name: '收起完整说明：每日汇率', exact: true })).toHaveAttribute('aria-expanded', 'true')
+    // Toggling disclosure visibility must not dirty site settings.
+    await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toHaveCount(0)
+  }
+  else {
+    await expect(ipExpandButton).toBeHidden()
+    await expect(ratesExpandButton).toBeHidden()
+  }
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
