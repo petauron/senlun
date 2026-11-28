@@ -940,17 +940,30 @@ test('shared node scope selector preserves hidden selections across filters, sup
     const body = route.request().postDataJSON()
     probePayloads.push(body)
     const idx = probes.findIndex(item => item.id === body.id)
-    if (idx >= 0)
-      probes[idx] = { ...probes[idx], ...body }
-    else
+    if (idx >= 0) {
+      probes[idx] = {
+        ...probes[idx],
+        ...body,
+      }
+    }
+    else {
       probes.push(body)
-    await route.fulfill({ json: { ok: true } })
+    }
+    await route.fulfill({
+      json: {
+        ok: true,
+      },
+    })
   })
   await page.route('**/api/admin/alert-rules', async (route) => {
     const body = route.request().postDataJSON()
     rulePayloads.push(body)
     rules.push(body)
-    await route.fulfill({ json: { ok: true } })
+    await route.fulfill({
+      json: {
+        ok: true,
+      },
+    })
   })
 
   // 1. Probes: default scoped blocks empty, search preserves hidden selection, filtered select/deselect keep hidden SG, zero-match filter still saves hidden SG cleanly!
@@ -970,6 +983,19 @@ test('shared node scope selector preserves hidden selections across filters, sup
   const probeSearch = page.getByLabel('筛选执行节点')
   await probeSearch.fill('Tokyo')
   await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: '已选 2 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
+
+  // Entering selected-only view bypasses the active search filter to reveal hidden selected nodes, keeps search text, and restores the filter on exit without mutating selections.
+  await page.getByRole('button', { name: '仅查看已选（2）', exact: true }).click()
+  await expect(probeSearch).toHaveValue('Tokyo')
+  await expect(page.getByLabel('Tokyo-Edge-01', { exact: true })).toBeChecked()
+  await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toBeChecked()
+  await expect(page.getByLabel('Tokyo-Core-02', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '取消勾选全部已选', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '返回筛选结果（已选 2）', exact: true }).click()
+  await expect(probeSearch).toHaveValue('Tokyo')
+  await expect(page.getByLabel('Singapore-Pop-01', { exact: true })).toHaveCount(0)
+  await expect(page.getByLabel('Tokyo-Core-02', { exact: true })).toBeVisible()
   await expect(page.getByRole('status').filter({ hasText: '已选 2 台活动节点（另有 1 台已选未在当前筛选中）' })).toBeVisible()
 
   await page.getByRole('button', { name: '全选筛选结果', exact: true }).click()
@@ -1001,11 +1027,15 @@ test('shared node scope selector preserves hidden selections across filters, sup
   expect(probePayloads[0]!.node_ids).toEqual(['11111111-0000-0000-0000-000000000013'])
   expect(probePayloads[0]).not.toHaveProperty('scopeMode')
 
-  // 2. Filter UI controls (search / selected-only) do NOT mark a clean loaded task dirty; removing unavailable node & pausing preserves valid scoped target.
+  // 2. Filter UI controls (search / selected-only revealing hidden selected nodes / exit) do NOT mark a clean loaded task dirty; removing unavailable node & pausing preserves valid scoped target.
   const probeList = page.getByRole('list', { name: '探测任务列表' })
   await probeList.getByRole('listitem').filter({ hasText: 'Scoped Revoked Probe' }).getByRole('button', { name: '编辑' }).click()
-  await probeSearch.fill('Tokyo')
-  await page.getByRole('button', { name: /仅查看已选/ }).click()
+  await probeSearch.fill('SG')
+  await expect(page.getByLabel('Tokyo-Edge-01', { exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '仅查看已选（1）', exact: true }).click()
+  await expect(page.getByLabel('Tokyo-Edge-01', { exact: true })).toBeChecked()
+  await page.getByRole('button', { name: '返回筛选结果（已选 1）', exact: true }).click()
+  await expect(page.getByLabel('Tokyo-Edge-01', { exact: true })).toHaveCount(0)
   await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toHaveCount(0)
   await page.getByRole('button', { name: '移除失效节点', exact: true }).click()
   await page.getByLabel('启用任务').uncheck()
@@ -1082,7 +1112,23 @@ test('shared node scope selector preserves hidden selections across filters, sup
   const compact = await page.evaluate(() => innerWidth < 640)
   const ipExpandButton = page.getByRole('button', { name: '查看完整说明：IP 信息查询', exact: true })
   const ratesExpandButton = page.getByRole('button', { name: '查看完整说明：每日汇率', exact: true })
+  const mobileRatesSummary = page.locator('[data-mobile-summary="daily-rates"]')
   if (compact) {
+    // Narrow mobile default MUST visibly show Frankfurter visitor-IP disclosure before expanding, without screen-reader duplication.
+    await expect(mobileRatesSummary).toBeVisible()
+    await expect(mobileRatesSummary).toHaveAttribute('aria-hidden', 'true')
+    await expect(mobileRatesSummary).toContainText('Frankfurter')
+    await expect(mobileRatesSummary).toContainText('第三方会看到访客 IP')
+    const mobileRatesSummaryBox = await mobileRatesSummary.boundingBox()
+    expect(mobileRatesSummaryBox).not.toBeNull()
+    expect(mobileRatesSummaryBox!.width).toBeGreaterThan(100)
+    expect(mobileRatesSummaryBox!.height).toBeGreaterThan(12)
+    expect(positions[4]!.y).toBeLessThan(mobileRatesSummaryBox!.y)
+
+    const collapsedFullRatesBox = await ratesDesc.boundingBox()
+    expect(collapsedFullRatesBox).not.toBeNull()
+    expect(collapsedFullRatesBox!.height).toBeLessThanOrEqual(2)
+
     await expect(ipExpandButton).toBeVisible()
     await expect(ipExpandButton).toHaveAttribute('aria-expanded', 'false')
     await ipExpandButton.click()
@@ -1090,12 +1136,22 @@ test('shared node scope selector preserves hidden selections across filters, sup
     await expect(ratesExpandButton).toBeVisible()
     await ratesExpandButton.click()
     await expect(page.getByRole('button', { name: '收起完整说明：每日汇率', exact: true })).toHaveAttribute('aria-expanded', 'true')
+    await expect(mobileRatesSummary).toHaveCount(0)
+    const expandedFullRatesBox = await ratesDesc.boundingBox()
+    expect(expandedFullRatesBox).not.toBeNull()
+    expect(expandedFullRatesBox!.width).toBeGreaterThan(100)
+    expect(expandedFullRatesBox!.height).toBeGreaterThan(12)
     // Toggling disclosure visibility must not dirty site settings.
     await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toHaveCount(0)
   }
   else {
+    await expect(mobileRatesSummary).toBeHidden()
     await expect(ipExpandButton).toBeHidden()
     await expect(ratesExpandButton).toBeHidden()
+    const desktopFullRatesBox = await ratesDesc.boundingBox()
+    expect(desktopFullRatesBox).not.toBeNull()
+    expect(desktopFullRatesBox!.width).toBeGreaterThan(100)
+    expect(desktopFullRatesBox!.height).toBeGreaterThan(12)
   }
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })

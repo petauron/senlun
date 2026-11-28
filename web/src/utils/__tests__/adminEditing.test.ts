@@ -96,7 +96,10 @@ describe('admin editing helpers', () => {
 
     expect(initialNodeScopeMode({ id: '', node_ids: [] })).toBe('scoped')
     expect(initialNodeScopeMode({ id: 'global-1', node_ids: [] })).toBe('all')
-    expect(initialNodeScopeMode({ id: 'item-1', node_ids: ['active-1'] })).toBe('scoped')
+    expect(initialNodeScopeMode({
+      id: 'item-1',
+      node_ids: ['active-1'],
+    })).toBe('scoped')
     expect(effectiveScopedNodeIds('all', ['active-1'])).toEqual([])
     expect(effectiveScopedNodeIds('scoped', ['active-1'])).toEqual(['active-1'])
 
@@ -231,20 +234,39 @@ describe('admin editing helpers', () => {
     })).toBeNull()
   })
 
-  it('filters active assignable nodes by name/region/group, preserves hidden selections, and prunes unavailable nodes', () => {
+  it('filters active assignable nodes by name/region/group, reveals hidden selections in selected-only view, and prunes unavailable nodes', () => {
     const nodes = [
-      { ...makeNode('jp-1', 'Tokyo-Edge-01'), region: 'JP', group: 'EastAsia' },
-      { ...makeNode('jp-2', 'Tokyo-Core-02'), region: 'JP', group: 'EastAsia' },
-      { ...makeNode('sg-1', 'Singapore-Pop-01'), region: 'SG', group: 'SEA' },
-      { ...makeNode('rev-1', 'Revoked-JP', true), region: 'JP', group: 'EastAsia' },
+      {
+        ...makeNode('jp-1', 'Tokyo-Edge-01'),
+        region: 'JP',
+        group: 'EastAsia',
+      },
+      {
+        ...makeNode('jp-2', 'Tokyo-Core-02'),
+        region: 'JP',
+        group: 'EastAsia',
+      },
+      {
+        ...makeNode('sg-1', 'Singapore-Pop-01'),
+        region: 'SG',
+        group: 'SEA',
+      },
+      {
+        ...makeNode('rev-1', 'Revoked-JP', true),
+        region: 'JP',
+        group: 'EastAsia',
+      },
     ]
     const options = buildAssignableNodes(nodes, ['jp-1', 'sg-1', 'rev-1', 'deleted-9'])
 
     const jpFiltered = filterAssignableActiveNodes(options, nodes, 'jp', ['jp-1', 'sg-1'], false)
     expect(jpFiltered.map(item => item.id)).toEqual(['jp-1', 'jp-2'])
 
-    const selectedOnlyFiltered = filterAssignableActiveNodes(options, nodes, 'tokyo', ['jp-1', 'sg-1'], true)
-    expect(selectedOnlyFiltered.map(item => item.id)).toEqual(['jp-1'])
+    // Selected-only view bypasses temporary search queries so hidden selected active nodes can be inspected.
+    const selectedOnlyWithQuery = filterAssignableActiveNodes(options, nodes, 'tokyo', ['jp-1', 'sg-1'], true)
+    expect(selectedOnlyWithQuery.map(item => item.id)).toEqual(['jp-1', 'sg-1'])
+    const selectedOnlyWithNoMatch = filterAssignableActiveNodes(options, nodes, 'nomatch', ['jp-1', 'sg-1'], true)
+    expect(selectedOnlyWithNoMatch.map(item => item.id)).toEqual(['jp-1', 'sg-1'])
 
     // Selecting and deselecting filtered results keeps hidden 'sg-1' untouched.
     const afterSelect = applyFilteredNodeSelection(['jp-1', 'sg-1'], ['jp-1', 'jp-2'], 'select')
@@ -415,8 +437,14 @@ describe('admin editing helpers', () => {
     }, probe)).toBe(true)
     expect(isProbeDraftDirty(probeCopy, probe, true)).toBe(true)
     expect(isProbeDraftDirty(probeCopy, probe, false, 'all', 'scoped')).toBe(true)
-    const globalProbe: ProbeTask = { ...probe, node_ids: [] }
-    expect(isProbeDraftDirty({ ...globalProbe, node_ids: ['n1'] }, globalProbe, false, 'all', 'all')).toBe(false)
+    const globalProbe: ProbeTask = {
+      ...probe,
+      node_ids: [],
+    }
+    expect(isProbeDraftDirty({
+      ...globalProbe,
+      node_ids: ['n1'],
+    }, globalProbe, false, 'all', 'all')).toBe(false)
     expect(isProbeDraftDirty(globalProbe, globalProbe, false, 'scoped', 'all')).toBe(true)
 
     const channel = makeChannel('ch-1', 'Primary', false)
@@ -450,8 +478,14 @@ describe('admin editing helpers', () => {
     }, rule)).toBe(true)
     expect(isAlertRuleDraftDirty(ruleCopy, rule, true)).toBe(true)
     expect(isAlertRuleDraftDirty(ruleCopy, rule, false, 'all', 'scoped')).toBe(true)
-    const globalRule: AlertRule = { ...rule, node_ids: [] }
-    expect(isAlertRuleDraftDirty({ ...globalRule, node_ids: ['n1'] }, globalRule, false, 'all', 'all')).toBe(false)
+    const globalRule: AlertRule = {
+      ...rule,
+      node_ids: [],
+    }
+    expect(isAlertRuleDraftDirty({
+      ...globalRule,
+      node_ids: ['n1'],
+    }, globalRule, false, 'all', 'all')).toBe(false)
     expect(isAlertRuleDraftDirty(globalRule, globalRule, false, 'scoped', 'all')).toBe(true)
   })
 })

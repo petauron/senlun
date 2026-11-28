@@ -174,8 +174,8 @@ export function filterAssignableActiveNodes(
   return options.filter((option) => {
     if (option.revoked || option.missing)
       return false
-    if (selectedOnly && !selected.has(option.id))
-      return false
+    if (selectedOnly)
+      return selected.has(option.id)
     if (!normalizedQuery)
       return true
     const node = byId.get(option.id)

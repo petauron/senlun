@@ -294,7 +294,11 @@ test('local traffic correction shows readable approximate summaries with expanda
       return
     }
     submittedPayloads.push(route.request().postDataJSON())
-    await route.fulfill({ json: { ok: true } })
+    await route.fulfill({
+      json: {
+        ok: true,
+      },
+    })
   })
 
   await page.goto(`/admin?section=nodes&node=${id}`)

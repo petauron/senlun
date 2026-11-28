@@ -44,6 +44,11 @@ watch(() => props.resetNonce, () => {
   selectedOnly.value = false
 })
 
+watch(searchQuery, () => {
+  if (selectedOnly.value)
+    selectedOnly.value = false
+})
+
 const selectedSet = computed(() => new Set(props.selectedIds))
 const activeOptions = computed(() => props.options.filter(option => !option.revoked && !option.missing))
 const unavailableOptions = computed(() => props.options.filter(option => option.revoked || option.missing))
@@ -71,10 +76,26 @@ const scopeBadgeLabel = computed(() => {
     return '所有活动节点'
   return `指定节点 · 已选 ${selectedActiveCount.value} 台`
 })
+const hasSearchFilter = computed(() => searchQuery.value.trim().length > 0)
+const selectActionLabel = computed(() => selectedOnly.value
+  ? '全选当前列表'
+  : '全选筛选结果')
+const deselectActionLabel = computed(() => selectedOnly.value
+  ? '取消勾选全部已选'
+  : '取消勾选筛选结果')
+const selectedOnlyToggleLabel = computed(() => {
+  if (!selectedOnly.value)
+    return `仅查看已选（${selectedActiveCount.value}）`
+  return hasSearchFilter.value
+    ? `返回筛选结果（已选 ${selectedActiveCount.value}）`
+    : `显示全部（已选 ${selectedActiveCount.value}）`
+})
 const selectionSummaryText = computed(() => {
-  const summary = hiddenSelectedActiveCount.value > 0
-    ? `已选 ${selectedActiveCount.value} 台活动节点（另有 ${hiddenSelectedActiveCount.value} 台已选未在当前筛选中）`
-    : `已选 ${selectedActiveCount.value} 台活动节点`
+  let summary = `已选 ${selectedActiveCount.value} 台活动节点`
+  if (selectedOnly.value && hasSearchFilter.value)
+    summary = `已选 ${selectedActiveCount.value} 台活动节点（当前显示全部已选，退出后恢复筛选）`
+  else if (hiddenSelectedActiveCount.value > 0)
+    summary = `已选 ${selectedActiveCount.value} 台活动节点（另有 ${hiddenSelectedActiveCount.value} 台已选未在当前筛选中）`
   return selectedUnavailableCount.value > 0
     ? `${summary} · 含 ${selectedUnavailableCount.value} 个失效节点`
     : summary
@@ -219,10 +240,10 @@ function clearSearch(): void {
           </div>
           <div class="flex flex-wrap items-center gap-2">
             <Button type="button" variant="outline" size="sm" class="min-h-10" :disabled="disabled || !canSelectAllFiltered" @click="selectFiltered">
-              全选筛选结果
+              {{ selectActionLabel }}
             </Button>
             <Button type="button" variant="outline" size="sm" class="min-h-10" :disabled="disabled || !canDeselectFiltered" @click="deselectFiltered">
-              取消勾选筛选结果
+              {{ deselectActionLabel }}
             </Button>
           </div>
         </div>
@@ -240,7 +261,7 @@ function clearSearch(): void {
             :disabled="disabled"
             @click="selectedOnly = !selectedOnly"
           >
-            {{ selectedOnly ? `显示全部（已选 ${selectedActiveCount}）` : `仅查看已选（${selectedActiveCount}）` }}
+            {{ selectedOnlyToggleLabel }}
           </Button>
         </div>
 

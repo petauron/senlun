@@ -462,9 +462,20 @@ async function logout(): Promise<void> {
                   >
                   每日汇率（Frankfurter）
                 </label>
-                <p id="daily-exchange-rates-privacy" class="pl-6 text-sm text-muted-foreground">
-                  <span>启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；</span>
-                  <span :class="expandedSiteDisclosures.dailyRates ? 'inline' : 'sr-only sm:not-sr-only sm:inline'">第三方会看到访客 IP。保存后刷新首页生效。</span>
+                <p
+                  v-if="!expandedSiteDisclosures.dailyRates"
+                  aria-hidden="true"
+                  data-mobile-summary="daily-rates"
+                  class="pl-6 text-sm text-muted-foreground sm:hidden"
+                >
+                  启用后，访客浏览器每天从 Frankfurter 获取汇率，第三方会看到访客 IP。
+                </p>
+                <p
+                  id="daily-exchange-rates-privacy"
+                  class="pl-6 text-sm text-muted-foreground"
+                  :class="expandedSiteDisclosures.dailyRates ? 'block' : 'sr-only sm:not-sr-only sm:block'"
+                >
+                  启用后，访客浏览器每天从 Frankfurter 获取一次汇率，不发送节点、价格或 Senlun 凭据；第三方会看到访客 IP。保存后刷新首页生效。
                 </p>
                 <div class="pl-6 sm:hidden">
                   <button
