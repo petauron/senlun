@@ -21,7 +21,7 @@ mod metrics;
 pub(crate) use metrics::tests::version_six_store;
 pub(crate) mod rollups;
 
-pub(crate) const SCHEMA_VERSION: i64 = 10;
+pub(crate) const SCHEMA_VERSION: i64 = 11;
 const MIN_SNAPSHOT_SPACING_MS: i64 = 950;
 pub(crate) const RETENTION_PRUNE_BATCH_SIZE: usize = 10_000;
 
@@ -194,6 +194,9 @@ impl Storage {
             }
             if version < 10 {
                 crate::ip_unlock::migrate(&transaction)?;
+            }
+            if version < 11 {
+                crate::notifications::migrate(&transaction)?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
