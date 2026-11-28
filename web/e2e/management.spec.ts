@@ -1,3 +1,4 @@
+import type { Locator, Page } from '@playwright/test'
 import type { TrafficCorrectionContext } from '../src/utils/trafficCorrection'
 import { expect, test } from '@playwright/test'
 import { nodeMetadata } from '../src/utils/admin'
@@ -429,4 +430,229 @@ test('DataTooltip portals above overflow containers, supports pointer bridge hov
   await expect(trafficTooltip).toBeHidden()
   await page.keyboard.press('Escape')
   await expect(dialog).toBeHidden()
+})
+
+async function getAssociatedTooltip(trigger: Locator, page: Page): Promise<Locator> {
+  const tooltipId = await trigger.getAttribute('aria-describedby')
+  expect(tooltipId).toBeTruthy()
+  return page.locator(`[id="${tooltipId}"]`)
+}
+
+async function assertHeaderButtonUnobstructed(button: Locator): Promise<void> {
+  const hits = await button.evaluate((el) => {
+    const rect = el.getBoundingClientRect()
+    const style = getComputedStyle(el)
+    const insetLeft = Math.min(rect.width / 3, Math.ceil(Number.parseFloat(style.borderBottomLeftRadius) || 0) + 1)
+    const insetRight = Math.min(rect.width / 3, Math.ceil(Number.parseFloat(style.borderBottomRightRadius) || 0) + 1)
+    const points = [
+      { label: 'center', x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
+      { label: 'bottom-left', x: rect.left + insetLeft, y: rect.bottom - 1 },
+      { label: 'bottom-center', x: rect.left + rect.width / 2, y: rect.bottom - 1 },
+      { label: 'bottom-right', x: rect.right - insetRight, y: rect.bottom - 1 },
+    ]
+    return points.map((point) => {
+      const hit = document.elementFromPoint(point.x, point.y)
+      return {
+        label: point.label,
+        insideButton: Boolean(hit && el.contains(hit)),
+        hitSlot: hit?.getAttribute('data-slot') ?? null,
+        hitTag: hit?.tagName ?? null,
+      }
+    })
+  })
+
+  for (const hit of hits) {
+    expect(hit.insideButton, `${hit.label} hit ${hit.hitTag} (${hit.hitSlot})`).toBe(true)
+    expect(hit.hitSlot).not.toBe('data-tooltip-content')
+  }
+}
+
+async function clickHeaderButtonBottomEdge(button: Locator, page: Page): Promise<void> {
+  const target = await button.evaluate((el) => {
+    const rect = el.getBoundingClientRect()
+    const x = rect.left + rect.width / 2
+    const y = rect.bottom - 1
+    const hit = document.elementFromPoint(x, y)
+    return {
+      x,
+      y,
+      insideButton: Boolean(hit && el.contains(hit)),
+      hitSlot: hit?.getAttribute('data-slot') ?? null,
+      hitTag: hit?.tagName ?? null,
+    }
+  })
+
+  expect(target.insideButton, `bottom-edge click target hit ${target.hitTag} (${target.hitSlot})`).toBe(true)
+  expect(target.hitSlot).not.toBe('data-tooltip-content')
+  await page.mouse.click(target.x, target.y)
+}
+
+async function assertTooltipBelowButtons(tooltip: Locator, buttons: Locator[], page: Page): Promise<void> {
+  await expect(tooltip).toBeVisible()
+  await expect(tooltip).toHaveAttribute('data-placement', 'bottom')
+  const viewport = page.viewportSize()
+  expect(viewport).not.toBeNull()
+  const tooltipBox = await tooltip.boundingBox()
+  expect(tooltipBox).not.toBeNull()
+  if (!tooltipBox || !viewport)
+    return
+
+  expect(tooltipBox.x).toBeGreaterThanOrEqual(0)
+  expect(tooltipBox.y).toBeGreaterThanOrEqual(0)
+  expect(tooltipBox.x + tooltipBox.width).toBeLessThanOrEqual(viewport.width)
+  expect(tooltipBox.y + tooltipBox.height).toBeLessThanOrEqual(viewport.height)
+
+  for (const button of buttons) {
+    const buttonBox = await button.boundingBox()
+    expect(buttonBox).not.toBeNull()
+    if (buttonBox)
+      expect(tooltipBox.y).toBeGreaterThanOrEqual(buttonBox.y + buttonBox.height)
+  }
+}
+
+test('header action tooltips open below buttons without intercepting adjacent controls on desktop, narrow, keyboard, and touch', async ({ page }) => {
+  await login(page)
+  const cardLink = page.getByRole('link', { name: '查看 e2e-node 节点详情' })
+  await expect(cardLink).toBeVisible({ timeout: 20_000 })
+
+  const banner = page.getByRole('banner')
+  const homeLink = banner.getByRole('link', { name: /返回 .* 首页/ })
+  const qualityButton = banner.getByRole('button', { name: '网络质量', exact: true })
+  const themeButton = banner.getByRole('button', { name: /^(?:自动|浅色|深色)主题$/ })
+  const adminButton = banner.getByRole('button', { name: '后台管理', exact: true })
+  const headerButtons = [qualityButton, themeButton, adminButton]
+
+  const qualityTooltip = await getAssociatedTooltip(qualityButton, page)
+  const themeTooltip = await getAssociatedTooltip(themeButton, page)
+  const adminTooltip = await getAssociatedTooltip(adminButton, page)
+
+  await expect(themeButton).toHaveAccessibleName('自动主题')
+
+  // Keyboard Tab order, theme text updates, Escape dismissal, and unobstructed neighbors.
+  await qualityButton.focus()
+  await assertTooltipBelowButtons(qualityTooltip, headerButtons, page)
+  await expect(qualityTooltip).toContainText('网络质量')
+  await assertHeaderButtonUnobstructed(themeButton)
+
+  await page.keyboard.press('Tab')
+  await expect(themeButton).toBeFocused()
+  await expect(qualityTooltip).toBeHidden()
+  await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+  await expect(themeTooltip).toContainText('自动主题')
+  await assertHeaderButtonUnobstructed(qualityButton)
+  await assertHeaderButtonUnobstructed(adminButton)
+
+  await page.keyboard.press('Enter')
+  await expect(themeButton).toHaveAccessibleName('浅色主题')
+  await expect(themeTooltip).toContainText('浅色主题')
+  await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+  await assertHeaderButtonUnobstructed(qualityButton)
+  await assertHeaderButtonUnobstructed(adminButton)
+
+  await page.keyboard.press('Enter')
+  await expect(themeButton).toHaveAccessibleName('深色主题')
+  await expect(themeTooltip).toContainText('深色主题')
+  await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+  await assertHeaderButtonUnobstructed(qualityButton)
+  await assertHeaderButtonUnobstructed(adminButton)
+
+  await page.keyboard.press('Escape')
+  await expect(themeTooltip).toBeHidden()
+  await expect(themeButton).toBeFocused()
+
+  await page.keyboard.press('Tab')
+  await expect(adminButton).toBeFocused()
+  await assertTooltipBelowButtons(adminTooltip, headerButtons, page)
+  await expect(adminTooltip).toContainText('后台管理')
+  await assertHeaderButtonUnobstructed(themeButton)
+  await page.keyboard.press('Escape')
+  await expect(adminTooltip).toBeHidden()
+  await expect(adminButton).toBeFocused()
+  await adminButton.evaluate(el => (el as HTMLElement).blur())
+
+  const compact = await page.evaluate(() => innerWidth <= 640)
+  if (!compact) {
+    // Hover theme button ("深色主题"): bridge stays enterable, adjacent buttons stay clickable at bottom-1px.
+    await themeButton.hover()
+    await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+    await expect(themeTooltip).toContainText('深色主题')
+    await assertHeaderButtonUnobstructed(qualityButton)
+    await assertHeaderButtonUnobstructed(adminButton)
+
+    const themeBox = await themeButton.boundingBox()
+    const themeTooltipBox = await themeTooltip.boundingBox()
+    expect(themeBox).not.toBeNull()
+    expect(themeTooltipBox).not.toBeNull()
+    if (themeBox && themeTooltipBox) {
+      await page.mouse.move(themeBox.x + themeBox.width / 2, themeTooltipBox.y - 4)
+      await page.waitForTimeout(250)
+      await expect(themeTooltip).toBeVisible()
+
+      await page.mouse.move(themeTooltipBox.x + themeTooltipBox.width / 2, themeTooltipBox.y + themeTooltipBox.height / 2)
+      await page.waitForTimeout(180)
+      await expect(themeTooltip).toBeVisible()
+    }
+
+    // Click adjacent Network Quality button near its bottom inner edge while theme tooltip is visible.
+    await clickHeaderButtonBottomEdge(qualityButton, page)
+    await expect(page).toHaveURL('/network-quality')
+    await homeLink.click()
+    await expect(page).toHaveURL('/')
+    await expect(cardLink).toBeVisible()
+
+    // Narrow desktop viewport: right-edge clamped admin tooltip must not obscure theme button, and clicks work.
+    const originalViewport = page.viewportSize()
+    try {
+      await page.setViewportSize({ width: 375, height: 667 })
+      await adminButton.hover()
+      await assertTooltipBelowButtons(adminTooltip, headerButtons, page)
+      await assertHeaderButtonUnobstructed(themeButton)
+
+      const adminBox = await adminButton.boundingBox()
+      const adminTooltipBox = await adminTooltip.boundingBox()
+      expect(adminBox).not.toBeNull()
+      expect(adminTooltipBox).not.toBeNull()
+      if (adminBox && adminTooltipBox) {
+        await page.mouse.move(adminBox.x + adminBox.width / 2, adminTooltipBox.y - 4)
+        await page.waitForTimeout(250)
+        await expect(adminTooltip).toBeVisible()
+      }
+
+      await clickHeaderButtonBottomEdge(themeButton, page)
+      await expect(themeButton).toHaveAccessibleName('自动主题')
+      await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+      await assertHeaderButtonUnobstructed(qualityButton)
+      await assertHeaderButtonUnobstructed(adminButton)
+
+      await clickHeaderButtonBottomEdge(adminButton, page)
+      await expect(page).toHaveURL(/\/admin/)
+    }
+    finally {
+      if (originalViewport)
+        await page.setViewportSize(originalViewport)
+    }
+  }
+  else {
+    // Touch single-tap: toggling theme and navigating to adjacent header actions each succeed on one tap.
+    await themeButton.tap()
+    await expect(themeButton).toHaveAccessibleName('自动主题')
+    await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+    await assertHeaderButtonUnobstructed(qualityButton)
+    await assertHeaderButtonUnobstructed(adminButton)
+
+    await qualityButton.tap()
+    await expect(page).toHaveURL('/network-quality')
+
+    await homeLink.tap()
+    await expect(page).toHaveURL('/')
+    await expect(cardLink).toBeVisible()
+
+    await themeButton.tap()
+    await expect(themeButton).toHaveAccessibleName('浅色主题')
+    await assertTooltipBelowButtons(themeTooltip, headerButtons, page)
+    await assertHeaderButtonUnobstructed(adminButton)
+
+    await adminButton.tap()
+    await expect(page).toHaveURL(/\/admin/)
+  }
 })

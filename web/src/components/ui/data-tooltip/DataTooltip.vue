@@ -1,9 +1,12 @@
 <script setup lang="ts">
 import type { CSSProperties, HTMLAttributes } from 'vue'
-import type { DataTooltipPlacement } from './position'
+import type { DataTooltipPlacement, TooltipBridgeInsets } from './position'
 import { computed, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { cn } from '@/lib/utils'
-import { computeTooltipPosition, isAnchorOutsideViewport } from './position'
+import { computeTooltipBridgeInsets, computeTooltipPosition, isAnchorOutsideViewport } from './position'
+
+type BridgeCssVar = '--data-tooltip-bridge-size' | '--data-tooltip-bridge-start' | '--data-tooltip-bridge-end'
+type TooltipStyle = CSSProperties & Partial<Record<BridgeCssVar, string>>
 
 interface Props {
   /** 提示文本，留空且无 #content 插槽时不渲染气泡 */
@@ -30,6 +33,8 @@ interface Props {
   persistDescription?: boolean
   /** 保留调用方已有的 aria-describedby 关联 */
   ariaDescribedby?: string
+  /** 仅在触发元素与气泡间隙内对齐悬浮桥，避免越入同排相邻按钮 */
+  alignBridgeToTrigger?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -39,6 +44,7 @@ const props = withDefaults(defineProps<Props>(), {
   disabled: false,
   describeTarget: 'root',
   persistDescription: false,
+  alignBridgeToTrigger: false,
 })
 defineSlots<{
   default?: (props: { describedBy: string | undefined }) => unknown
@@ -60,6 +66,7 @@ const tooltipPosition = ref<{ top: number, left: number, placement: DataTooltipP
   left: 0,
   placement: props.placement,
 })
+const bridgeInsets = ref<TooltipBridgeInsets | null>(null)
 
 let lastTouchOpenAt = 0
 let shouldStopNextClick = false
@@ -86,11 +93,13 @@ const rootDescribedBy = computed(() => {
   return merged || undefined
 })
 
-const tooltipStyle = computed<CSSProperties>(() => {
-  const style: CSSProperties = {
+const tooltipStyle = computed<TooltipStyle>(() => {
+  const style: TooltipStyle = {
     top: `${tooltipPosition.value.top}px`,
     left: `${tooltipPosition.value.left}px`,
   }
+  if (!isRenderedOpen.value)
+    style.display = 'none'
   if (props.width != null) {
     style.width = typeof props.width === 'number'
       ? `${props.width}px`
@@ -100,6 +109,11 @@ const tooltipStyle = computed<CSSProperties>(() => {
     style.height = typeof props.height === 'number'
       ? `${props.height}px`
       : props.height
+  }
+  if (props.alignBridgeToTrigger && bridgeInsets.value) {
+    style['--data-tooltip-bridge-size'] = `${bridgeInsets.value.size}px`
+    style['--data-tooltip-bridge-start'] = `${bridgeInsets.value.start}px`
+    style['--data-tooltip-bridge-end'] = `${bridgeInsets.value.end}px`
   }
   return style
 })
@@ -155,15 +169,15 @@ function updatePosition() {
   }
 
   const tooltipRect = tooltip.getBoundingClientRect()
-  tooltipPosition.value = computeTooltipPosition(
-    triggerRect,
-    {
-      width: tooltipRect.width,
-      height: tooltipRect.height,
-    },
-    viewport,
-    props.placement,
-  )
+  const tooltipSize = {
+    width: tooltipRect.width,
+    height: tooltipRect.height,
+  }
+  const nextPosition = computeTooltipPosition(triggerRect, tooltipSize, viewport, props.placement)
+  tooltipPosition.value = nextPosition
+  bridgeInsets.value = props.alignBridgeToTrigger
+    ? computeTooltipBridgeInsets(triggerRect, tooltipSize, nextPosition)
+    : null
 }
 
 function scheduleFramePositionUpdate() {
@@ -295,6 +309,7 @@ watch(
     props.placement,
     props.width,
     props.height,
+    props.alignBridgeToTrigger,
   ],
   () => {
     if (isVisible.value)
@@ -332,7 +347,6 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <span
         v-if="hasTooltip && (persistDescription || isVisible)"
-        v-show="isRenderedOpen"
         :id="tooltipId"
         ref="tooltipRef"
         role="tooltip"
@@ -360,30 +374,30 @@ onBeforeUnmount(() => {
 }
 
 .data-tooltip-content[data-placement='top']::before {
-  left: 0;
-  right: 0;
+  left: var(--data-tooltip-bridge-start, 0);
+  right: var(--data-tooltip-bridge-end, 0);
   top: 100%;
-  height: 10px;
+  height: var(--data-tooltip-bridge-size, 10px);
 }
 
 .data-tooltip-content[data-placement='bottom']::before {
-  left: 0;
-  right: 0;
+  left: var(--data-tooltip-bridge-start, 0);
+  right: var(--data-tooltip-bridge-end, 0);
   bottom: 100%;
-  height: 10px;
+  height: var(--data-tooltip-bridge-size, 10px);
 }
 
 .data-tooltip-content[data-placement='left']::before {
-  top: 0;
-  bottom: 0;
+  top: var(--data-tooltip-bridge-start, 0);
+  bottom: var(--data-tooltip-bridge-end, 0);
   left: 100%;
-  width: 10px;
+  width: var(--data-tooltip-bridge-size, 10px);
 }
 
 .data-tooltip-content[data-placement='right']::before {
-  top: 0;
-  bottom: 0;
+  top: var(--data-tooltip-bridge-start, 0);
+  bottom: var(--data-tooltip-bridge-end, 0);
   right: 100%;
-  width: 10px;
+  width: var(--data-tooltip-bridge-size, 10px);
 }
 </style>

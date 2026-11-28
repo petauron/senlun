@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeTooltipPosition, isAnchorOutsideViewport } from '../position'
+import { computeTooltipBridgeInsets, computeTooltipPosition, isAnchorOutsideViewport } from '../position'
 
 describe('computeTooltipPosition', () => {
   const viewport = {
@@ -132,5 +132,83 @@ describe('isAnchorOutsideViewport', () => {
       width: 40,
       height: 24,
     }, viewport)).toBe(true)
+  })
+})
+
+describe('computeTooltipBridgeInsets', () => {
+  it('confines a centered bottom bridge to the trigger width and exact vertical gap', () => {
+    const trigger = {
+      top: 12,
+      left: 1184,
+      right: 1216,
+      bottom: 44,
+      width: 32,
+      height: 32,
+    }
+    const tooltip = {
+      width: 60,
+      height: 24,
+    }
+    const position = computeTooltipPosition(trigger, tooltip, { width: 1280, height: 720 }, 'bottom')
+
+    expect(position).toEqual({
+      top: 52,
+      left: 1170,
+      placement: 'bottom',
+    })
+    expect(computeTooltipBridgeInsets(trigger, tooltip, position)).toEqual({
+      size: 8,
+      start: 14,
+      end: 14,
+    })
+  })
+
+  it('tracks a right-clamped header button and floors fractional vertical gaps', () => {
+    const trigger = {
+      top: 12.4,
+      left: 327,
+      right: 359,
+      bottom: 44.4,
+      width: 32,
+      height: 32,
+    }
+    const tooltip = {
+      width: 60,
+      height: 24,
+    }
+    const position = computeTooltipPosition(trigger, tooltip, { width: 375, height: 667 }, 'bottom')
+
+    expect(position).toEqual({
+      top: 52,
+      left: 307,
+      placement: 'bottom',
+    })
+    expect(computeTooltipBridgeInsets(trigger, tooltip, position)).toEqual({
+      size: 7,
+      start: 20,
+      end: 8,
+    })
+  })
+
+  it('uses full tooltip span when the tooltip is narrower than the trigger', () => {
+    const trigger = {
+      top: 200,
+      left: 100,
+      right: 180,
+      bottom: 224,
+      width: 80,
+      height: 24,
+    }
+    const tooltip = {
+      width: 40,
+      height: 24,
+    }
+    const position = computeTooltipPosition(trigger, tooltip, { width: 1280, height: 720 }, 'top')
+
+    expect(computeTooltipBridgeInsets(trigger, tooltip, position)).toEqual({
+      size: 8,
+      start: 0,
+      end: 0,
+    })
   })
 })
