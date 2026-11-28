@@ -1357,3 +1357,115 @@ fn deleting_the_last_assigned_node_never_turns_a_task_into_global_monitoring() {
         0
     );
 }
+
+#[test]
+fn public_remark_allows_newlines_and_rejects_other_control_characters() {
+    let (_dir, storage, node) = fixture();
+    let base = || crate::control::NodeOptions {
+        id: node.node_id.clone(),
+        name: "remark-node".into(),
+        currency: "USD".into(),
+        traffic_limit_type: "sum".into(),
+        traffic_reset_day: 1,
+        ..crate::control::NodeOptions::default()
+    };
+
+    let mut multiline = base();
+    multiline.public_remark = "line one\r\nline two\nline three".into();
+    storage
+        .save_node_options(&node.node_id, &mut multiline)
+        .unwrap();
+    assert_eq!(multiline.public_remark, "line one\nline two\nline three");
+    let state = storage.admin_state().unwrap();
+    assert_eq!(
+        state["nodes"][0]["public_remark"],
+        "line one\nline two\nline three"
+    );
+
+    let oversized = "x".repeat(2049);
+    for invalid in [
+        "bare\rcarriage",
+        "double\r\r\nreturn",
+        "has\ttab",
+        "has\0nul",
+        "ansi\x1b[31m",
+        "c1\u{0085}nel",
+        oversized.as_str(),
+    ] {
+        let mut rejected = base();
+        rejected.public_remark = invalid.into();
+        assert!(
+            storage
+                .save_node_options(&node.node_id, &mut rejected)
+                .is_err(),
+            "remark must reject {invalid:?}"
+        );
+    }
+}
+
+#[test]
+fn revoked_node_can_be_manually_removed_from_probe_and_alert_rule() {
+    let (_dir, storage, first) = fixture();
+    let now = unix_time_ms().unwrap();
+    let secret = storage.create_enrollment(600, now).unwrap();
+    let second = storage
+        .enroll(
+            &senlun_protocol::EnrollmentRequest {
+                protocol_version: senlun_protocol::PROTOCOL_VERSION,
+                node_name: "second-node".into(),
+                agent_version: "test".into(),
+                region: "SG".into(),
+                group: String::new(),
+            },
+            &crate::storage::hash_token(&secret.token),
+            100,
+            now,
+        )
+        .unwrap();
+
+    let mut probe = ProbeDefinition {
+        id: String::new(),
+        name: "multi-node-probe".into(),
+        weight: 0,
+        kind: ProbeKind::Tcp,
+        target: "127.0.0.1:8080".into(),
+        interval_seconds: 5,
+        timeout_seconds: 1,
+        enabled: true,
+        node_ids: vec![first.node_id.clone(), second.node_id.clone()],
+    };
+    storage.save_probe(&mut probe).unwrap();
+
+    let mut rule = crate::control::AlertRule {
+        id: String::new(),
+        name: "single-node-rule".into(),
+        node_ids: vec![first.node_id.clone()],
+        metric: "offline".into(),
+        threshold: 0.0,
+        duration_seconds: 0,
+        cooldown_seconds: 60,
+        channel_ids: Vec::new(),
+        enabled: true,
+    };
+    storage.save_alert_rule(&mut rule).unwrap();
+
+    storage.revoke_node(&first.node_id, now + 1_000).unwrap();
+
+    // Still referencing the revoked node fails validation until removed.
+    assert!(storage.save_probe(&mut probe).is_err());
+    assert!(storage.save_alert_rule(&mut rule).is_err());
+
+    // Removing the revoked node from the probe preserves the remaining active node.
+    probe.node_ids.retain(|id| id != &first.node_id);
+    storage.save_probe(&mut probe).unwrap();
+
+    // Removing the sole revoked node while disabling the rule saves without widening.
+    rule.node_ids.clear();
+    rule.enabled = false;
+    storage.save_alert_rule(&mut rule).unwrap();
+
+    let state = storage.admin_state().unwrap();
+    assert_eq!(state["probes"][0]["node_ids"], json!([second.node_id]));
+    assert_eq!(state["alert_rules"][0]["node_ids"], json!([]));
+    assert_eq!(state["alert_rules"][0]["enabled"], false);
+}

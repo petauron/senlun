@@ -8,6 +8,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
+import {
+  buildAssignableNodes,
+  requiresGlobalScopeConfirmation,
+  shouldGuardGlobalScope,
+  validateScopedNodeSelection,
+} from '@/utils/adminEditing'
 import { getSharedApi } from '@/utils/api'
 
 const props = defineProps<{ probes: ProbeTask[], nodes: ManagedNode[], refresh: () => Promise<void> }>()
@@ -25,19 +31,73 @@ function blank(): ProbeTask {
   }
 }
 const draft = ref(blank())
+const persistedNodeIds = ref<string[]>([])
+const guardGlobalScope = ref(false)
+const confirmGlobalScope = ref(false)
 const removing = ref<ProbeTask | null>(null)
 const visibleNodes = computed(() => props.nodes.filter(node => !node.hidden && !node.disabled))
+const assignableNodes = computed(() => buildAssignableNodes(props.nodes, draft.value.node_ids, persistedNodeIds.value))
+const needsGlobalConfirmation = computed(() => requiresGlobalScopeConfirmation(
+  guardGlobalScope.value,
+  draft.value.node_ids,
+  draft.value.enabled,
+))
 const resultNode = ref(visibleNodes.value[0]?.id ?? '')
 watch(visibleNodes, (nodes) => {
   if (!nodes.some(node => node.id === resultNode.value))
     resultNode.value = nodes[0]?.id ?? ''
 })
+watch(() => draft.value.node_ids.length, (count) => {
+  if (count > 0)
+    confirmGlobalScope.value = false
+})
 const { busy, error, success, run } = useAdminAction(props.refresh)
 
+function resetDraft(): void {
+  draft.value = blank()
+  persistedNodeIds.value = []
+  guardGlobalScope.value = false
+  confirmGlobalScope.value = false
+  error.value = ''
+}
+
+function editTask(task: ProbeTask): void {
+  draft.value = { ...task, node_ids: [...task.node_ids] }
+  persistedNodeIds.value = [...task.node_ids]
+  guardGlobalScope.value = shouldGuardGlobalScope(task)
+  confirmGlobalScope.value = false
+  error.value = ''
+  success.value = ''
+}
+
+function openRemove(task: ProbeTask): void {
+  error.value = ''
+  removing.value = task
+}
+
+function closeRemove(): void {
+  if (busy.value)
+    return
+  removing.value = null
+  error.value = ''
+}
+
 async function save(): Promise<void> {
+  const scopeError = validateScopedNodeSelection({
+    guardGlobalScope: guardGlobalScope.value,
+    selectedIds: draft.value.node_ids,
+    enabled: draft.value.enabled,
+    confirmGlobalScope: confirmGlobalScope.value,
+    nodes: props.nodes,
+  })
+  if (scopeError) {
+    error.value = scopeError
+    success.value = ''
+    return
+  }
   await run(async () => {
     await getSharedApi().post('admin/probes', { ...draft.value, id: draft.value.id || undefined })
-    draft.value = blank()
+    resetDraft()
   })
 }
 
@@ -47,7 +107,7 @@ async function remove(): Promise<void> {
   await run(async () => {
     await getSharedApi().post(`admin/probes/${encodeURIComponent(removing.value!.id)}/delete`)
     if (draft.value.id === removing.value!.id)
-      draft.value = blank()
+      resetDraft()
     removing.value = null
   }, '已删除探测任务')
 }
@@ -73,9 +133,9 @@ async function remove(): Promise<void> {
               {{ task.kind.toUpperCase() }} · {{ task.target }} · 每 {{ task.interval_seconds }} 秒 · 顺序 {{ task.weight }}
             </p>
           </div><div class="flex gap-2">
-            <Button variant="outline" :disabled="busy" @click="draft = { ...task, node_ids: [...task.node_ids] }">
+            <Button variant="outline" :disabled="busy" @click="editTask(task)">
               编辑
-            </Button><Button variant="outline" :disabled="busy" @click="removing = task">
+            </Button><Button variant="outline" :disabled="busy" @click="openRemove(task)">
               删除
             </Button>
           </div>
@@ -98,15 +158,20 @@ async function remove(): Promise<void> {
           <legend class="mb-2 text-sm font-medium">
             执行节点
           </legend><div class="grid max-h-64 gap-2 overflow-auto rounded-md border p-3 sm:grid-cols-2 lg:grid-cols-3">
-            <label v-for="node in nodes.filter(item => !item.disabled)" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm"><input v-model="draft.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.name }}</label>
+            <label v-for="node in assignableNodes" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm" :class="node.revoked || node.missing ? 'text-destructive' : ''"><input v-model="draft.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.label }}</label>
           </div><p class="text-xs text-muted-foreground">
             不选择时应用于所有活动节点，包括之后注册的节点。
-          </p>
+          </p><div v-if="needsGlobalConfirmation" class="space-y-2 rounded-md border border-destructive/40 p-3 text-xs">
+            <p class="text-destructive">
+              当前未指定任何节点且将启用此任务。为避免静默扩大探测范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。
+            </p>
+            <label class="flex min-h-9 items-center gap-2 text-sm"><input v-model="confirmGlobalScope" type="checkbox" class="size-4 accent-primary">确认改为应用于所有活动节点</label>
+          </div>
         </fieldset>
         <div class="flex gap-2">
           <Button type="submit" class="min-h-11" :disabled="busy">
             {{ busy ? '正在保存…' : '保存任务' }}
-          </Button><Button v-if="draft.id" type="button" variant="outline" :disabled="busy" @click="draft = blank()">
+          </Button><Button v-if="draft.id" type="button" variant="outline" :disabled="busy" @click="resetDraft">
             取消编辑
           </Button>
         </div>
@@ -116,12 +181,12 @@ async function remove(): Promise<void> {
       <label for="probe-result-node" class="grid gap-2 text-sm">选择节点<SelectControl id="probe-result-node" aria-label="选择节点" v-model="resultNode" :options="visibleNodes.map(node => ({ value: node.id, label: node.name }))" /></label>
     </CardX>
     <ProbeHistory v-if="resultNode" :uuid="resultNode" />
-    <Dialog :open="removing !== null" @update:open="value => { if (!value && !busy) removing = null }">
+    <Dialog :open="removing !== null" @update:open="value => { if (!value) closeRemove() }">
       <DialogContent :show-close="!busy" @interact-outside="event => { if (busy) event.preventDefault() }" @escape-key-down="event => { if (busy) event.preventDefault() }">
         <DialogHeader><DialogTitle>删除探测任务</DialogTitle><DialogDescription>确认删除“{{ removing?.name }}”？Agent 将停止执行此任务。</DialogDescription></DialogHeader><p v-if="error" role="alert" class="text-sm text-destructive">
           {{ error }}
         </p><DialogFooter>
-          <Button variant="outline" :disabled="busy" @click="removing = null">
+          <Button variant="outline" :disabled="busy" @click="closeRemove">
             取消
           </Button><Button variant="destructive" :disabled="busy" @click="remove">
             确认删除

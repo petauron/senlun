@@ -1,12 +1,21 @@
 <script setup lang="ts">
 import type { AlertRule, Incident, ManagedNode, NotificationChannel } from '@/utils/admin'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
+import {
+  buildAssignableNodes,
+  buildSelectableChannels,
+  pruneMissingChannels,
+  requiresGlobalScopeConfirmation,
+  shouldGuardGlobalScope,
+  validateAlertDraftChannels,
+  validateScopedNodeSelection,
+} from '@/utils/adminEditing'
 import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 
@@ -35,8 +44,23 @@ function emptyRule(): AlertRule {
 }
 const channel = ref(emptyChannel())
 const rule = ref(emptyRule())
+const persistedNodeIds = ref<string[]>([])
+const guardGlobalScope = ref(false)
+const confirmGlobalScope = ref(false)
 const removing = ref<{ kind: 'channels' | 'alert-rules', id: string, name: string } | null>(null)
 const { busy, error, success, run } = useAdminAction(props.refresh)
+const assignableNodes = computed(() => buildAssignableNodes(props.nodes, rule.value.node_ids, persistedNodeIds.value))
+const selectableChannels = computed(() => buildSelectableChannels(props.channels, rule.value.channel_ids))
+const hasMissingChannels = computed(() => selectableChannels.value.some(item => item.missing))
+const needsGlobalConfirmation = computed(() => requiresGlobalScopeConfirmation(
+  guardGlobalScope.value,
+  rule.value.node_ids,
+  rule.value.enabled,
+))
+watch(() => rule.value.node_ids.length, (count) => {
+  if (count > 0)
+    confirmGlobalScope.value = false
+})
 const metricLabels = {
   offline: '节点离线',
   cpu: 'CPU 使用率',
@@ -60,6 +84,40 @@ const incidentLabels: Record<string, string> = {
 }
 const incidentStatus = (status: string) => incidentLabels[status] ?? status
 
+function resetRule(): void {
+  rule.value = emptyRule()
+  persistedNodeIds.value = []
+  guardGlobalScope.value = false
+  confirmGlobalScope.value = false
+  error.value = ''
+}
+
+function editRule(item: AlertRule): void {
+  rule.value = { ...item, node_ids: [...item.node_ids], channel_ids: [...item.channel_ids] }
+  persistedNodeIds.value = [...item.node_ids]
+  guardGlobalScope.value = shouldGuardGlobalScope(item)
+  confirmGlobalScope.value = false
+  error.value = ''
+  success.value = ''
+}
+
+function clearMissingChannels(): void {
+  rule.value.channel_ids = pruneMissingChannels(rule.value.channel_ids, props.channels)
+  error.value = ''
+}
+
+function openRemove(item: { kind: 'channels' | 'alert-rules', id: string, name: string }): void {
+  error.value = ''
+  removing.value = item
+}
+
+function closeRemove(): void {
+  if (busy.value)
+    return
+  removing.value = null
+  error.value = ''
+}
+
 async function saveChannel(): Promise<void> {
   await run(async () => {
     await getSharedApi().post('admin/channels', { ...channel.value, id: channel.value.id || undefined })
@@ -68,9 +126,27 @@ async function saveChannel(): Promise<void> {
 }
 
 async function saveRule(): Promise<void> {
+  const scopeError = validateScopedNodeSelection({
+    guardGlobalScope: guardGlobalScope.value,
+    selectedIds: rule.value.node_ids,
+    enabled: rule.value.enabled,
+    confirmGlobalScope: confirmGlobalScope.value,
+    nodes: props.nodes,
+  })
+  if (scopeError) {
+    error.value = scopeError
+    success.value = ''
+    return
+  }
+  const channelError = validateAlertDraftChannels(rule.value.channel_ids, props.channels)
+  if (channelError) {
+    error.value = channelError
+    success.value = ''
+    return
+  }
   await run(async () => {
     await getSharedApi().post('admin/alert-rules', { ...rule.value, id: rule.value.id || undefined })
-    rule.value = emptyRule()
+    resetRule()
   }, '已保存告警规则')
 }
 
@@ -83,7 +159,9 @@ async function remove(): Promise<void> {
     if (item.id === channel.value.id)
       channel.value = emptyChannel()
     if (item.id === rule.value.id)
-      rule.value = emptyRule()
+      resetRule()
+    if (item.kind === 'channels')
+      rule.value.channel_ids = rule.value.channel_ids.filter(id => id !== item.id)
     removing.value = null
   }, '已删除')
 }
@@ -107,7 +185,7 @@ async function remove(): Promise<void> {
           </p><div class="flex gap-2">
             <Button variant="outline" :disabled="busy" @click="channel = { ...item }">
               编辑
-            </Button><Button variant="outline" :disabled="busy" @click="removing = { kind: 'channels', id: item.id, name: item.name }">
+            </Button><Button variant="outline" :disabled="busy" @click="openRemove({ kind: 'channels', id: item.id, name: item.name })">
               删除
             </Button>
           </div>
@@ -145,9 +223,9 @@ async function remove(): Promise<void> {
               {{ metricLabel(item.metric) }} · 持续 {{ item.duration_seconds }} 秒 · 冷却 {{ item.cooldown_seconds }} 秒
             </p>
           </div><div class="flex gap-2">
-            <Button variant="outline" :disabled="busy" @click="rule = { ...item, node_ids: [...item.node_ids], channel_ids: [...item.channel_ids] }">
+            <Button variant="outline" :disabled="busy" @click="editRule(item)">
               编辑
-            </Button><Button variant="outline" :disabled="busy" @click="removing = { kind: 'alert-rules', id: item.id, name: item.name }">
+            </Button><Button variant="outline" :disabled="busy" @click="openRemove({ kind: 'alert-rules', id: item.id, name: item.name })">
               删除
             </Button>
           </div>
@@ -172,7 +250,13 @@ async function remove(): Promise<void> {
             </legend><p class="mb-2 text-xs text-muted-foreground">
               不选择时应用于所有活动节点，包括之后注册的节点。
             </p><div class="max-h-64 space-y-2 overflow-auto">
-              <label v-for="node in nodes.filter(item => !item.disabled)" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm"><input v-model="rule.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.name }}</label>
+              <label v-for="node in assignableNodes" :key="node.id" class="flex min-h-9 items-center gap-2 text-sm" :class="node.revoked || node.missing ? 'text-destructive' : ''"><input v-model="rule.node_ids" type="checkbox" :value="node.id" class="size-4 accent-primary">{{ node.label }}</label>
+            </div>
+            <div v-if="needsGlobalConfirmation" class="mt-3 space-y-2 rounded-md border border-destructive/40 p-2 text-xs">
+              <p class="text-destructive">
+                当前未指定任何节点且将启用此规则。为避免静默扩大告警范围，请选择活动节点、保持停用，或显式确认改为应用于所有活动节点。
+              </p>
+              <label class="flex min-h-9 items-center gap-2 text-sm"><input v-model="confirmGlobalScope" type="checkbox" class="size-4 accent-primary">确认改为应用于所有活动节点</label>
             </div>
           </fieldset>
           <fieldset :disabled="busy" class="rounded-md border p-3">
@@ -181,14 +265,20 @@ async function remove(): Promise<void> {
             </legend><p class="mb-2 text-xs text-muted-foreground">
               不选择渠道时，仅记录站内告警事件。
             </p><div class="max-h-64 space-y-2 overflow-auto">
-              <label v-for="item in channels" :key="item.id" class="flex min-h-9 items-center gap-2 text-sm"><input v-model="rule.channel_ids" type="checkbox" :value="item.id" class="size-4 accent-primary">{{ item.name }}{{ item.enabled ? '' : '（已停用）' }}</label>
+              <label v-for="item in selectableChannels" :key="item.id" class="flex min-h-9 items-center gap-2 text-sm" :class="item.missing ? 'text-destructive' : ''"><input v-model="rule.channel_ids" type="checkbox" :value="item.id" class="size-4 accent-primary">{{ item.label }}</label>
+            </div>
+            <div v-if="hasMissingChannels" class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 p-2 text-xs">
+              <span class="text-destructive">草稿包含已失效渠道，请取消勾选或移除后再保存。</span>
+              <Button type="button" variant="outline" size="sm" :disabled="busy" @click="clearMissingChannels">
+                移除失效渠道
+              </Button>
             </div>
           </fieldset>
         </div>
         <div class="flex gap-2">
           <Button type="submit" class="min-h-11" :disabled="busy">
             保存规则
-          </Button><Button v-if="rule.id" type="button" variant="outline" :disabled="busy" @click="rule = emptyRule()">
+          </Button><Button v-if="rule.id" type="button" variant="outline" :disabled="busy" @click="resetRule">
             取消编辑
           </Button>
         </div>
@@ -241,12 +331,12 @@ async function remove(): Promise<void> {
         </li>
       </ul>
     </CardX>
-    <Dialog :open="removing !== null" @update:open="value => { if (!value && !busy) removing = null }">
+    <Dialog :open="removing !== null" @update:open="value => { if (!value) closeRemove() }">
       <DialogContent :show-close="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
         <DialogHeader><DialogTitle>{{ removing?.kind === 'channels' ? '删除通知渠道' : '删除告警规则' }}</DialogTitle><DialogDescription>确认删除“{{ removing?.name }}”？此操作会影响后续告警通知。</DialogDescription></DialogHeader><p v-if="error" role="alert" class="text-sm text-destructive">
           {{ error }}
         </p><DialogFooter>
-          <Button variant="outline" :disabled="busy" @click="removing = null">
+          <Button variant="outline" :disabled="busy" @click="closeRemove">
             取消
           </Button><Button variant="destructive" :disabled="busy" @click="remove">
             确认删除
