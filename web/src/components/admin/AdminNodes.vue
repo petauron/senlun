@@ -18,9 +18,16 @@ import { ADMIN_DRAFT_REGISTRY_KEY, useAdminDraftGuard } from '@/composables/useA
 import { useAuthStore } from '@/stores/auth'
 import { cloneNodeDraft, createNodeDraftSnapshot, isNodeDraftDirty, shouldSyncNodeDraftFromServer } from '@/utils/adminDraft'
 import { normalizePublicRemark, validatePublicRemark } from '@/utils/adminEditing'
-import { enrollUncertainLock, nodeDangerUncertainLocks } from '@/utils/adminUncertain'
+import {
+  enrollUncertainLock,
+  isSameActiveSession,
+  nodeDangerUncertainLocks,
+  setEnrollUncertainLock,
+  setNodeDangerUncertainLock,
+} from '@/utils/adminUncertain'
 import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
+import { getSessionGeneration } from '@/utils/session'
 import { parseTags } from '@/utils/tagHelper'
 
 interface PendingUncertainNodeSave {
@@ -402,10 +409,12 @@ async function save(): Promise<void> {
 async function enroll(): Promise<void> {
   if (busy.value || enrollUncertain.value)
     return
+  const sessionGen = getSessionGeneration()
   secret.value = ''
   const result = await enrollAction.run(async () => {
     const response = await getSharedApi().post<{ token: string }>('admin/enrollment', { ttl_seconds: ttlHours.value * 3600 })
-    secret.value = response.token
+    if (isSameActiveSession(sessionGen, auth.loggedIn))
+      secret.value = response.token
   }, {
     message: '已生成注册令牌',
     reload: false,
@@ -413,7 +422,7 @@ async function enroll(): Promise<void> {
     uncertainMessage: detail => `生成一次性注册令牌结果未确认（${detail}）。管理状态接口不展示历史一次性令牌，为避免重复签发已暂停直接重试；如确认仍需新令牌，请先解除暂停后再重新生成。`,
   })
   if (result === 'uncertain')
-    enrollUncertain.value = enrollError.value
+    setEnrollUncertainLock(sessionGen, auth.loggedIn, enrollError.value)
 }
 
 function buildDangerUncertainMessage(action: NodeDangerActionKind, nodeName: string, detail: string): string {
@@ -427,6 +436,7 @@ function buildDangerUncertainMessage(action: NodeDangerActionKind, nodeName: str
 async function execute(): Promise<void> {
   if (!confirm.value || !selected.value || activeConfirmUncertain.value)
     return
+  const sessionGen = getSessionGeneration()
   const action = confirm.value
   const id = selected.value.id
   const nodeName = selected.value.name
@@ -435,7 +445,8 @@ async function execute(): Promise<void> {
   const result = await dangerAction.run(async () => {
     if (action === 'rotate') {
       const response = await getSharedApi().post<{ agent_token: string }>(`admin/nodes/${encodeURIComponent(id)}/rotate`)
-      secret.value = response.agent_token
+      if (isSameActiveSession(sessionGen, auth.loggedIn))
+        secret.value = response.agent_token
     }
     else {
       await getSharedApi().post(`admin/nodes/${encodeURIComponent(id)}/${action}`)
@@ -445,6 +456,8 @@ async function execute(): Promise<void> {
     riskyWrite: true,
     uncertainMessage: detail => buildDangerUncertainMessage(action, nodeName, detail),
     onCommitted: () => {
+      if (!isSameActiveSession(sessionGen, auth.loggedIn))
+        return
       confirm.value = null
       if (pendingUncertainDangers.value[key]) {
         const next = { ...pendingUncertainDangers.value }
@@ -454,18 +467,15 @@ async function execute(): Promise<void> {
     },
   })
   if (result === 'uncertain') {
-    pendingUncertainDangers.value = {
-      ...pendingUncertainDangers.value,
-      [key]: {
-        key,
-        action,
-        nodeId: id,
-        nodeName,
-        verifiable: action === 'delete' || action === 'revoke',
-        message: dangerError.value,
-        resyncError: '',
-      },
-    }
+    setNodeDangerUncertainLock(sessionGen, auth.loggedIn, {
+      key,
+      action,
+      nodeId: id,
+      nodeName,
+      verifiable: action === 'delete' || action === 'revoke',
+      message: dangerError.value,
+      resyncError: '',
+    })
   }
 }
 
@@ -526,9 +536,16 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
     await dangerAction.resync('已重新同步最新状态')
     return
   }
+  const sessionGen = getSessionGeneration()
   entry.resyncError = ''
   const ok = await dangerAction.resync({
     verify: () => {
+      if (!isSameActiveSession(sessionGen, auth.loggedIn)) {
+        return {
+          resolved: false,
+          error: '',
+        }
+      }
       const freshNode = props.nodes.find(item => item.id === entry.nodeId)
       if (entry.action === 'delete') {
         unlockUncertainDanger(entry.key)
@@ -572,11 +589,11 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
         ? `已刷新管理状态，但该接口无法证明节点「${entry.nodeName}」的凭据轮换是否已生效；请结合 Agent 连接状态核对后再决定是否解锁重新轮换。`
         : `已刷新管理状态，但仅凭当前流量值无法证明节点「${entry.nodeName}」的流量重置是否已生效；请核对当前流量后再决定是否解锁重试。`
       if (pendingUncertainDangers.value[entry.key]) {
-        pendingUncertainDangers.value[entry.key] = {
+        setNodeDangerUncertainLock(sessionGen, auth.loggedIn, {
           ...pendingUncertainDangers.value[entry.key]!,
           message: honestMessage,
           resyncError: '',
-        }
+        })
       }
       return {
         resolved: false,
@@ -584,7 +601,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       }
     },
   })
-  if (!ok && dangerResyncError.value && pendingUncertainDangers.value[entry.key])
+  if (!ok && dangerResyncError.value && isSameActiveSession(sessionGen, auth.loggedIn) && pendingUncertainDangers.value[entry.key])
     pendingUncertainDangers.value[entry.key]!.resyncError = dangerResyncError.value
 }
 </script>

@@ -925,3 +925,96 @@ test('external traffic removal persists uncertain locks across remounts and resy
   await expect(tokenInput).toHaveValue('token-after-remove-502')
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
+
+test('busy clean enrollment blocks section switches, allows logout, and ignores late 502 responses after re-login', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const initialState = await (await page.request.get('/api/admin/state')).json()
+  let releaseEnroll: (() => void) | null = null
+  let enrollAttempts = 0
+  let signedOut = false
+
+  await page.route('**/api/admin/state', route => route.fulfill({
+    json: initialState,
+  }))
+  await page.route('**/api/admin/enrollment', async (route) => {
+    enrollAttempts++
+    await new Promise<void>((resolve) => {
+      releaseEnroll = resolve
+    })
+    await route.fulfill({
+      status: 502,
+      json: { error: 'Late stale-session 502' },
+    })
+  })
+  await page.route('**/api/auth/logout', async (route) => {
+    signedOut = true
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/auth/login', async (route) => {
+    signedOut = false
+    await route.fulfill({
+      json: {
+        initialized: true,
+        logged_in: true,
+        username: 'admin',
+        csrf_token: 'relogged-in-csrf',
+        totp_enabled: false,
+        oauth_enabled: false,
+        oauth_totp_required: false,
+      },
+    })
+  })
+  await page.route('**/api/auth/status', async (route) => {
+    await route.fulfill({
+      json: {
+        initialized: true,
+        logged_in: !signedOut,
+        username: signedOut
+          ? null
+          : 'admin',
+        csrf_token: signedOut
+          ? 'anon-csrf'
+          : 'active-csrf',
+        totp_enabled: false,
+        oauth_enabled: false,
+        oauth_totp_required: false,
+      },
+    })
+  })
+
+  await page.goto('/admin?section=nodes')
+  const navigation = page.getByRole('navigation', { name: '管理页面' })
+  const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
+  const enrollButton = page.getByRole('button', { name: '生成一次性注册令牌' })
+  await expect(enrollButton).toBeEnabled()
+
+  // Clean form with in-flight enrollment must block switching sections in-app so users cannot remount and double-issue.
+  await enrollButton.click()
+  await expect.poll(() => releaseEnroll !== null).toBe(true)
+  await siteLink.click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await expect(page.getByRole('button', { name: '正在生成…' })).toBeDisabled()
+  expect(enrollAttempts).toBe(1)
+
+  // Real logout must still exit cleanly while enrollment is pending; late 502 settling after re-login must NOT pollute the new session.
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await expect(page).toHaveURL('/login')
+
+  // Re-authenticate inside the same SPA document so shared module state stays in memory with a new session generation.
+  await page.getByLabel('用户名', { exact: true }).fill('admin')
+  await page.getByLabel('密码', { exact: true }).fill('synthetic-password')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await expect(page).toHaveURL('/admin')
+  await expect(page.getByRole('button', { name: '生成一次性注册令牌' })).toBeEnabled()
+
+  const lateEnrollSettled = page.waitForResponse(response => response.url().endsWith('/api/admin/enrollment') && response.status() === 502)
+  releaseEnroll?.()
+  releaseEnroll = null
+  await lateEnrollSettled
+  await expect(page.getByRole('button', { name: '生成一次性注册令牌' })).toBeEnabled()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})

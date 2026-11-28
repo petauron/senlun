@@ -12,10 +12,12 @@ export type AdminDepartureDecision = 'allow' | 'block' | 'confirm'
 export function decideAdminDeparture(context: AdminDepartureContext): AdminDepartureDecision {
   if (!context.loggedIn)
     return 'allow'
-  if (context.stayingInSameContext || !context.hasUnsavedChanges)
+  if (context.stayingInSameContext)
     return 'allow'
   if (context.busy)
     return 'block'
+  if (!context.hasUnsavedChanges)
+    return 'allow'
   return 'confirm'
 }
 

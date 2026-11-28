@@ -4,9 +4,13 @@ import {
   clearAdminUncertainLocks,
   enrollUncertainLock,
   nodeDangerUncertainLocks,
+  setEnrollUncertainLock,
+  setNodeDangerUncertainLock,
+  setTrafficRemoveUncertainLock,
   trafficRemoveUncertainLocks,
 } from '@/utils/adminUncertain'
 import { ApiError } from '@/utils/api'
+import { getSessionGeneration, invalidateSessionRequests } from '@/utils/session'
 import { isUncertainWriteError, useAdminAction } from '../useAdminAction'
 
 function deferred<T>() {
@@ -156,39 +160,51 @@ describe('useAdminAction submission outcome classification', () => {
     expect(action.error.value).not.toContain('请先重新同步')
   })
 
-  it('clears all session-scoped uncertain locks when the session ends', () => {
-    enrollUncertainLock.value = 'enroll pending'
-    nodeDangerUncertainLocks.value = {
-      'rotate:node-1': {
-        key: 'rotate:node-1',
-        action: 'rotate',
-        nodeId: 'node-1',
-        nodeName: 'Node 1',
-        verifiable: false,
-        message: 'rotate pending',
-        resyncError: '',
-      },
-    }
-    trafficRemoveUncertainLocks.value = {
-      'node-1': {
-        nodeId: 'node-1',
-        nodeName: 'Node 1',
-        message: 'remove pending',
-        resyncError: '',
-      },
-    }
-
+  it('ignores late uncertain lock writes from an ended session even after re-authentication', () => {
     clearAdminUncertainLocks()
+    const oldSessionGen = getSessionGeneration()
+
+    // Session ends and a new session authenticates (each bumps generation).
+    invalidateSessionRequests()
+    clearAdminUncertainLocks()
+    invalidateSessionRequests()
+
+    expect(setEnrollUncertainLock(oldSessionGen, true, 'stale enroll')).toBe(false)
+    expect(setNodeDangerUncertainLock(oldSessionGen, true, {
+      key: 'rotate:node-1',
+      action: 'rotate',
+      nodeId: 'node-1',
+      nodeName: 'Node 1',
+      verifiable: false,
+      message: 'stale rotate',
+      resyncError: '',
+    })).toBe(false)
+    expect(setTrafficRemoveUncertainLock(oldSessionGen, true, {
+      nodeId: 'node-1',
+      nodeName: 'Node 1',
+      message: 'stale remove',
+      resyncError: '',
+    })).toBe(false)
 
     expect(enrollUncertainLock.value).toBeNull()
     expect(nodeDangerUncertainLocks.value).toEqual({})
     expect(trafficRemoveUncertainLocks.value).toEqual({})
+
+    const activeGen = getSessionGeneration()
+    expect(setEnrollUncertainLock(activeGen, false, 'logged out')).toBe(false)
+    expect(setEnrollUncertainLock(activeGen, true, 'current enroll')).toBe(true)
+    expect(enrollUncertainLock.value).toBe('current enroll')
+
+    clearAdminUncertainLocks()
+    expect(enrollUncertainLock.value).toBeNull()
   })
 })
 
 describe('createSerializedRefresh controlled concurrency', () => {
   it('waits for an in-flight GET to settle, ignores stale data, and runs a fresh post-write GET', async () => {
+    const firstStarted = deferred<void>()
     const first = deferred<string>()
+    const secondStarted = deferred<void>()
     const second = deferred<string>()
     const applied: string[] = []
     const loadingStates: boolean[] = []
@@ -197,9 +213,15 @@ describe('createSerializedRefresh controlled concurrency', () => {
     const refresher = createSerializedRefresh<string, string>(
       async (label, isLatest) => {
         calls++
-        const value = label === 'first'
-          ? await first.promise
-          : await second.promise
+        if (label === 'first') {
+          firstStarted.resolve()
+          const value = await first.promise
+          if (isLatest())
+            applied.push(value)
+          return value
+        }
+        secondStarted.resolve()
+        const value = await second.promise
         if (isLatest())
           applied.push(value)
         return value
@@ -208,12 +230,12 @@ describe('createSerializedRefresh controlled concurrency', () => {
     )
 
     const p1 = refresher.refresh('first')
+    await firstStarted.promise
     const p2 = refresher.refresh('second')
     expect(calls).toBe(1)
 
     first.resolve('stale-pre-post-snapshot')
-    await Promise.resolve()
-    await Promise.resolve()
+    await secondStarted.promise
     expect(applied).toEqual([])
     expect(calls).toBe(2)
 
@@ -225,41 +247,80 @@ describe('createSerializedRefresh controlled concurrency', () => {
   })
 
   it('still executes the queued fresh GET when an earlier in-flight GET fails', async () => {
+    const firstStarted = deferred<void>()
     const first = deferred<string>()
+    const secondStarted = deferred<void>()
     const second = deferred<string>()
     const applied: string[] = []
 
     const refresher = createSerializedRefresh<string, string>(async (label, isLatest) => {
-      const value = label === 'first'
-        ? await first.promise
-        : await second.promise
+      if (label === 'first') {
+        firstStarted.resolve()
+        const value = await first.promise
+        if (isLatest())
+          applied.push(value)
+        return value
+      }
+      secondStarted.resolve()
+      const value = await second.promise
       if (isLatest())
         applied.push(value)
       return value
     })
 
     const p1 = refresher.refresh('first')
+    await firstStarted.promise
     const p2 = refresher.refresh('second')
 
     first.reject(new ApiError('Stale GET failed', 503))
     await expect(p1).rejects.toThrow('Stale GET failed')
+    await secondStarted.promise
 
     second.resolve('fresh-after-error')
     await expect(p2).resolves.toBe('fresh-after-error')
     expect(applied).toEqual(['fresh-after-error'])
   })
 
+  it('merges same-tick unstarted reads into the latest fetch and propagates final failure cleanly', async () => {
+    const latestStarted = deferred<void>()
+    const latest = deferred<string>()
+    const fetched: string[] = []
+
+    const refresher = createSerializedRefresh<string, string>(async (label) => {
+      fetched.push(label)
+      latestStarted.resolve()
+      return latest.promise
+    })
+
+    const p1 = refresher.refresh('unstarted-first')
+    const p2 = refresher.refresh('latest-second')
+    await latestStarted.promise
+
+    latest.reject(new ApiError('Latest GET failed', 503))
+    await expect(p2).rejects.toThrow('Latest GET failed')
+    await expect(p1).rejects.toThrow('Latest GET failed')
+    expect(fetched).toEqual(['latest-second'])
+  })
+
   it('never lets an intermediate queued resync verify against stale state when a 3rd queued read fails', async () => {
+    const firstStarted = deferred<void>()
     const first = deferred<string>()
+    const thirdStarted = deferred<void>()
     const third = deferred<string>()
     let appliedState = 'stale-initial-state'
     const fetched: string[] = []
 
     const refresher = createSerializedRefresh<string, string>(async (label, isLatest) => {
       fetched.push(label)
-      const value = label === 'first'
-        ? await first.promise
-        : await third.promise
+      if (label === 'first') {
+        firstStarted.resolve()
+        const value = await first.promise
+        if (isLatest())
+          appliedState = value
+        return value
+      }
+      thirdStarted.resolve()
+      const value = await third.promise
       if (isLatest())
         appliedState = value
       return value
@@ -276,6 +337,7 @@ describe('createSerializedRefresh controlled concurrency', () => {
     })
 
     const p1 = refresher.refresh('first')
+    await firstStarted.promise
     const verify = vi.fn(() => ({
       resolved: true,
       message: `verified:${appliedState}`,
@@ -284,8 +346,7 @@ describe('createSerializedRefresh controlled concurrency', () => {
     const p3 = refresher.refresh('third-fails')
 
     first.resolve('stale-first-snapshot')
-    await Promise.resolve()
-    await Promise.resolve()
+    await thirdStarted.promise
 
     third.reject(new ApiError('Final GET failed', 503))
     await expect(p3).rejects.toThrow('Final GET failed')
@@ -301,14 +362,22 @@ describe('createSerializedRefresh controlled concurrency', () => {
   })
 
   it('resolves intermediate queued resync only after a 3rd queued read actually applies fresh state', async () => {
+    const firstStarted = deferred<void>()
     const first = deferred<string>()
+    const thirdStarted = deferred<void>()
     const third = deferred<string>()
     let appliedState = 'stale-initial-state'
 
     const refresher = createSerializedRefresh<string, string>(async (label, isLatest) => {
-      const value = label === 'first'
-        ? await first.promise
-        : await third.promise
+      if (label === 'first') {
+        firstStarted.resolve()
+        const value = await first.promise
+        if (isLatest())
+          appliedState = value
+        return value
+      }
+      thirdStarted.resolve()
+      const value = await third.promise
       if (isLatest())
         appliedState = value
       return value
@@ -325,6 +394,7 @@ describe('createSerializedRefresh controlled concurrency', () => {
     })
 
     const p1 = refresher.refresh('first')
+    await firstStarted.promise
     let observedDuringVerify = ''
     const resyncPromise = action.resync({
       verify: () => {
@@ -338,8 +408,7 @@ describe('createSerializedRefresh controlled concurrency', () => {
     const p3 = refresher.refresh('third-succeeds')
 
     first.resolve('stale-first-snapshot')
-    await Promise.resolve()
-    await Promise.resolve()
+    await thirdStarted.promise
     expect(observedDuringVerify).toBe('')
 
     third.resolve('fresh-third-snapshot')

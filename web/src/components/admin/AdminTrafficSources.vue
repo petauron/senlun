@@ -12,9 +12,14 @@ import { useAdminAction } from '@/composables/useAdminAction'
 import { ADMIN_DRAFT_REGISTRY_KEY } from '@/composables/useAdminDraftGuard'
 import { useAuthStore } from '@/stores/auth'
 import { createSerializedRefresh } from '@/utils/adminRefresh'
-import { trafficRemoveUncertainLocks } from '@/utils/adminUncertain'
+import {
+  isSameActiveSession,
+  setTrafficRemoveUncertainLock,
+  trafficRemoveUncertainLocks,
+} from '@/utils/adminUncertain'
 import { getSharedApi } from '@/utils/api'
 import { decideTrafficDeparture, shouldWarnBeforeUnload, unmountLeaveResult } from '@/utils/authFlow'
+import { getSessionGeneration } from '@/utils/session'
 
 interface PendingUncertainTrafficSave {
   nodeId: string
@@ -425,6 +430,7 @@ function closeRemove(): void {
 async function remove(): Promise<void> {
   if (!selectedId.value || loading.value || currentPendingRemove.value)
     return
+  const sessionGen = getSessionGeneration()
   const targetId = selectedId.value
   const targetName = currentNodeName.value
   removeStartRevisions[targetId] = draftRevision
@@ -435,6 +441,8 @@ async function remove(): Promise<void> {
     riskyWrite: true,
     uncertainMessage: detail => `移除节点「${targetName}」外部流量源结果未确认（${detail}）。请先重新同步核对当前状态，勿直接重复提交。`,
     onCommitted: () => {
+      if (!isSameActiveSession(sessionGen, auth.loggedIn))
+        return
       clearPendingRemove(targetId)
       delete removeStartRevisions[targetId]
       sources.value = sources.value.filter(source => source.node_id !== targetId)
@@ -443,15 +451,12 @@ async function remove(): Promise<void> {
     },
   })
   if (result === 'uncertain') {
-    pendingUncertainRemovals.value = {
-      ...pendingUncertainRemovals.value,
-      [targetId]: {
-        nodeId: targetId,
-        nodeName: targetName,
-        message: removeError.value,
-        resyncError: '',
-      },
-    }
+    setTrafficRemoveUncertainLock(sessionGen, auth.loggedIn, {
+      nodeId: targetId,
+      nodeName: targetName,
+      message: removeError.value,
+      resyncError: '',
+    })
   }
 }
 
@@ -512,9 +517,16 @@ async function resyncRemove(): Promise<void> {
     await removeAction.resync('已重新同步最新状态')
     return
   }
+  const sessionGen = getSessionGeneration()
   pending.resyncError = ''
   const ok = await removeAction.resync({
     verify: () => {
+      if (!isSameActiveSession(sessionGen, auth.loggedIn)) {
+        return {
+          resolved: false,
+          error: '',
+        }
+      }
       const stillExists = sources.value.some(source => source.node_id === pending.nodeId)
       const startRevision = removeStartRevisions[pending.nodeId]
       clearPendingRemove(pending.nodeId)
@@ -542,7 +554,7 @@ async function resyncRemove(): Promise<void> {
       }
     },
   })
-  if (!ok && pendingUncertainRemovals.value[pending.nodeId])
+  if (!ok && isSameActiveSession(sessionGen, auth.loggedIn) && pendingUncertainRemovals.value[pending.nodeId])
     pendingUncertainRemovals.value[pending.nodeId]!.resyncError = removeResyncError.value
 }
 

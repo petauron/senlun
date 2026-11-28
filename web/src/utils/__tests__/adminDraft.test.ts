@@ -142,9 +142,21 @@ describe('admin draft comparison and server sync helpers', () => {
       busy: true,
     })).toBe('block')
     expect(decideAdminDeparture({
+      loggedIn: true,
+      stayingInSameContext: false,
+      hasUnsavedChanges: false,
+      busy: true,
+    })).toBe('block')
+    expect(decideAdminDeparture({
       loggedIn: false,
       stayingInSameContext: false,
       hasUnsavedChanges: true,
+      busy: true,
+    })).toBe('allow')
+    expect(decideAdminDeparture({
+      loggedIn: false,
+      stayingInSameContext: false,
+      hasUnsavedChanges: false,
       busy: true,
     })).toBe('allow')
     expect(shouldWarnBeforeUnload(true, true)).toBe(true)
