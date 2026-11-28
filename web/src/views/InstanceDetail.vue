@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { InstanceBillingCard } from '@/utils/instanceBilling'
 import { Icon } from '@iconify/vue'
 import { useNow } from '@vueuse/core'
 import { computed, defineAsyncComponent, onMounted } from 'vue'
@@ -16,12 +17,12 @@ import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useExchangeRates } from '@/composables/useExchangeRates'
 import { useNodeFormatters } from '@/composables/useNodeFormatters'
 import { useNodesStore } from '@/stores/nodes'
-import { CURRENCY_SYMBOLS, getStoredFinanceCurrency, normalizeCurrency } from '@/utils/financeHelper'
+import { getStoredFinanceCurrency } from '@/utils/financeHelper'
 import { formatDateTime, formatTrafficQuota } from '@/utils/helper'
+import { buildInstanceBillingCards } from '@/utils/instanceBilling'
 import { getTrafficUsed } from '@/utils/nodeHelpers'
 import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
-import { getBillingCycleText, getExpireText, getExpireTextClass } from '@/utils/tagHelper'
 
 const LoadChart = defineAsyncComponent(() => import('@/components/LoadChart.vue'))
 const ProbeHistory = defineAsyncComponent(() => import('@/components/ProbeHistory.vue'))
@@ -49,92 +50,18 @@ interface InfoItem {
   icon?: string
 }
 
-interface MetricCard {
-  label: string
-  value: string
-  unit?: string
-  icon: string
-  valueClass?: string
-}
-
-const EXPIRES_IN_DAYS = /^(\d+)\s+天$/
 const LINUX_DISTRO = /^Linux \((.+)\)$/
 
-const metricCards = computed<MetricCard[]>(() => {
+const metricCards = computed<InstanceBillingCard[]>(() => {
   if (!data.value)
     return []
 
-  const node = data.value
-  const currency = normalizeCurrency(node.currency)
-  const rate = rates.value[currency] ?? 0
-  const hasRate = Number.isFinite(rate) && rate > 0
-  const priceCNY = hasRate && Number.isFinite(node.price) && node.price > 0
-    ? node.price / rate
-    : 0
-  const displayCurrency = rates.value[selectedCurrency] ? selectedCurrency : 'CNY'
-  const displayRate = rates.value[displayCurrency] ?? 1
-  const formatMoney = (valueCNY: number) => {
-    const amount = valueCNY * displayRate
-    const compact = Math.abs(amount) >= 100000
-    const value = new Intl.NumberFormat('zh-CN', {
-      maximumFractionDigits: 2,
-      minimumFractionDigits: compact ? 0 : 2,
-      notation: compact ? 'compact' : 'standard',
-    }).format(amount)
-    return `${CURRENCY_SYMBOLS[displayCurrency]}${value}`
-  }
-  const hasPrice = Number.isFinite(node.price) && node.price > 0
-  const hasCycle = Number.isFinite(node.billing_cycle) && node.billing_cycle > 0
-  const expiry = Date.parse(node.expired_at)
-  const hasExpiry = Number.isFinite(expiry)
-  const remainingDays = hasExpiry
-    ? (expiry - now.value.getTime()) / 86400000
-    : 0
-  const remainingValue = remainingDays > 36500
-    ? priceCNY
-    : hasExpiry && hasCycle && remainingDays > 0
-      ? priceCNY * remainingDays / node.billing_cycle
-      : 0
-  const expiryText = hasExpiry
-    ? getExpireText(node.expired_at)
-    : '-'
-  const expiryParts = EXPIRES_IN_DAYS.exec(expiryText)
-
-  return [
-    {
-      label: '节点价格',
-      value: hasPrice
-        ? `${formatMoney(priceCNY)} ${displayCurrency}`
-        : formatMoney(0),
-      unit: hasPrice
-        ? ` / ${getBillingCycleText(node.billing_cycle)}`
-        : displayCurrency,
-      icon: 'tabler:cash',
-    },
-    {
-      label: '月均支出',
-      value: hasCycle
-        ? `${formatMoney(priceCNY / node.billing_cycle * 30)} ${displayCurrency}`
-        : '不适用',
-      unit: hasCycle ? ' / 月' : undefined,
-      icon: 'tabler:receipt-2',
-    },
-    {
-      label: '剩余时间',
-      value: expiryParts?.[1] ?? expiryText,
-      unit: expiryParts ? '天' : undefined,
-      icon: 'tabler:calendar-dollar',
-      valueClass: hasExpiry
-        ? getExpireTextClass(node.expired_at)
-        : undefined,
-    },
-    {
-      label: '剩余价值',
-      value: formatMoney(remainingValue),
-      unit: displayCurrency,
-      icon: 'tabler:coins',
-    },
-  ]
+  return buildInstanceBillingCards(
+    data.value,
+    rates.value,
+    selectedCurrency,
+    now.value.getTime(),
+  )
 })
 
 function displayArchitecture(arch: string | undefined): string {
