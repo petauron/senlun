@@ -43,13 +43,6 @@ if ! command -v traceroute >/dev/null; then
  tool_path="$work/bin:$tool_path"
  printf 'Temporary official traceroute %s verified; no package installed\n' "$version" >&2
 fi
-url=https://api.ipify.org
-[ "$family" = 4 ] || url=https://api6.ipify.org
-check_address() {
- actual=$(env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy curl -q --noproxy '*' -fsS --max-time 15 -"$family" "$url")
- [ "$actual" = "$expected" ] || { echo 'Actual public egress differs from the selected registered address; report not generated' >&2; exit 3; }
-}
-check_address
 curl -q --noproxy '*' --proto '=https' --tlsv1.2 -fsSL --max-time 30 --max-filesize 1048576 'https://raw.githubusercontent.com/ibsgss/TcpQuality/db52fc60523320fc4a34b5c369f28be38df21d13/runTcpQuality-core.sh' -o "$work/core.sh"
 printf '%s  %s\n' '351491ece557ad4c26143b33a38d8b0b50a1872c7b073839e22ee8845771f928' "$work/core.sh" | sha256sum -c - >&2
 # Preflight above prevents the upstream dependency helpers from installing tools.
@@ -58,7 +51,6 @@ timeout -k 5s 240s env -i PATH="$tool_path" HOME="$work" TMPDIR="$work" TERM=xte
  tail -c 2048 "$work/run.log" >&2
  exit 4
 }
-check_address
 archive=$(find "$work" -maxdepth 1 -type f -name 'tcpquality-results.*.tar.gz' -print | head -n 1)
 [ -n "$archive" ] || { echo 'No complete route report' >&2; exit 5; }
 member=$(tar -tzf "$archive" | grep "/route${family}_final.txt$" | head -n 1)
