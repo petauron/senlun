@@ -1258,9 +1258,25 @@ mod tests {
         );
     }
 
-    fn fill_outbox(storage: &Storage, incident_id: &str) {
+    fn fill_outbox(storage: &Storage, total: usize) {
         let db = storage.connection().unwrap();
-        for index in 0..MAX_DELIVERIES {
+        let pad_nodes: Vec<String> = (0..8).map(|index| format!("pad-node-{index}")).collect();
+        for (index, node_id) in pad_nodes.iter().enumerate() {
+            db.execute(
+                "INSERT OR IGNORE INTO nodes(
+                     id,token_hash,name,agent_version,created_at_ms,updated_at_ms
+                 ) VALUES(?1,?2,?1,'test',1,1)",
+                params![node_id, format!("pad-token-hash-{index}")],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT OR IGNORE INTO node_state(node_id,last_seen_at_ms)
+                 VALUES(?1,999999999)",
+                [node_id],
+            )
+            .unwrap();
+        }
+        for index in 0..4 {
             let channel_id = format!("pad-channel-{index}");
             let channel_json = json!({
                 "id": channel_id,
@@ -1275,13 +1291,48 @@ mod tests {
                 params![channel_id, channel_json],
             )
             .unwrap();
+        }
+        for index in 0..8 {
+            let rule_id = format!("pad-rule-{index}");
+            let mut pad_rule = rule("disk");
+            pad_rule.id.clone_from(&rule_id);
+            pad_rule.node_ids.clone_from(&pad_nodes);
             db.execute(
-                "INSERT OR IGNORE INTO alert_deliveries(
-                     id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms
-                 ) VALUES(?1,?2,?3,'{\"status\":\"firing\"}',0,999999999,1)",
-                params![format!("pad-delivery-{index}"), incident_id, channel_id],
+                "INSERT OR IGNORE INTO alert_rules(id,data) VALUES(?1,?2)",
+                params![rule_id, serde_json::to_string(&pad_rule).unwrap()],
             )
             .unwrap();
+        }
+        let mut inserted = 0;
+        for rule_index in 0..8 {
+            for (node_index, node_id) in pad_nodes.iter().enumerate() {
+                let incident_id = format!("pad-inc-{rule_index}-{node_index}");
+                db.execute(
+                    "INSERT OR IGNORE INTO alert_incidents(
+                         id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,
+                         last_sent_at_ms,firing_notified,recovery_pending
+                     ) VALUES(?1,?2,?3,'firing','pad',1,1,1,1,0)",
+                    params![incident_id, node_id, format!("pad-rule-{rule_index}")],
+                )
+                .unwrap();
+                for ch_index in 0..4 {
+                    if inserted >= total {
+                        return;
+                    }
+                    db.execute(
+                        "INSERT OR IGNORE INTO alert_deliveries(
+                             id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms
+                         ) VALUES(?1,?2,?3,'{\"status\":\"firing\"}',0,999999999,1)",
+                        params![
+                            format!("pad-delivery-{inserted}"),
+                            incident_id,
+                            format!("pad-channel-{ch_index}")
+                        ],
+                    )
+                    .unwrap();
+                    inserted += 1;
+                }
+            }
         }
     }
 
@@ -1303,13 +1354,8 @@ mod tests {
         storage.evaluate_alerts(110_000, 90_000).unwrap();
         let firing = storage.pending_deliveries(110_000).unwrap().pop().unwrap();
         storage.delivery_result(&firing.id, true, 110_001).unwrap();
-        let incident_id: String = storage
-            .connection()
-            .unwrap()
-            .query_row("SELECT id FROM alert_incidents", [], |row| row.get(0))
-            .unwrap();
 
-        fill_outbox(&storage, &incident_id);
+        fill_outbox(&storage, MAX_DELIVERIES);
         set_node_seen(&storage, &node_id, 120_000);
         storage.evaluate_alerts(120_000, 90_000).unwrap();
         assert_eq!(
@@ -1343,7 +1389,7 @@ mod tests {
         storage.evaluate_alerts(210_000, 90_000).unwrap();
         let second = storage.pending_deliveries(210_000).unwrap().pop().unwrap();
         storage.delivery_result(&second.id, true, 210_001).unwrap();
-        fill_outbox(&storage, &incident_id);
+        fill_outbox(&storage, MAX_DELIVERIES);
         set_node_seen(&storage, &node_id, 220_000);
         storage.evaluate_alerts(220_000, 90_000).unwrap();
         assert_eq!(
@@ -1683,17 +1729,7 @@ mod tests {
         // recovery fails with OutboxFull for ch2 while leaving ch1's Episode 1 firing row.
         ch2.enabled = true;
         storage.save_channel(&mut ch2).unwrap();
-        let incident_id: String = storage
-            .connection()
-            .unwrap()
-            .query_row("SELECT id FROM alert_incidents", [], |row| row.get(0))
-            .unwrap();
-        fill_outbox(&storage, &incident_id);
-        storage
-            .connection()
-            .unwrap()
-            .execute("DELETE FROM alert_deliveries WHERE id='pad-delivery-0'", [])
-            .unwrap();
+        fill_outbox(&storage, MAX_DELIVERIES - 1);
         set_node_seen(&storage, &node_id, 180_000);
         storage.evaluate_alerts(180_000, 90_000).unwrap();
         assert_eq!(
