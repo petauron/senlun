@@ -491,20 +491,34 @@ test('node and site drafts guard switch/refresh/same-document history, survive l
 
   await nodesLink.click()
   await expect(page).toHaveURL('/admin?section=nodes')
-  const nodeSelect = page.getByRole('combobox', { name: '选择节点' })
+  const isDesktop = await page.evaluate(() => innerWidth >= 1024)
+  if (!isDesktop) {
+    await page.getByRole('button', { name: /Guard Node A/ }).click()
+    await expect(page).toHaveURL('/admin?section=nodes&node=guard-node-a')
+  }
   const remarkInput = page.getByLabel('公开备注')
 
   await expect(remarkInput).toHaveValue('Original Remark A')
   await remarkInput.fill('Unsaved Remark Draft')
   await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeVisible()
 
-  // Node switch, top refresh, and same-document browser Back guard drafts and restore focus on cancel.
-  await nodeSelect.click()
-  await page.getByRole('option', { name: /Guard Node B/ }).click()
-  await expect(confirmation).toContainText('Guard Node B')
-  await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
-  await expect(nodeSelect).toBeFocused()
-  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+  // Node switch (desktop) or back-to-list (mobile), top refresh, and same-document browser Back guard drafts and restore focus on cancel.
+  if (isDesktop) {
+    const nodeBButton = page.getByRole('button', { name: /Guard Node B/ })
+    await nodeBButton.click()
+    await expect(confirmation).toContainText('Guard Node B')
+    await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+    await expect(nodeBButton).toBeFocused()
+    await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+  }
+  else {
+    const backToListButton = page.getByRole('button', { name: '返回节点列表' })
+    await backToListButton.click()
+    await expect(confirmation).toBeVisible()
+    await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+    await expect(backToListButton).toBeFocused()
+    await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+  }
 
   await topRefresh.click()
   await expect(confirmation).toContainText('刷新管理数据')
@@ -515,7 +529,10 @@ test('node and site drafts guard switch/refresh/same-document history, survive l
   await page.evaluate(() => history.back())
   await expect(confirmation).toBeVisible()
   await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
-  await expect(page).toHaveURL('/admin?section=nodes')
+  const expectedNodesUrl = isDesktop
+    ? '/admin?section=nodes'
+    : '/admin?section=nodes&node=guard-node-a'
+  await expect(page).toHaveURL(expectedNodesUrl)
   await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
 
   // Performing local traffic correction refreshes server state without overwriting dirty node remarks.
@@ -682,11 +699,15 @@ test('high-risk node uncertain locks persist across section remounts and disting
   await page.route('**/api/admin/nodes/*/delete', route => route.abort('timedout'))
 
   await page.goto('/admin?section=nodes')
+  const isDesktop = await page.evaluate(() => innerWidth >= 1024)
   const navigation = page.getByRole('navigation', { name: '管理页面' })
   const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
   const nodesLink = navigation.getByRole('link', { name: '节点', exact: true })
 
-  // Enrollment timeout persists across section remounts and avoids fake resync guidance.
+  // Enrollment starts collapsed when nodes exist; timeout lock auto-expands and persists across section remounts.
+  const toggleEnrollButton = page.getByRole('button', { name: /展开接入节点|收起接入节点/ })
+  await expect(toggleEnrollButton).toHaveAttribute('aria-expanded', 'false')
+  await toggleEnrollButton.click()
   const enrollButton = page.getByRole('button', { name: '生成一次性注册令牌' })
   await enrollButton.click()
   await expect(enrollButton).toBeDisabled()
@@ -704,49 +725,61 @@ test('high-risk node uncertain locks persist across section remounts and disting
   enrollMode = 'ok'
   await enrollButton.click()
   await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-enroll-token')
+  await page.getByRole('button', { name: '隐藏令牌' }).click()
 
   // Unverifiable rotate 502 persists across close/reopen, section remounts, and ordinary state refreshes.
+  if (!isDesktop)
+    await page.getByRole('button', { name: /Lock Node A/ }).click()
   await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
   const rotateDialog = page.getByRole('dialog', { name: '轮换 Agent 凭据' })
-  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
+  const confirmRotateButton = rotateDialog.getByRole('button', { name: '确认轮换凭据' })
+  await confirmRotateButton.click()
   await expect(rotateDialog.getByRole('alert')).toContainText('Synthetic upstream 502')
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await expect(confirmRotateButton).toBeDisabled()
   await rotateDialog.getByRole('button', { name: '取消' }).click()
 
   await siteLink.click()
   await expect(page).toHaveURL('/admin?section=site')
   await nodesLink.click()
   await expect(page).toHaveURL('/admin?section=nodes')
+  if (!isDesktop)
+    await page.getByRole('button', { name: /Lock Node A/ }).click()
   await expect(page.getByRole('alert')).toContainText('轮换 Agent 凭据结果未确认')
 
   await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await expect(confirmRotateButton).toBeDisabled()
   await rotateDialog.getByRole('button', { name: '刷新管理状态' }).click()
   await expect(rotateDialog).toBeVisible()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await expect(confirmRotateButton).toBeDisabled()
   await expect(rotateDialog.getByRole('alert')).toContainText('无法证明节点「Lock Node A」的凭据轮换是否已生效')
   await rotateDialog.getByRole('button', { name: '我已核对状态，解除锁定' }).click()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeEnabled()
+  await expect(confirmRotateButton).toBeEnabled()
   rotateMode = 'ok'
-  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
+  await confirmRotateButton.click()
   await expect(rotateDialog).toBeHidden()
   await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-rotated-token')
 
   // Verifiable delete timeout persists across section remounts and clears once fresh GET observes deletion.
   await page.getByRole('button', { name: '删除节点' }).click()
   const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
-  await deleteDialog.getByRole('button', { name: '确认执行' }).click()
-  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  const confirmDeleteButton = deleteDialog.getByRole('button', { name: '确认删除节点' })
+  await confirmDeleteButton.click()
+  await expect(confirmDeleteButton).toBeDisabled()
   await deleteDialog.getByRole('button', { name: '取消' }).click()
 
   await siteLink.click()
   await nodesLink.click()
+  if (!isDesktop)
+    await page.getByRole('button', { name: /Lock Node A/ }).click()
   await page.getByRole('button', { name: '删除节点' }).click()
-  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await expect(confirmDeleteButton).toBeDisabled()
   nodes = nodes.filter(item => item.id !== 'lock-node-a')
   await deleteDialog.getByRole('button', { name: '重新同步' }).click()
   await expect(deleteDialog).toBeHidden()
-  await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Lock Node A」已删除' })).toBeVisible()
+  if (isDesktop)
+    await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Lock Node A」已删除' })).toBeVisible()
+  else
+    await expect(page.getByRole('button', { name: /Lock Node A/ })).toHaveCount(0)
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 
@@ -988,6 +1021,7 @@ test('busy clean enrollment blocks section switches, allows logout, and ignores 
   await page.goto('/admin?section=nodes')
   const navigation = page.getByRole('navigation', { name: '管理页面' })
   const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
+  await page.getByRole('button', { name: '展开接入节点' }).click()
   const enrollButton = page.getByRole('button', { name: '生成一次性注册令牌' })
   await expect(enrollButton).toBeEnabled()
 
@@ -1008,12 +1042,14 @@ test('busy clean enrollment blocks section switches, allows logout, and ignores 
   await page.getByLabel('密码', { exact: true }).fill('synthetic-password')
   await page.getByRole('button', { name: '登录', exact: true }).click()
   await expect(page).toHaveURL('/admin')
-  await expect(page.getByRole('button', { name: '生成一次性注册令牌' })).toBeEnabled()
+  const expandAfterLogin = page.getByRole('button', { name: '展开接入节点' })
+  await expect(expandAfterLogin).toHaveAttribute('aria-expanded', 'false')
 
   const lateEnrollSettled = page.waitForResponse(response => response.url().endsWith('/api/admin/enrollment') && response.status() === 502)
   releaseEnroll?.()
   releaseEnroll = null
   await lateEnrollSettled
+  await expandAfterLogin.click()
   await expect(page.getByRole('button', { name: '生成一次性注册令牌' })).toBeEnabled()
   await expect(page.getByRole('alert')).toHaveCount(0)
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
