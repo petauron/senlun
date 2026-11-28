@@ -71,6 +71,7 @@ const draft = ref<ProbeTask>(blank())
 const baseline = ref<ProbeTask>(blank())
 const pendingCreateId = ref('')
 const seenPendingCreateId = ref('')
+const removedTaskName = ref('')
 const unverifiedScopedTarget = ref<{ id: string, nodeIds: string[], enabled: boolean } | null>(null)
 const confirmGlobalScope = ref(false)
 const editRevision = ref(0)
@@ -218,6 +219,7 @@ function applyResetDraft(clearFeedback = true): void {
   baseline.value = blank()
   pendingCreateId.value = ''
   seenPendingCreateId.value = ''
+  removedTaskName.value = ''
   unverifiedScopedTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
@@ -231,6 +233,7 @@ function applyEditTask(task: ProbeTask, clearFeedback = true): void {
   baseline.value = cloneProbeTask(task)
   pendingCreateId.value = ''
   seenPendingCreateId.value = ''
+  removedTaskName.value = ''
   unverifiedScopedTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainSave.value = null
@@ -239,14 +242,10 @@ function applyEditTask(task: ProbeTask, clearFeedback = true): void {
     saveAction.clearFeedback()
 }
 
-function markPendingCreateRemoved(removedId: string, fallbackName: string): void {
+function markPendingCreateRemoved(removedId: string, displayName: string): void {
   if (!draft.value.id && pendingCreateId.value === removedId) {
     draft.value.id = removedId
-    baseline.value = {
-      ...baseline.value,
-      id: removedId,
-      name: baseline.value.name || fallbackName,
-    }
+    removedTaskName.value = displayName
     pendingCreateId.value = ''
     seenPendingCreateId.value = ''
     unverifiedScopedTarget.value = null
@@ -632,6 +631,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
     return
   }
   const sessionGen = getSessionGeneration()
+  const targetWasDirtyBeforeResync = effectiveEditingId.value === entry.id && hasUnsavedChanges.value
   entry.resyncError = ''
   let verifiedDeleted = false
   const ok = await deleteAction.resync({
@@ -662,7 +662,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
   if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
     // Read-only resync must preserve dirty user edits (surfaced via editingTaskMissing) and block old UUID resurrection.
     if (effectiveEditingId.value === entry.id) {
-      if (!hasUnsavedChanges.value)
+      if (!targetWasDirtyBeforeResync && !hasUnsavedChanges.value)
         applyResetDraft(false)
       else
         markPendingCreateRemoved(entry.id, entry.name)
@@ -754,8 +754,8 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
           <h2 ref="formHeadingRef" tabindex="-1" class="font-medium outline-none">
             {{ draft.id ? '编辑探测任务' : '新增探测任务' }}
           </h2>
-          <Badge v-if="draft.id && baseline.name" variant="secondary">
-            {{ baseline.name }}
+          <Badge v-if="draft.id && (baseline.name || removedTaskName)" variant="secondary">
+            {{ baseline.name || removedTaskName }}
           </Badge>
           <Badge v-if="hasUnsavedChanges" variant="outline">
             未保存
@@ -763,7 +763,7 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<'probes'>):
         </div>
       </template>
       <p v-if="editingTaskMissing" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-        当前正在编辑的探测任务「{{ baseline.name || draft.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中供核对或复制，请点击“取消编辑”返回新增态。
+        当前正在编辑的探测任务「{{ baseline.name || removedTaskName || draft.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中供核对或复制，请点击“取消编辑”返回新增态。
       </p>
       <p v-else-if="hasUnsavedChanges" role="status" class="text-sm text-muted-foreground">
         有未保存修改；切换编辑对象、切换栏目或主动刷新前会提示确认。

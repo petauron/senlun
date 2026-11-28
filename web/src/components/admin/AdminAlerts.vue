@@ -99,6 +99,7 @@ const channel = ref<NotificationChannel>(emptyChannel())
 const channelBaseline = ref<NotificationChannel>(emptyChannel())
 const pendingNewChannelId = ref('')
 const seenPendingNewChannelId = ref('')
+const removedChannelName = ref('')
 const channelEditRevision = ref(0)
 const pendingUncertainChannelSave = ref<PendingUncertainChannelSave | null>(null)
 const channelFormHeadingRef = ref<HTMLElement | null>(null)
@@ -107,6 +108,7 @@ const rule = ref<AlertRule>(emptyRule())
 const ruleBaseline = ref<AlertRule>(emptyRule())
 const pendingNewRuleId = ref('')
 const seenPendingNewRuleId = ref('')
+const removedRuleName = ref('')
 const unverifiedScopedRuleTarget = ref<{ id: string, nodeIds: string[], enabled: boolean } | null>(null)
 const ruleEditRevision = ref(0)
 const confirmGlobalScope = ref(false)
@@ -346,6 +348,7 @@ function applyResetChannel(clearFeedback = true): void {
   channelBaseline.value = emptyChannel()
   pendingNewChannelId.value = ''
   seenPendingNewChannelId.value = ''
+  removedChannelName.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
@@ -356,19 +359,16 @@ function applyEditChannel(item: NotificationChannel, clearFeedback = true): void
   channelBaseline.value = cloneNotificationChannel(item)
   pendingNewChannelId.value = ''
   seenPendingNewChannelId.value = ''
+  removedChannelName.value = ''
   pendingUncertainChannelSave.value = null
   if (clearFeedback)
     channelAction.clearFeedback()
 }
 
-function markPendingNewChannelRemoved(removedId: string, fallbackName: string): void {
+function markPendingNewChannelRemoved(removedId: string, displayName: string): void {
   if (!channel.value.id && pendingNewChannelId.value === removedId) {
     channel.value.id = removedId
-    channelBaseline.value = {
-      ...channelBaseline.value,
-      id: removedId,
-      name: channelBaseline.value.name || fallbackName,
-    }
+    removedChannelName.value = displayName
     pendingNewChannelId.value = ''
     seenPendingNewChannelId.value = ''
     pendingUncertainChannelSave.value = null
@@ -380,6 +380,7 @@ function applyResetRule(clearFeedback = true): void {
   ruleBaseline.value = emptyRule()
   pendingNewRuleId.value = ''
   seenPendingNewRuleId.value = ''
+  removedRuleName.value = ''
   unverifiedScopedRuleTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
@@ -393,6 +394,7 @@ function applyEditRule(item: AlertRule, clearFeedback = true): void {
   ruleBaseline.value = cloneAlertRule(item)
   pendingNewRuleId.value = ''
   seenPendingNewRuleId.value = ''
+  removedRuleName.value = ''
   unverifiedScopedRuleTarget.value = null
   confirmGlobalScope.value = false
   pendingUncertainRuleSave.value = null
@@ -401,14 +403,10 @@ function applyEditRule(item: AlertRule, clearFeedback = true): void {
     ruleAction.clearFeedback()
 }
 
-function markPendingNewRuleRemoved(removedId: string, fallbackName: string): void {
+function markPendingNewRuleRemoved(removedId: string, displayName: string): void {
   if (!rule.value.id && pendingNewRuleId.value === removedId) {
     rule.value.id = removedId
-    ruleBaseline.value = {
-      ...ruleBaseline.value,
-      id: removedId,
-      name: ruleBaseline.value.name || fallbackName,
-    }
+    removedRuleName.value = displayName
     pendingNewRuleId.value = ''
     seenPendingNewRuleId.value = ''
     unverifiedScopedRuleTarget.value = null
@@ -1039,6 +1037,9 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
     return
   }
   const sessionGen = getSessionGeneration()
+  const targetWasDirtyBeforeResync = entry.kind === 'channels'
+    ? effectiveChannelId.value === entry.id && hasUnsavedChannel.value
+    : effectiveRuleId.value === entry.id && hasUnsavedRule.value
   entry.resyncError = ''
   const label = entry.kind === 'channels'
     ? '通知渠道'
@@ -1076,14 +1077,14 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
     // Read-only resync must preserve dirty user edits (surfaced via editing*Missing) and block old UUID resurrection.
     if (entry.kind === 'channels') {
       if (effectiveChannelId.value === entry.id) {
-        if (!hasUnsavedChannel.value)
+        if (!targetWasDirtyBeforeResync && !hasUnsavedChannel.value)
           applyResetChannel(false)
         else
           markPendingNewChannelRemoved(entry.id, entry.name)
       }
     }
     else if (effectiveRuleId.value === entry.id) {
-      if (!hasUnsavedRule.value)
+      if (!targetWasDirtyBeforeResync && !hasUnsavedRule.value)
         applyResetRule(false)
       else
         markPendingNewRuleRemoved(entry.id, entry.name)
@@ -1159,15 +1160,15 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
           <h3 ref="channelFormHeadingRef" tabindex="-1" class="font-medium outline-none">
             {{ channel.id ? '编辑渠道' : '新增渠道' }}
           </h3>
-          <Badge v-if="channel.id && channelBaseline.name" variant="secondary">
-            {{ channelBaseline.name }}
+          <Badge v-if="channel.id && (channelBaseline.name || removedChannelName)" variant="secondary">
+            {{ channelBaseline.name || removedChannelName }}
           </Badge>
           <Badge v-if="hasUnsavedChannel" variant="outline">
             未保存
           </Badge>
         </div>
         <p v-if="editingChannelMissing" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-          当前正在编辑的通知渠道「{{ channelBaseline.name || channel.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中，请点击“取消编辑”返回新增态。
+          当前正在编辑的通知渠道「{{ channelBaseline.name || removedChannelName || channel.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中，请点击“取消编辑”返回新增态。
         </p>
         <p v-else-if="hasUnsavedChannel" role="status" class="text-sm text-muted-foreground">
           通知渠道表单有未保存修改；仅在切换通知渠道、离开栏目或主动刷新时提示，不会影响下方告警规则草稿。
@@ -1283,15 +1284,15 @@ async function resyncDelete(entry?: PendingUncertainConfigDeleteLock<AlertConfig
           <h3 ref="ruleFormHeadingRef" tabindex="-1" class="font-medium outline-none">
             {{ rule.id ? '编辑规则' : '新增规则' }}
           </h3>
-          <Badge v-if="rule.id && ruleBaseline.name" variant="secondary">
-            {{ ruleBaseline.name }}
+          <Badge v-if="rule.id && (ruleBaseline.name || removedRuleName)" variant="secondary">
+            {{ ruleBaseline.name || removedRuleName }}
           </Badge>
           <Badge v-if="hasUnsavedRule" variant="outline">
             未保存
           </Badge>
         </div>
         <p v-if="editingRuleMissing" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
-          当前正在编辑的告警规则「{{ ruleBaseline.name || rule.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中，请点击“取消编辑”返回新增态。
+          当前正在编辑的告警规则「{{ ruleBaseline.name || removedRuleName || rule.id }}」在最新同步中已不存在，无法继续保存。当前未保存输入仍保留在表单中，请点击“取消编辑”返回新增态。
         </p>
         <p v-else-if="hasUnsavedRule" role="status" class="text-sm text-muted-foreground">
           告警规则表单有未保存修改；仅在切换告警规则、离开栏目或主动刷新时提示，不会影响上方通知渠道草稿。
