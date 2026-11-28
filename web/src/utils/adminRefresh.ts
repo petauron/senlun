@@ -2,41 +2,48 @@ export function createSerializedRefresh<T, Options = void>(
   runFetch: (options: Options, isLatest: () => boolean) => Promise<T>,
   onLoadingChange?: (loading: boolean) => void,
 ) {
-  let inFlight: Promise<T> | null = null
-  let queued = 0
+  let chain: Promise<void> = Promise.resolve()
+  let latestSeq = 0
+  let pending = 0
+  let latestResult: Promise<T> | null = null
 
-  const isLatest = () => queued === 0
-
-  async function refresh(options: Options): Promise<T> {
-    if (inFlight) {
-      queued++
-      try {
-        while (inFlight)
-          await inFlight.catch(() => {})
-      }
-      finally {
-        queued--
-      }
-    }
-
+  function refresh(options: Options): Promise<T> {
+    const seq = ++latestSeq
+    pending += 1
     onLoadingChange?.(true)
-    const current = (async () => {
+
+    const step = chain.then(async (): Promise<{ applied: boolean, value?: T }> => {
       try {
-        return await runFetch(options, isLatest)
+        if (seq !== latestSeq)
+          return { applied: false }
+        const value = await runFetch(options, () => seq === latestSeq)
+        return {
+          applied: seq === latestSeq,
+          value,
+        }
       }
       finally {
-        if (inFlight === current)
-          inFlight = null
-        if (!inFlight && queued === 0)
+        pending -= 1
+        if (pending === 0)
           onLoadingChange?.(false)
       }
-    })()
-    inFlight = current
-    return current
+    })
+
+    // Advance the serial chain on settle regardless of failure so an older GET error never swallows newer reads.
+    chain = step.then(() => undefined, () => undefined)
+
+    // Any caller whose intermediate read was superseded awaits the newer run so it only resolves once fresh data is applied.
+    const result = step.then((outcome) => {
+      if (outcome.applied || !latestResult)
+        return outcome.value as T
+      return latestResult
+    })
+    latestResult = result
+    return result
   }
 
   return {
     refresh,
-    isBusy: () => inFlight !== null || queued > 0,
+    isBusy: () => pending > 0,
   }
 }

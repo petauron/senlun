@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSerializedRefresh } from '@/utils/adminRefresh'
+import {
+  clearAdminUncertainLocks,
+  enrollUncertainLock,
+  nodeDangerUncertainLocks,
+  trafficRemoveUncertainLocks,
+} from '@/utils/adminUncertain'
 import { ApiError } from '@/utils/api'
 import { isUncertainWriteError, useAdminAction } from '../useAdminAction'
 
@@ -149,6 +155,35 @@ describe('useAdminAction submission outcome classification', () => {
     expect(action.error.value).toContain('API request timed out')
     expect(action.error.value).not.toContain('请先重新同步')
   })
+
+  it('clears all session-scoped uncertain locks when the session ends', () => {
+    enrollUncertainLock.value = 'enroll pending'
+    nodeDangerUncertainLocks.value = {
+      'rotate:node-1': {
+        key: 'rotate:node-1',
+        action: 'rotate',
+        nodeId: 'node-1',
+        nodeName: 'Node 1',
+        verifiable: false,
+        message: 'rotate pending',
+        resyncError: '',
+      },
+    }
+    trafficRemoveUncertainLocks.value = {
+      'node-1': {
+        nodeId: 'node-1',
+        nodeName: 'Node 1',
+        message: 'remove pending',
+        resyncError: '',
+      },
+    }
+
+    clearAdminUncertainLocks()
+
+    expect(enrollUncertainLock.value).toBeNull()
+    expect(nodeDangerUncertainLocks.value).toEqual({})
+    expect(trafficRemoveUncertainLocks.value).toEqual({})
+  })
 })
 
 describe('createSerializedRefresh controlled concurrency', () => {
@@ -177,12 +212,14 @@ describe('createSerializedRefresh controlled concurrency', () => {
     expect(calls).toBe(1)
 
     first.resolve('stale-pre-post-snapshot')
-    await p1
+    await Promise.resolve()
+    await Promise.resolve()
     expect(applied).toEqual([])
     expect(calls).toBe(2)
 
     second.resolve('fresh-post-post-snapshot')
     await expect(p2).resolves.toBe('fresh-post-post-snapshot')
+    await expect(p1).resolves.toBe('fresh-post-post-snapshot')
     expect(applied).toEqual(['fresh-post-post-snapshot'])
     expect(loadingStates.at(-1)).toBe(false)
   })
@@ -212,23 +249,104 @@ describe('createSerializedRefresh controlled concurrency', () => {
     expect(applied).toEqual(['fresh-after-error'])
   })
 
-  it('surfaces failure when the queued fresh GET itself fails', async () => {
+  it('never lets an intermediate queued resync verify against stale state when a 3rd queued read fails', async () => {
     const first = deferred<string>()
-    const second = deferred<string>()
+    const third = deferred<string>()
+    let appliedState = 'stale-initial-state'
+    const fetched: string[] = []
 
-    const refresher = createSerializedRefresh<string, string>(async (label) => {
-      return label === 'first'
+    const refresher = createSerializedRefresh<string, string>(async (label, isLatest) => {
+      fetched.push(label)
+      const value = label === 'first'
         ? await first.promise
-        : await second.promise
+        : await third.promise
+      if (isLatest())
+        appliedState = value
+      return value
+    })
+
+    const action = useAdminAction(async () => {
+      await refresher.refresh('second-resync')
+    })
+
+    await action.run(async () => {
+      throw new ApiError('Bad Gateway', 502)
+    }, {
+      riskyWrite: true,
     })
 
     const p1 = refresher.refresh('first')
-    const p2 = refresher.refresh('second')
+    const verify = vi.fn(() => ({
+      resolved: true,
+      message: `verified:${appliedState}`,
+    }))
+    const resyncPromise = action.resync({ verify })
+    const p3 = refresher.refresh('third-fails')
 
-    first.resolve('stale-ok')
-    await p1
+    first.resolve('stale-first-snapshot')
+    await Promise.resolve()
+    await Promise.resolve()
 
-    second.reject(new ApiError('Fresh GET failed', 503))
-    await expect(p2).rejects.toThrow('Fresh GET failed')
+    third.reject(new ApiError('Final GET failed', 503))
+    await expect(p3).rejects.toThrow('Final GET failed')
+    await expect(p1).rejects.toThrow('Final GET failed')
+    await expect(resyncPromise).resolves.toBe(false)
+
+    // Intermediate skipped read must NOT run verify against stale state or clear uncertain lock.
+    expect(fetched).toEqual(['first', 'third-fails'])
+    expect(verify).not.toHaveBeenCalled()
+    expect(action.uncertain.value).toBe(true)
+    expect(action.needsResync.value).toBe(true)
+    expect(appliedState).toBe('stale-initial-state')
+  })
+
+  it('resolves intermediate queued resync only after a 3rd queued read actually applies fresh state', async () => {
+    const first = deferred<string>()
+    const third = deferred<string>()
+    let appliedState = 'stale-initial-state'
+
+    const refresher = createSerializedRefresh<string, string>(async (label, isLatest) => {
+      const value = label === 'first'
+        ? await first.promise
+        : await third.promise
+      if (isLatest())
+        appliedState = value
+      return value
+    })
+
+    const action = useAdminAction(async () => {
+      await refresher.refresh('second-resync')
+    })
+
+    await action.run(async () => {
+      throw new ApiError('API request timed out')
+    }, {
+      riskyWrite: true,
+    })
+
+    const p1 = refresher.refresh('first')
+    let observedDuringVerify = ''
+    const resyncPromise = action.resync({
+      verify: () => {
+        observedDuringVerify = appliedState
+        return {
+          resolved: true,
+          message: '已核实最新状态',
+        }
+      },
+    })
+    const p3 = refresher.refresh('third-succeeds')
+
+    first.resolve('stale-first-snapshot')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(observedDuringVerify).toBe('')
+
+    third.resolve('fresh-third-snapshot')
+    await expect(p3).resolves.toBe('fresh-third-snapshot')
+    await expect(p1).resolves.toBe('fresh-third-snapshot')
+    await expect(resyncPromise).resolves.toBe(true)
+    expect(observedDuringVerify).toBe('fresh-third-snapshot')
+    expect(action.uncertain.value).toBe(false)
   })
 })

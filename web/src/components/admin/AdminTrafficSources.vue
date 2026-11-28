@@ -12,6 +12,7 @@ import { useAdminAction } from '@/composables/useAdminAction'
 import { ADMIN_DRAFT_REGISTRY_KEY } from '@/composables/useAdminDraftGuard'
 import { useAuthStore } from '@/stores/auth'
 import { createSerializedRefresh } from '@/utils/adminRefresh'
+import { trafficRemoveUncertainLocks } from '@/utils/adminUncertain'
 import { getSharedApi } from '@/utils/api'
 import { decideTrafficDeparture, shouldWarnBeforeUnload, unmountLeaveResult } from '@/utils/authFlow'
 
@@ -21,13 +22,7 @@ interface PendingUncertainTrafficSave {
   config: ExternalTrafficConfig
   hadCredentialBefore: boolean
   includedCredential: boolean
-  message: string
-  resyncError: string
-}
-
-interface PendingUncertainTrafficRemove {
-  nodeId: string
-  nodeName: string
+  draftRevision: number
   message: string
   resyncError: string
 }
@@ -47,12 +42,15 @@ const confirmRemove = ref(false)
 const pendingNodeId = ref<string | null>(null)
 const pendingLeave = ref(false)
 const pendingUncertainSaves = ref<Record<string, PendingUncertainTrafficSave>>({})
-const pendingUncertainRemovals = ref<Record<string, PendingUncertainTrafficRemove>>({})
+const pendingUncertainRemovals = trafficRemoveUncertainLocks
 let resolveLeave: ((leave: boolean) => void) | null = null
 let discardFocusTarget: HTMLElement | null = null
 let formLoaded = false
 let beforeUnloadBound = false
 let disposed = false
+let draftRevision = 0
+let syncingFromServer = false
+const removeStartRevisions: Record<string, number> = {}
 
 function emptyConfig(): ExternalTrafficConfig {
   return {
@@ -209,14 +207,35 @@ function syncBeforeUnload(active: boolean): void {
   }
 }
 
+function withServerSync(fn: () => void): void {
+  syncingFromServer = true
+  try {
+    fn()
+  }
+  finally {
+    syncingFromServer = false
+  }
+}
+
+watch(
+  [draft, username, password, bearerToken],
+  () => {
+    if (!syncingFromServer)
+      draftRevision += 1
+  },
+  { deep: true, flush: 'sync' },
+)
+
 function selectSource(): void {
-  savedDraft.value = current.value
-    ? { ...current.value.config }
-    : emptyConfig()
-  draft.value = { ...savedDraft.value }
-  username.value = ''
-  password.value = ''
-  bearerToken.value = ''
+  withServerSync(() => {
+    savedDraft.value = current.value
+      ? { ...current.value.config }
+      : emptyConfig()
+    draft.value = { ...savedDraft.value }
+    username.value = ''
+    password.value = ''
+    bearerToken.value = ''
+  })
 }
 
 function switchNode(id: string): void {
@@ -352,6 +371,7 @@ async function save(): Promise<void> {
   const config = { ...draft.value }
   const hadCredentialBefore = Boolean(current.value?.has_credential)
   const includedCredential = Boolean(username.value || password.value || bearerToken.value)
+  const submittedRevision = draftRevision
   clearPendingSave(targetId)
   const result = await saveAction.run(async () => {
     await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(targetId)}`, {
@@ -363,10 +383,12 @@ async function save(): Promise<void> {
   }, {
     message: '已保存；启用后通常在一分钟内首次同步',
     onCommitted: () => {
-      username.value = ''
-      password.value = ''
-      bearerToken.value = ''
-      savedDraft.value = config
+      withServerSync(() => {
+        username.value = ''
+        password.value = ''
+        bearerToken.value = ''
+        savedDraft.value = config
+      })
     },
   })
   if (result === 'uncertain') {
@@ -378,6 +400,7 @@ async function save(): Promise<void> {
         config,
         hadCredentialBefore,
         includedCredential,
+        draftRevision: submittedRevision,
         message: saveError.value,
         resyncError: '',
       },
@@ -404,6 +427,7 @@ async function remove(): Promise<void> {
     return
   const targetId = selectedId.value
   const targetName = currentNodeName.value
+  removeStartRevisions[targetId] = draftRevision
   const result = await removeAction.run(async () => {
     await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(targetId)}/delete`, {})
   }, {
@@ -412,6 +436,7 @@ async function remove(): Promise<void> {
     uncertainMessage: detail => `移除节点「${targetName}」外部流量源结果未确认（${detail}）。请先重新同步核对当前状态，勿直接重复提交。`,
     onCommitted: () => {
       clearPendingRemove(targetId)
+      delete removeStartRevisions[targetId]
       sources.value = sources.value.filter(source => source.node_id !== targetId)
       selectSource()
       confirmRemove.value = false
@@ -442,16 +467,25 @@ async function resyncSave(): Promise<void> {
       const fresh = sources.value.find(item => item.node_id === pending.nodeId)
       clearPendingSave(pending.nodeId)
       const configMatches = Boolean(fresh && sameTrafficConfig(fresh.config, pending.config))
+      const unchangedSinceSubmit = selectedId.value === pending.nodeId && draftRevision === pending.draftRevision
       if (configMatches && (!pending.includedCredential || (!pending.hadCredentialBefore && fresh?.has_credential))) {
-        if (selectedId.value === pending.nodeId) {
-          savedDraft.value = { ...pending.config }
-          username.value = ''
-          password.value = ''
-          bearerToken.value = ''
+        if (unchangedSinceSubmit) {
+          withServerSync(() => {
+            savedDraft.value = { ...pending.config }
+            username.value = ''
+            password.value = ''
+            bearerToken.value = ''
+          })
+          return {
+            resolved: true,
+            message: `已核实：节点「${pending.nodeName}」的外部流量源配置已在服务端生效`,
+          }
         }
+        if (selectedId.value === pending.nodeId)
+          savedDraft.value = { ...pending.config }
         return {
           resolved: true,
-          message: `已核实：节点「${pending.nodeName}」的外部流量源配置已在服务端生效`,
+          message: `已核实：上次提交的外部流量源配置已在服务端生效；您之后的新修改与凭据输入已保留，尚未保存。`,
         }
       }
       if (configMatches && pending.includedCredential && pending.hadCredentialBefore) {
@@ -482,14 +516,24 @@ async function resyncRemove(): Promise<void> {
   const ok = await removeAction.resync({
     verify: () => {
       const stillExists = sources.value.some(source => source.node_id === pending.nodeId)
+      const startRevision = removeStartRevisions[pending.nodeId]
       clearPendingRemove(pending.nodeId)
+      delete removeStartRevisions[pending.nodeId]
       if (!stillExists) {
-        if (selectedId.value === pending.nodeId)
-          selectSource()
+        const editedOrDirty = selectedId.value === pending.nodeId
+          && (hasUnsavedChanges.value || (startRevision !== undefined && draftRevision !== startRevision))
+        if (selectedId.value === pending.nodeId) {
+          if (editedOrDirty)
+            savedDraft.value = emptyConfig()
+          else
+            selectSource()
+        }
         confirmRemove.value = false
         return {
           resolved: true,
-          message: `已核实：已移除节点「${pending.nodeName}」的外部流量源`,
+          message: editedOrDirty
+            ? `已核实：已移除节点「${pending.nodeName}」的外部流量源；当前未保存的草稿与凭据输入已保留。`
+            : `已核实：已移除节点「${pending.nodeName}」的外部流量源`,
         }
       }
       return {

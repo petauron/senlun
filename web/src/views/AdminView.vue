@@ -272,9 +272,12 @@ async function resyncSettings(): Promise<void> {
       pendingUncertainSettings.value = null
       if (!isSiteSettingsDirty(pending.submitted, serverSettings)) {
         savedSettings.value = { ...serverSettings }
+        const editedAfterSubmit = isSiteSettingsDirty(settings.value, pending.submitted)
         return {
           resolved: true,
-          message: '已核实：站点设置已在服务端生效',
+          message: editedAfterSubmit
+            ? '已核实：上次提交的站点设置已在服务端生效；您之后的新修改已保留，尚未保存。'
+            : '已核实：站点设置已在服务端生效',
         }
       }
       return {

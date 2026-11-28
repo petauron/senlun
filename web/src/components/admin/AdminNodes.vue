@@ -2,6 +2,7 @@
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ManagedNode } from '@/utils/admin'
 import type { NodeDraftForm, NodeDraftSnapshot } from '@/utils/adminDraft'
+import type { NodeDangerActionKind, PendingUncertainDangerLock } from '@/utils/adminUncertain'
 import type { TagColor } from '@/utils/tagHelper'
 import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -17,26 +18,15 @@ import { ADMIN_DRAFT_REGISTRY_KEY, useAdminDraftGuard } from '@/composables/useA
 import { useAuthStore } from '@/stores/auth'
 import { cloneNodeDraft, createNodeDraftSnapshot, isNodeDraftDirty, shouldSyncNodeDraftFromServer } from '@/utils/adminDraft'
 import { normalizePublicRemark, validatePublicRemark } from '@/utils/adminEditing'
+import { enrollUncertainLock, nodeDangerUncertainLocks } from '@/utils/adminUncertain'
 import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { parseTags } from '@/utils/tagHelper'
-
-type DangerActionKind = 'rotate' | 'revoke' | 'delete' | 'reset-traffic'
 
 interface PendingUncertainNodeSave {
   nodeId: string
   nodeName: string
   submitted: NodeDraftSnapshot
-  message: string
-  resyncError: string
-}
-
-interface PendingUncertainDanger {
-  key: string
-  action: DangerActionKind
-  nodeId: string
-  nodeName: string
-  verifiable: boolean
   message: string
   resyncError: string
 }
@@ -55,13 +45,13 @@ const expires = ref('')
 const quotaGiB = ref<number | string>(0)
 const ttlHours = ref(24)
 const secret = ref('')
-const confirm = ref<DangerActionKind | null>(null)
+const confirm = ref<NodeDangerActionKind | null>(null)
 const newTagText = ref('')
 const newTagColor = ref<TagColor>('blue')
 const tagError = ref('')
-const enrollUncertain = ref<string | null>(null)
+const enrollUncertain = enrollUncertainLock
 const pendingUncertainSaves = ref<Record<string, PendingUncertainNodeSave>>({})
-const pendingUncertainDangers = ref<Record<string, PendingUncertainDanger>>({})
+const pendingUncertainDangers = nodeDangerUncertainLocks
 let forceResetNextSync = false
 
 const tagPreview = computed(() => parseTags(draft.value?.tags))
@@ -147,13 +137,13 @@ const showInlineDangerRefreshError = computed(() => {
   return dangerOutcome.value === 'refresh_failed' && Boolean(dangerError.value)
 })
 
-const actionLabels: Record<DangerActionKind, string> = {
+const actionLabels: Record<NodeDangerActionKind, string> = {
   'rotate': '轮换 Agent 凭据',
   'revoke': '撤销 Agent 凭据',
   'delete': '删除节点',
   'reset-traffic': '重置本周期流量',
 }
-const actionHints: Record<DangerActionKind, string> = {
+const actionHints: Record<NodeDangerActionKind, string> = {
   'rotate': '旧凭据会立即失效。请保存新凭据并更新对应 Agent，否则节点将停止上报。',
   'revoke': '对应 Agent 将无法继续上报。需要重新注册后才能恢复。',
   'delete': '将删除此节点及相关数据，无法从面板恢复。',
@@ -316,7 +306,7 @@ function choose(id: string): void {
   )
 }
 
-function openConfirm(action: DangerActionKind): void {
+function openConfirm(action: NodeDangerActionKind): void {
   if (dangerOutcome.value === 'failed' || dangerOutcome.value === 'saved')
     dangerAction.clearFeedback()
   confirm.value = action
@@ -426,7 +416,7 @@ async function enroll(): Promise<void> {
     enrollUncertain.value = enrollError.value
 }
 
-function buildDangerUncertainMessage(action: DangerActionKind, nodeName: string, detail: string): string {
+function buildDangerUncertainMessage(action: NodeDangerActionKind, nodeName: string, detail: string): string {
   if (action === 'rotate')
     return `节点「${nodeName}」的轮换 Agent 凭据结果未确认（${detail}）。管理状态接口无法核实凭据是否已轮换；若服务端已生效，旧凭据可能已失效且新令牌未能传回。请先检查对应 Agent 连接状态，或明确解锁后再次轮换以获取新凭据。`
   if (action === 'reset-traffic')
@@ -504,11 +494,21 @@ async function resyncSave(): Promise<void> {
         newTagText: '',
       }, serverSnapshot)
       if (applied) {
-        if (selected.value?.id === pending.nodeId)
+        let editedAfterSubmit = false
+        if (selected.value?.id === pending.nodeId) {
           savedBaseline.value = serverSnapshot
+          editedAfterSubmit = isNodeDraftDirty({
+            draft: draft.value,
+            expires: expires.value,
+            quotaGiB: quotaGiB.value,
+            newTagText: newTagText.value,
+          }, serverSnapshot)
+        }
         return {
           resolved: true,
-          message: `已核实：节点「${pending.nodeName}」的修改已在服务端生效`,
+          message: editedAfterSubmit
+            ? `已核实：上次提交的节点「${pending.nodeName}」修改已在服务端生效；您之后的新修改已保留，尚未保存。`
+            : `已核实：节点「${pending.nodeName}」的修改已在服务端生效`,
         }
       }
       return {
@@ -521,7 +521,7 @@ async function resyncSave(): Promise<void> {
     pendingUncertainSaves.value[pending.nodeId]!.resyncError = saveResyncError.value
 }
 
-async function resyncDanger(entry?: PendingUncertainDanger): Promise<void> {
+async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
   if (!entry) {
     await dangerAction.resync('已重新同步最新状态')
     return

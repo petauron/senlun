@@ -325,12 +325,12 @@ test('logout and 401 expiry leave dirty traffic drafts cleanly, and expired oaut
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 
-test('node and site drafts guard switch/refresh/history, survive local traffic correction, and handle resync, uncertain locks, concurrent refresh, and logout', async ({ page }) => {
+test('node and site drafts guard switch/refresh/same-document history, survive local traffic correction, and handle resync, concurrent refresh, and logout', async ({ page }) => {
   await login(page, '/admin')
   await waitForNode(page.request)
   const initialState = await (await page.request.get('/api/admin/state')).json()
   const baseNode = initialState.nodes[0]
-  let nodes = [
+  const nodes = [
     {
       ...baseNode,
       id: 'guard-node-a',
@@ -354,8 +354,6 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
   let stateGetCount = 0
   let nodeSaveMode: 'ok' | 'timeout' = 'ok'
   let nodeSaveCount = 0
-  let enrollMode: 'ok' | 'timeout' = 'timeout'
-  let rotateMode: '502' | 'ok' = '502'
   let logoutMode: 'ok' | 'fail-403' = 'fail-403'
   let signedOut = false
 
@@ -391,30 +389,6 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
         nodes,
       },
     })
-  })
-  await page.route('**/api/admin/enrollment', async (route) => {
-    if (enrollMode === 'timeout') {
-      await route.abort('timedout')
-      return
-    }
-    await route.fulfill({
-      json: { token: 'synthetic-enroll-token' },
-    })
-  })
-  await page.route('**/api/admin/nodes/*/rotate', async (route) => {
-    if (rotateMode === '502') {
-      await route.fulfill({
-        status: 502,
-        json: { error: 'Synthetic upstream 502' },
-      })
-      return
-    }
-    await route.fulfill({
-      json: { agent_token: 'synthetic-rotated-token' },
-    })
-  })
-  await page.route('**/api/admin/nodes/*/delete', async (route) => {
-    await route.abort('timedout')
   })
   await page.route('**/api/admin/nodes/*/traffic-correction', async (route) => {
     if (route.request().method() === 'GET') {
@@ -504,21 +478,27 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
     })
   })
 
-  await page.goto('/admin?section=nodes')
-  const nodeSelect = page.getByRole('combobox', { name: '选择节点' })
-  const remarkInput = page.getByLabel('公开备注')
-  const topRefresh = page.getByRole('button', { name: '刷新', exact: true })
+  // Seed same-document SPA history via real admin navigation before testing history.back().
+  await page.goto('/admin?section=site')
   const navigation = page.getByRole('navigation', { name: '管理页面' })
   const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
   const nodesLink = navigation.getByRole('link', { name: '节点', exact: true })
   const securityLink = navigation.getByRole('link', { name: '账号安全', exact: true })
+  const topRefresh = page.getByRole('button', { name: '刷新', exact: true })
   const confirmation = page.getByRole('dialog', { name: '放弃未保存修改？' })
+  const siteName = page.getByLabel('站点名称')
+  await expect(siteName).toHaveValue(originalSiteName)
+
+  await nodesLink.click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  const nodeSelect = page.getByRole('combobox', { name: '选择节点' })
+  const remarkInput = page.getByLabel('公开备注')
 
   await expect(remarkInput).toHaveValue('Original Remark A')
   await remarkInput.fill('Unsaved Remark Draft')
   await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeVisible()
 
-  // Node switch and top refresh must guard unsaved drafts and restore focus on cancel.
+  // Node switch, top refresh, and same-document browser Back guard drafts and restore focus on cancel.
   await nodeSelect.click()
   await page.getByRole('option', { name: /Guard Node B/ }).click()
   await expect(confirmation).toContainText('Guard Node B')
@@ -551,7 +531,7 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
   await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
   await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeVisible()
 
-  // Confirmed write + refresh failure must render exactly one resync button, preserve committed guidance if resync fails, and resync read-only without replaying POST.
+  // Confirmed write + refresh failure must render one resync button, preserve committed guidance on failed resync, and avoid replaying POST.
   failStateRefresh = true
   await page.getByRole('button', { name: '保存节点' }).click()
   const resyncButtons = page.getByRole('button', { name: '重新同步', exact: true })
@@ -570,7 +550,7 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
   await expect(page.getByRole('status').filter({ hasText: '已重新同步最新状态' })).toBeVisible()
   expect(nodeSaveCount).toBe(1)
 
-  // Timeout/disconnect write must keep user input and surface uncertain-write resync guidance; explicit discard resets draft.
+  // Timeout write keeps draft and surfaces uncertain resync guidance; explicit discard-and-refresh resets draft.
   await remarkInput.fill('Timed Out Remark')
   nodeSaveMode = 'timeout'
   await page.getByRole('button', { name: '保存节点' }).click()
@@ -581,65 +561,14 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
   await confirmation.getByRole('button', { name: '放弃修改并刷新' }).click()
   await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
   await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeHidden()
-  nodeSaveMode = 'ok'
 
-  // Enrollment timeout pauses direct retry without fake resync guidance until consciously unlocked.
-  const enrollButton = page.getByRole('button', { name: '生成一次性注册令牌' })
-  await enrollButton.click()
-  await expect(enrollButton).toBeDisabled()
-  await expect(page.getByRole('alert')).toContainText('已暂停直接重试')
-  await expect(page.getByRole('alert')).not.toContainText('请先重新同步')
-  await page.getByRole('button', { name: '已知悉，允许重新生成' }).click()
-  await expect(enrollButton).toBeEnabled()
-  enrollMode = 'ok'
-  await enrollButton.click()
-  await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-enroll-token')
-
-  // Unverifiable rotate 502 keeps lock across close/reopen and across ordinary state refresh until explicitly unlocked.
-  await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
-  const rotateDialog = page.getByRole('dialog', { name: '轮换 Agent 凭据' })
-  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
-  await expect(rotateDialog.getByRole('alert')).toContainText('Synthetic upstream 502')
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
-  await rotateDialog.getByRole('button', { name: '取消' }).click()
-  await expect(rotateDialog).toBeHidden()
-  await expect(page.getByRole('alert')).toContainText('轮换 Agent 凭据结果未确认')
-
-  await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
-  await rotateDialog.getByRole('button', { name: '刷新管理状态' }).click()
-  await expect(rotateDialog).toBeVisible()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
-  await expect(rotateDialog.getByRole('alert')).toContainText('无法证明节点「Guard Node A」的凭据轮换是否已生效')
-  await rotateDialog.getByRole('button', { name: '我已核对状态，解除锁定' }).click()
-  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeEnabled()
-  rotateMode = 'ok'
-  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
-  await expect(rotateDialog).toBeHidden()
-  await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-rotated-token')
-
-  // Verifiable delete timeout persists across reopen and only clears as completed when fresh GET confirms removal.
-  await page.getByRole('button', { name: '删除节点' }).click()
-  const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
-  await deleteDialog.getByRole('button', { name: '确认执行' }).click()
-  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
-  await deleteDialog.getByRole('button', { name: '取消' }).click()
-  await page.getByRole('button', { name: '删除节点' }).click()
-  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
-  nodes = nodes.filter(item => item.id !== 'guard-node-a')
-  await deleteDialog.getByRole('button', { name: '重新同步' }).click()
-  await expect(deleteDialog).toBeHidden()
-  await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Guard Node A」已删除' })).toBeVisible()
-
-  // Dirty node -> confirm leave to site settings -> top refresh must only open a single site dialog (no ghost node callback).
-  await expect(remarkInput).toHaveValue('Original Remark B')
+  // Dirty node -> confirm leave to site -> top refresh must only open a single site dialog (no ghost node callback).
   await remarkInput.fill('Dirty Before Leaving Nodes')
   await siteLink.click()
   await expect(confirmation).toHaveCount(1)
   await confirmation.getByRole('button', { name: '放弃修改并离开' }).click()
   await expect(page).toHaveURL('/admin?section=site')
 
-  const siteName = page.getByLabel('站点名称')
   await siteName.fill('Unsaved Site Name')
   await topRefresh.click()
   await expect(confirmation).toHaveCount(1)
@@ -701,7 +630,127 @@ test('node and site drafts guard switch/refresh/history, survive local traffic c
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 
-test('external traffic removal keeps failures inside the dialog, persists uncertain locks across reopen, and avoids double leave prompts', async ({ page }) => {
+test('high-risk node uncertain locks persist across section remounts and distinguish verifiable vs unverifiable outcomes', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const initialState = await (await page.request.get('/api/admin/state')).json()
+  const baseNode = initialState.nodes[0]
+  let nodes = [
+    {
+      ...baseNode,
+      id: 'lock-node-a',
+      name: 'Lock Node A',
+      disabled: false,
+    },
+    {
+      ...baseNode,
+      id: 'lock-node-b',
+      name: 'Lock Node B',
+      disabled: false,
+    },
+  ]
+  let enrollMode: 'timeout' | 'ok' = 'timeout'
+  let rotateMode: '502' | 'ok' = '502'
+
+  await page.route('**/api/admin/state', route => route.fulfill({
+    json: {
+      ...initialState,
+      nodes,
+    },
+  }))
+  await page.route('**/api/admin/enrollment', async (route) => {
+    if (enrollMode === 'timeout') {
+      await route.abort('timedout')
+      return
+    }
+    await route.fulfill({
+      json: { token: 'synthetic-enroll-token' },
+    })
+  })
+  await page.route('**/api/admin/nodes/*/rotate', async (route) => {
+    if (rotateMode === '502') {
+      await route.fulfill({
+        status: 502,
+        json: { error: 'Synthetic upstream 502' },
+      })
+      return
+    }
+    await route.fulfill({
+      json: { agent_token: 'synthetic-rotated-token' },
+    })
+  })
+  await page.route('**/api/admin/nodes/*/delete', route => route.abort('timedout'))
+
+  await page.goto('/admin?section=nodes')
+  const navigation = page.getByRole('navigation', { name: '管理页面' })
+  const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
+  const nodesLink = navigation.getByRole('link', { name: '节点', exact: true })
+
+  // Enrollment timeout persists across section remounts and avoids fake resync guidance.
+  const enrollButton = page.getByRole('button', { name: '生成一次性注册令牌' })
+  await enrollButton.click()
+  await expect(enrollButton).toBeDisabled()
+  await expect(page.getByRole('alert')).toContainText('已暂停直接重试')
+  await expect(page.getByRole('alert')).not.toContainText('请先重新同步')
+
+  await siteLink.click()
+  await expect(page).toHaveURL('/admin?section=site')
+  await nodesLink.click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await expect(enrollButton).toBeDisabled()
+  await expect(page.getByRole('alert')).toContainText('已暂停直接重试')
+  await page.getByRole('button', { name: '已知悉，允许重新生成' }).click()
+  await expect(enrollButton).toBeEnabled()
+  enrollMode = 'ok'
+  await enrollButton.click()
+  await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-enroll-token')
+
+  // Unverifiable rotate 502 persists across close/reopen, section remounts, and ordinary state refreshes.
+  await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
+  const rotateDialog = page.getByRole('dialog', { name: '轮换 Agent 凭据' })
+  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
+  await expect(rotateDialog.getByRole('alert')).toContainText('Synthetic upstream 502')
+  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await rotateDialog.getByRole('button', { name: '取消' }).click()
+
+  await siteLink.click()
+  await expect(page).toHaveURL('/admin?section=site')
+  await nodesLink.click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await expect(page.getByRole('alert')).toContainText('轮换 Agent 凭据结果未确认')
+
+  await page.getByRole('button', { name: '轮换 Agent 凭据' }).click()
+  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await rotateDialog.getByRole('button', { name: '刷新管理状态' }).click()
+  await expect(rotateDialog).toBeVisible()
+  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await expect(rotateDialog.getByRole('alert')).toContainText('无法证明节点「Lock Node A」的凭据轮换是否已生效')
+  await rotateDialog.getByRole('button', { name: '我已核对状态，解除锁定' }).click()
+  await expect(rotateDialog.getByRole('button', { name: '确认执行' })).toBeEnabled()
+  rotateMode = 'ok'
+  await rotateDialog.getByRole('button', { name: '确认执行' }).click()
+  await expect(rotateDialog).toBeHidden()
+  await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-rotated-token')
+
+  // Verifiable delete timeout persists across section remounts and clears once fresh GET observes deletion.
+  await page.getByRole('button', { name: '删除节点' }).click()
+  const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
+  await deleteDialog.getByRole('button', { name: '确认执行' }).click()
+  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  await deleteDialog.getByRole('button', { name: '取消' }).click()
+
+  await siteLink.click()
+  await nodesLink.click()
+  await page.getByRole('button', { name: '删除节点' }).click()
+  await expect(deleteDialog.getByRole('button', { name: '确认执行' })).toBeDisabled()
+  nodes = nodes.filter(item => item.id !== 'lock-node-a')
+  await deleteDialog.getByRole('button', { name: '重新同步' }).click()
+  await expect(deleteDialog).toBeHidden()
+  await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Lock Node A」已删除' })).toBeVisible()
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})
+
+test('external traffic removal persists uncertain locks across remounts and resync preserves edits made after timeout', async ({ page }) => {
   await login(page, '/admin')
   await waitForNode(page.request)
   const state = await (await page.request.get('/api/admin/state')).json()
@@ -717,7 +766,7 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
     config: {
       name: 'Provider A',
       enabled: false,
-      auth_mode: 'none',
+      auth_mode: 'bearer',
       traffic_url: 'https://example.invalid/usage',
       login_url: '',
       refresh_url: '',
@@ -742,6 +791,7 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
   let currentSources: ExternalTrafficSource[] = [source]
   let failTrafficGet = false
   let removeMode: 'fail-500' | 'timeout' | '502' = 'fail-500'
+
   await page.route('**/api/admin/state', route => route.fulfill({
     json: { ...state, nodes },
   }))
@@ -756,6 +806,21 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
           credential_key_ready: true,
         },
       }))
+  await page.route('**/api/admin/traffic-sources/*', async (route) => {
+    const body = route.request().postDataJSON()
+    // Simulate upstream applying the write before a gateway 502 drops the response.
+    currentSources = [
+      {
+        ...source,
+        config: body.config,
+        has_credential: true,
+      },
+    ]
+    await route.fulfill({
+      status: 502,
+      json: { error: 'Synthetic save 502' },
+    })
+  })
   await page.route('**/api/admin/traffic-sources/*/delete', async (route) => {
     if (removeMode === 'timeout') {
       await route.abort('timedout')
@@ -775,17 +840,39 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
   })
 
   await page.goto('/admin?section=traffic')
-  await expect(page.getByLabel('来源名称（必填）')).toHaveValue('Provider A')
+  const navigation = page.getByRole('navigation', { name: '管理页面' })
+  const nodesLink = navigation.getByRole('link', { name: '节点', exact: true })
+  const trafficLink = navigation.getByRole('link', { name: '外部流量', exact: true })
+  const nameInput = page.getByLabel('来源名称（必填）')
+  const tokenInput = page.getByLabel('Bearer Token（留空保留已存凭据）')
+  await expect(nameInput).toHaveValue('Provider A')
 
   // Dirty external traffic route leave must trigger only a single discard dialog.
-  await page.getByLabel('来源名称（必填）').fill('Dirty Provider A')
-  await page.getByRole('navigation', { name: '管理页面' }).getByRole('link', { name: '节点', exact: true }).click()
+  await nameInput.fill('Dirty Provider A')
+  await nodesLink.click()
   const leaveDialogs = page.getByRole('dialog', { name: '放弃未保存修改？' })
   await expect(leaveDialogs).toHaveCount(1)
   await leaveDialogs.getByRole('button', { name: '取消，继续编辑' }).click()
   await expect(leaveDialogs).toHaveCount(0)
 
-  // Removal confirmation explicitly names target node, keeps 500 error in dialog, and clears stale error on reopen.
+  // Save 502 -> user edits new name + new token -> resync confirms prior save WITHOUT clearing newer inputs or token.
+  await tokenInput.fill('initial-synthetic-token')
+  await page.getByRole('button', { name: '保存外部流量源' }).click()
+  await expect(page.getByRole('alert')).toContainText('Synthetic save 502')
+  await nameInput.fill('Edited After Save 502')
+  await tokenInput.fill('newer-synthetic-token')
+  await page.getByRole('button', { name: '重新同步', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '您之后的新修改与凭据输入已保留' })).toBeVisible()
+  await expect(nameInput).toHaveValue('Edited After Save 502')
+  await expect(tokenInput).toHaveValue('newer-synthetic-token')
+
+  // Discard edits to return to clean baseline before verifying removal dialog and cross-section remount lock.
+  await nodesLink.click()
+  await leaveDialogs.getByRole('button', { name: '放弃修改并离开' }).click()
+  await trafficLink.click()
+  await expect(nameInput).toHaveValue('Dirty Provider A')
+
+  // Removal confirmation names target node, keeps 500 error in dialog, and clears stale 500 error on reopen.
   await page.getByRole('button', { name: '移除流量源' }).click()
   const removeDialog = page.getByRole('dialog', { name: '移除外部流量源？' })
   await expect(removeDialog).toContainText('Remove Node A')
@@ -798,14 +885,16 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
   await page.getByRole('button', { name: '移除流量源' }).click()
   await expect(removeDialog.getByRole('alert')).toHaveCount(0)
 
-  // Uncertain timeout disables blind retry, persists across close/reopen, preserves alert on failed resync, and verifies server presence.
+  // Timeout lock persists across close/reopen and across section remounts; failed resync preserves alert.
   removeMode = 'timeout'
   await removeDialog.getByRole('button', { name: '确认移除' }).click()
-  await expect(removeDialog).toBeVisible()
-  await expect(removeDialog.getByRole('alert')).toContainText('勿直接重复提交')
   await expect(removeDialog.getByRole('button', { name: '确认移除' })).toBeDisabled()
   await removeDialog.getByRole('button', { name: '取消' }).click()
-  await expect(removeDialog).toBeHidden()
+
+  await nodesLink.click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await trafficLink.click()
+  await expect(page).toHaveURL('/admin?section=traffic')
   await expect(page.getByRole('alert')).toContainText('移除节点「Remove Node A」外部流量源结果未确认')
 
   await page.getByRole('button', { name: '移除流量源' }).click()
@@ -822,13 +911,17 @@ test('external traffic removal keeps failures inside the dialog, persists uncert
   await expect(removeDialog.getByRole('status')).toContainText('外部流量源仍存在')
   await expect(removeDialog.getByRole('button', { name: '确认移除' })).toBeEnabled()
 
-  // 502 uncertain removal clears and closes only when fresh GET observes the source is gone.
+  // Remove 502 -> close dialog -> edit new draft + token -> server removes old source -> resync verifies removal WITHOUT wiping newer draft/token.
   removeMode = '502'
   await removeDialog.getByRole('button', { name: '确认移除' }).click()
   await expect(removeDialog.getByRole('alert')).toContainText('Synthetic remove 502')
-  await expect(removeDialog.getByRole('button', { name: '确认移除' })).toBeDisabled()
+  await removeDialog.getByRole('button', { name: '取消' }).click()
+  await nameInput.fill('New Draft After Remove 502')
+  await tokenInput.fill('token-after-remove-502')
   currentSources = []
-  await removeDialog.getByRole('button', { name: '重新同步' }).click()
-  await expect(removeDialog).toBeHidden()
-  await expect(page.getByRole('status').filter({ hasText: '已核实：已移除节点「Remove Node A」的外部流量源' })).toBeVisible()
+  await page.getByRole('button', { name: '重新同步', exact: true }).click()
+  await expect(page.getByRole('status').filter({ hasText: '已核实：已移除节点「Remove Node A」的外部流量源；当前未保存的草稿与凭据输入已保留。' })).toBeVisible()
+  await expect(nameInput).toHaveValue('New Draft After Remove 502')
+  await expect(tokenInput).toHaveValue('token-after-remove-502')
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
