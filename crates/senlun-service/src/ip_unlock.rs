@@ -13,7 +13,8 @@ use axum::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use senlun_protocol::{
-    IP_UNLOCK_SCHEMA_VERSION, IpUnlockClaim, IpUnlockOutcome, IpUnlockTask, UnlockServiceStatus,
+    IP_UNLOCK_LEASE_MS, IP_UNLOCK_SCHEMA_VERSION, IpUnlockClaim, IpUnlockOutcome, IpUnlockTask,
+    UnlockServiceStatus,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -485,7 +486,7 @@ impl Storage {
                         id: r.get(0)?,
                         family: r.get(1)?,
                         address: r.get(2)?,
-                        expires_at_unix_ms: now.saturating_add(120_000),
+                        expires_at_unix_ms: now.saturating_add(IP_UNLOCK_LEASE_MS),
                     })
                 },
             )
@@ -780,6 +781,7 @@ mod tests {
             .unwrap();
         assert_eq!(task.family, 4);
         assert_eq!(task.address, "1.1.1.1");
+        assert_eq!(task.expires_at_unix_ms, now + 1000 + IP_UNLOCK_LEASE_MS);
 
         // Reject private IPs and incomplete service sets before persistence.
         let private_report = sample_report("127.0.0.1", now + 2000);
@@ -788,12 +790,14 @@ mod tests {
         short.services.pop();
         assert!(validate_report(&short, now + 2000).is_err());
 
+        // New Agent derives checked_at from expires_at_unix_ms - TTL + monotonic elapsed.
+        let derived_checked_at = (task.expires_at_unix_ms - IP_UNLOCK_LEASE_MS) + 1000;
         storage
             .finish_unlock_check(
                 &agent_token,
                 IpUnlockOutcome {
                     id: task.id,
-                    report: Some(sample_report("1.1.1.1", now + 2000)),
+                    report: Some(sample_report("1.1.1.1", derived_checked_at)),
                     error: None,
                 },
                 now + 3000,

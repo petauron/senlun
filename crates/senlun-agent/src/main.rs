@@ -7,6 +7,7 @@ mod probes;
 mod region;
 mod return_routes;
 mod system_command;
+mod task_lease;
 
 use std::{
     collections::HashSet,
