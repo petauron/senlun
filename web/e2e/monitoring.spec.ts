@@ -636,3 +636,99 @@ test('probe auto-refresh pauses without blocking range changes or manual refresh
   await page.clock.runFor(11_000)
   await expect.poll(() => requests.length).toBe(6)
 })
+
+test('homepage search matches public_remark while keeping optional remark compatibility', async ({ page }) => {
+  await page.route('**/api/rpc2', async (route) => {
+    const body = route.request().postDataJSON() as { method?: string } | null
+    const response = await route.fetch()
+    if (body?.method !== 'common:getDashboard') {
+      await route.fulfill({ response })
+      return
+    }
+    const payload = await response.json() as {
+      result?: {
+        clients?: Record<string, Record<string, unknown>>
+        statuses?: Record<string, Record<string, unknown>>
+      }
+    }
+    const clients = payload.result?.clients ?? {}
+    const statuses = payload.result?.statuses ?? {}
+    const templateEntry = Object.entries(clients)[0]
+    if (templateEntry) {
+      const [templateId, templateClient] = templateEntry
+      const templateStatus = statuses[templateId]
+      templateClient.public_remark = ''
+      delete templateClient.remark
+
+      const publicOnlyId = '00000000-0000-4000-8000-000000000317'
+      const publicClient: Record<string, unknown> = {
+        ...templateClient,
+        uuid: publicOnlyId,
+        name: 'public-remark-node',
+        region: 'JP',
+        os: 'linux',
+        group: '',
+        tags: '',
+        public_remark: 'LineOne\nAlpha-Core Public Note',
+      }
+      delete publicClient.remark
+      clients[publicOnlyId] = publicClient
+
+      const legacyOnlyId = '00000000-0000-4000-8000-000000000318'
+      clients[legacyOnlyId] = {
+        ...templateClient,
+        uuid: legacyOnlyId,
+        name: 'legacy-remark-node',
+        region: 'JP',
+        os: 'linux',
+        group: '',
+        tags: '',
+        public_remark: '',
+        remark: 'Beta-Legacy Note',
+      }
+
+      if (templateStatus) {
+        statuses[publicOnlyId] = {
+          ...templateStatus,
+          client: publicOnlyId,
+        }
+        statuses[legacyOnlyId] = {
+          ...templateStatus,
+          client: legacyOnlyId,
+        }
+      }
+    }
+    await route.fulfill({ response, json: payload })
+  })
+
+  await login(page)
+  const baseNode = page.getByText('e2e-node', { exact: true })
+  const publicNode = page.getByText('public-remark-node', { exact: true })
+  const legacyNode = page.getByText('legacy-remark-node', { exact: true })
+  await expect(baseNode).toBeVisible({ timeout: 20_000 })
+  await expect(publicNode).toBeVisible()
+  await expect(legacyNode).toBeVisible()
+
+  const search = page.getByRole('textbox', { name: '搜索节点' })
+  await search.fill('alpha-core')
+  await expect(publicNode).toBeVisible()
+  await expect(legacyNode).toBeHidden()
+  await expect(baseNode).toBeHidden()
+
+  await search.fill('LINEONE')
+  await expect(publicNode).toBeVisible()
+  await expect(legacyNode).toBeHidden()
+
+  await search.fill('beta-legacy')
+  await expect(legacyNode).toBeVisible()
+  await expect(publicNode).toBeHidden()
+  await expect(baseNode).toBeHidden()
+
+  await search.fill('   ')
+  await expect(baseNode).toBeVisible()
+  await expect(publicNode).toBeVisible()
+  await expect(legacyNode).toBeVisible()
+
+  await search.fill('unmatched-remark-query')
+  await expect(page.getByText('暂无节点')).toBeVisible()
+})
