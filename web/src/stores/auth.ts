@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
+import { clearAdminUncertainLocks } from '@/utils/adminUncertain'
 import { ApiError, getSharedApi, setCsrfToken } from '@/utils/api'
 import { invalidateSessionRequests } from '@/utils/session'
 import { useAppStore } from './app'
@@ -68,6 +69,7 @@ export const useAuthStore = defineStore('auth', () => {
     refreshSequence += 1
     pending = null
     invalidateSessionRequests()
+    clearAdminUncertainLocks()
     status.value = null
     setCsrfToken('')
     useAppStore().updateLoginState(false)
@@ -85,6 +87,7 @@ export const useAuthStore = defineStore('auth', () => {
     pending = null
     accept(next)
     invalidateSessionRequests()
+    clearAdminUncertainLocks()
     useNodesStore().clearNodes()
     epoch.value += 1
   }

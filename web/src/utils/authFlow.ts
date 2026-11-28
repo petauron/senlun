@@ -1,5 +1,30 @@
 import type { AuthStatus } from '@/stores/auth'
 
+export interface AdminDepartureContext {
+  loggedIn: boolean
+  stayingInSameContext: boolean
+  hasUnsavedChanges: boolean
+  busy: boolean
+}
+
+export type AdminDepartureDecision = 'allow' | 'block' | 'confirm'
+
+export function decideAdminDeparture(context: AdminDepartureContext): AdminDepartureDecision {
+  if (!context.loggedIn)
+    return 'allow'
+  if (context.stayingInSameContext)
+    return 'allow'
+  if (context.busy)
+    return 'block'
+  if (!context.hasUnsavedChanges)
+    return 'allow'
+  return 'confirm'
+}
+
+export function shouldWarnBeforeUnload(loggedIn: boolean, hasUnsavedChanges: boolean): boolean {
+  return loggedIn && hasUnsavedChanges
+}
+
 export interface TrafficDepartureContext {
   loggedIn: boolean
   stayingOnTrafficSection: boolean
@@ -7,16 +32,15 @@ export interface TrafficDepartureContext {
   busy: boolean
 }
 
-export type TrafficDepartureDecision = 'allow' | 'block' | 'confirm'
+export type TrafficDepartureDecision = AdminDepartureDecision
 
 export function decideTrafficDeparture(context: TrafficDepartureContext): TrafficDepartureDecision {
-  if (!context.loggedIn)
-    return 'allow'
-  if (context.stayingOnTrafficSection || !context.hasUnsavedChanges)
-    return 'allow'
-  if (context.busy)
-    return 'block'
-  return 'confirm'
+  return decideAdminDeparture({
+    loggedIn: context.loggedIn,
+    stayingInSameContext: context.stayingOnTrafficSection,
+    hasUnsavedChanges: context.hasUnsavedChanges,
+    busy: context.busy,
+  })
 }
 
 export function unmountLeaveResult(loggedIn: boolean): boolean {
