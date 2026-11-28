@@ -98,6 +98,8 @@ const tooltipStyle = computed<TooltipStyle>(() => {
     top: `${tooltipPosition.value.top}px`,
     left: `${tooltipPosition.value.left}px`,
   }
+  if (!isRenderedOpen.value)
+    style.display = 'none'
   if (props.width != null) {
     style.width = typeof props.width === 'number'
       ? `${props.width}px`
@@ -345,7 +347,6 @@ onBeforeUnmount(() => {
     <Teleport to="body">
       <span
         v-if="hasTooltip && (persistDescription || isVisible)"
-        v-show="isRenderedOpen"
         :id="tooltipId"
         ref="tooltipRef"
         role="tooltip"
