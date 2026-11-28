@@ -151,13 +151,13 @@ fn parse_stored_source(
 ) -> (SourceConfig, Option<TrafficSnapshot>, String, bool, bool) {
     let (config, mut status, config_corrupt) =
         match serde_json::from_str::<SourceConfig>(raw_config) {
-        Ok(parsed) => (parsed, status, false),
-        Err(_) => (
-            fallback_source_config(),
-            "invalid_configuration".to_owned(),
-            true,
-        ),
-    };
+            Ok(parsed) => (parsed, status, false),
+            Err(_) => (
+                fallback_source_config(),
+                "invalid_configuration".to_owned(),
+                true,
+            ),
+        };
     let (snapshot, snapshot_corrupt) = match raw_snapshot {
         Some(raw) => match serde_json::from_str::<TrafficSnapshot>(raw) {
             Ok(parsed) => (Some(parsed), false),
@@ -166,7 +166,7 @@ fn parse_stored_source(
         None => (None, false),
     };
     if !config_corrupt && snapshot_corrupt && matches!(status.as_str(), "ok" | "pending") {
-        status = "sync_failed".to_owned();
+        status = "invalid_data".to_owned();
     }
     (config, snapshot, status, config_corrupt, snapshot_corrupt)
 }
@@ -1382,7 +1382,7 @@ mod tests {
         assert!(clients[&bad_snapshot]["external_traffic"]["snapshot"].is_null());
         assert_eq!(
             clients[&bad_snapshot]["external_traffic"]["status"],
-            "sync_failed"
+            "invalid_data"
         );
 
         let (total, native) = state.storage.native_nodes(0, 10, 90).unwrap();
