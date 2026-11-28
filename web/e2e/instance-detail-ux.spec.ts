@@ -7,6 +7,7 @@ const MISSING_V6_NODE_ID = '00000000-0000-4000-8000-000000000334'
 const CHANGED_V6_NODE_ID = '00000000-0000-4000-8000-000000000335'
 const TOUCH_SCOPE_NODE_ID = '00000000-0000-4000-8000-000000000336'
 const SWITCH_AUDIT_NODE_ID = '00000000-0000-4000-8000-000000000337'
+const SLOW_POLL_NODE_ID = '00000000-0000-4000-8000-000000000339'
 
 async function activateControl(locator: Locator, hasTouch: boolean) {
   if (hasTouch)
@@ -977,4 +978,166 @@ test('detail switches, hover states, probe highlight, and tooltip cleanup work a
   // Network quality page keeps default ProbeHistory behavior (no detailInteractions leak).
   await page.goto('/network-quality')
   await expect(page.getByTestId('probe-tab-pill')).toHaveCount(0)
+})
+
+test('instance detail realtime load poll does not cancel slow in-flight request across ticks and cancels on range switch', async ({ page, hasTouch }) => {
+  const checkedAt = Date.UTC(2026, 4, 10, 12, 0, 0)
+  let realtimeRequests = 0
+  let historyRequests = 0
+  const releaseRealtime: Array<() => void> = []
+
+  await page.route('**/api/rpc2', async (route) => {
+    const body = route.request().postDataJSON() as {
+      id?: number
+      method?: string
+      params?: { uuid?: string, type?: string }
+    } | null
+    if (body?.method === 'common:getNodeRecentStatus' && body.params?.uuid === SLOW_POLL_NODE_ID) {
+      realtimeRequests += 1
+      const seq = realtimeRequests
+      if (seq === 2) {
+        await route.fulfill({
+          json: {
+            jsonrpc: '2.0',
+            id: body.id,
+            error: { code: -32000, message: 'synthetic poll timeout' },
+          },
+        })
+        return
+      }
+      await new Promise<void>((resolve) => {
+        releaseRealtime.push(resolve)
+      })
+      const cpu = seq === 1
+        ? 73.4
+        : 41.2
+      try {
+        await route.fulfill({
+          json: {
+            jsonrpc: '2.0',
+            id: body.id,
+            result: {
+              count: 2,
+              records: [
+                makeStatusRecord(SLOW_POLL_NODE_ID, checkedAt - 60_000, cpu - 2),
+                makeStatusRecord(SLOW_POLL_NODE_ID, checkedAt, cpu),
+              ],
+              coverage: {
+                requested_start_unix_ms: checkedAt - 3_600_000,
+                requested_end_unix_ms: checkedAt,
+                actual_start_unix_ms: checkedAt - 60_000,
+                actual_end_unix_ms: checkedAt,
+                source_points: 2,
+                returned_points: 2,
+                bucket_ms: 0,
+                downsampled: false,
+              },
+            },
+          },
+        })
+      }
+      catch { /* The browser may already have aborted the superseded request. */ }
+      return
+    }
+    if (body?.method === 'common:getRecords' && body.params?.type === 'load' && body.params?.uuid === SLOW_POLL_NODE_ID) {
+      historyRequests += 1
+      await route.fulfill({
+        json: {
+          jsonrpc: '2.0',
+          id: body.id,
+          result: {
+            count: 2,
+            records: [
+              makeStatusRecord(SLOW_POLL_NODE_ID, checkedAt - 3_600_000, 65.1),
+              makeStatusRecord(SLOW_POLL_NODE_ID, checkedAt - 1_800_000, 67.8),
+            ],
+            coverage: {
+              requested_start_unix_ms: checkedAt - 4 * 3_600_000,
+              requested_end_unix_ms: checkedAt,
+              actual_start_unix_ms: checkedAt - 3_600_000,
+              actual_end_unix_ms: checkedAt - 1_800_000,
+              source_points: 2,
+              returned_points: 2,
+              bucket_ms: 60_000,
+              downsampled: false,
+            },
+          },
+        },
+      })
+      return
+    }
+    const response = await route.fetch()
+    if (body?.method !== 'common:getDashboard') {
+      await route.fulfill({ response })
+      return
+    }
+    const payload = await response.json() as {
+      result?: {
+        clients?: Record<string, Record<string, unknown>>
+        statuses?: Record<string, Record<string, unknown>>
+      }
+    }
+    const clients = payload.result?.clients ?? {}
+    const statuses = payload.result?.statuses ?? {}
+    const templateEntry = Object.entries(clients)[0]
+    if (templateEntry) {
+      const [templateId, templateClient] = templateEntry
+      const templateStatus = statuses[templateId]
+      clients[SLOW_POLL_NODE_ID] = {
+        ...templateClient,
+        uuid: SLOW_POLL_NODE_ID,
+        name: 'slow-poll-node',
+        region: 'JP',
+        ipv4: '198.51.100.39',
+      }
+      if (templateStatus) {
+        statuses[SLOW_POLL_NODE_ID] = {
+          ...templateStatus,
+          client: SLOW_POLL_NODE_ID,
+        }
+      }
+    }
+    await route.fulfill({ response, json: payload })
+  })
+
+  try {
+    await login(page)
+    const nodeLink = page.getByRole('link', { name: '查看 slow-poll-node 节点详情' })
+    await expect(nodeLink).toBeVisible({ timeout: 20_000 })
+    await activateControl(nodeLink, hasTouch)
+    await expect(page).toHaveURL(new RegExp(`/instance/${SLOW_POLL_NODE_ID}$`))
+
+    // Wait for the initial realtime request, then cross at least one 3s interval tick.
+    await expect.poll(() => realtimeRequests, { timeout: 10_000 }).toBe(1)
+    await page.waitForTimeout(3_600)
+    expect(realtimeRequests).toBe(1)
+
+    // Releasing the slow request renders the late-arriving realtime data.
+    releaseRealtime.shift()?.()
+    await expect(page.getByTestId('load-chart-mode')).toHaveText('自动刷新中')
+    await expect(page.getByTestId('load-chart-coverage')).not.toContainText('正在读取覆盖时段')
+    await expect(page.getByText('73.4', { exact: true })).toBeVisible()
+
+    // After a failed poll tick (#2), the next tick (#3) retries normally instead of stalling.
+    await expect.poll(() => realtimeRequests, { timeout: 10_000 }).toBe(2)
+    await expect(page.getByText('synthetic poll timeout', { exact: true })).toBeVisible()
+    await expect.poll(() => realtimeRequests, { timeout: 10_000 }).toBe(3)
+
+    // Switching to history cancels the in-flight realtime request and ignores any late response.
+    const loadRangeList = page.getByRole('tablist', { name: '资源负载时间范围' })
+    await activateControl(loadRangeList.getByRole('tab', { name: '4 小时', exact: true }), hasTouch)
+    await expect.poll(() => historyRequests).toBe(1)
+    await expect(page.getByTestId('load-chart-mode')).toHaveText('历史快照')
+    await expect(page.getByText('67.8', { exact: true })).toBeVisible()
+
+    releaseRealtime.shift()?.()
+    await page.waitForTimeout(300)
+    await expect(page.getByTestId('load-chart-mode')).toHaveText('历史快照')
+    await expect(page.getByText('67.8', { exact: true })).toBeVisible()
+    await expect(page.getByText('41.2', { exact: true })).toHaveCount(0)
+  }
+  finally {
+    while (releaseRealtime.length > 0)
+      releaseRealtime.shift()?.()
+  }
 })

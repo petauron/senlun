@@ -177,6 +177,7 @@ const nodeInfo = computed(() => nodesStore.nodesByUuid.get(props.uuid))
 // RPC 客户端
 const rpc = getSharedRpc()
 let activeRequest: AbortController | null = null
+let activeScopeKey: string | null = null
 let requestGeneration = 0
 const chartInstances = new Map<string, Pick<EChartsType, 'dispatchAction'>>()
 
@@ -223,12 +224,13 @@ function statusToRecordFormat(records: StatusRecord[]): RecordFormat[] {
   }))
 }
 
-async function fetchData() {
-  activeRequest?.abort()
+async function fetchData(polling = false) {
   const uuid = props.uuid
   if (!uuid) {
+    activeRequest?.abort()
     requestGeneration++
     activeRequest = null
+    activeScopeKey = null
     remoteData.value = []
     coverage.value = null
     loadedScopeKey.value = null
@@ -236,12 +238,17 @@ async function fetchData() {
     return
   }
 
-  const controller = new AbortController()
-  activeRequest = controller
-  const generation = ++requestGeneration
   const realtime = isRealtime.value
   const hours = selectedHours.value || 4
   const scopeKey = `${uuid}:${selectedView.value}`
+  if (polling && activeRequest && activeScopeKey === scopeKey)
+    return
+
+  activeRequest?.abort()
+  const controller = new AbortController()
+  activeRequest = controller
+  activeScopeKey = scopeKey
+  const generation = ++requestGeneration
   if (!realtime || isInitialLoad.value)
     loading.value = true
   error.value = null
@@ -273,6 +280,7 @@ async function fetchData() {
   finally {
     if (generation === requestGeneration) {
       activeRequest = null
+      activeScopeKey = null
       loading.value = false
       isInitialLoad.value = false
     }
@@ -936,7 +944,10 @@ const processChartOption = computed(() => ({
 
 // 使用 VueUse 的 useIntervalFn 自动管理定时器
 const { pause: pauseRealtimeUpdate, resume: resumeRealtimeUpdate } = useIntervalFn(
-  () => fetchData(),
+  () => {
+    if (isRealtime.value)
+      fetchData(true)
+  },
   dataUpdateInterval,
   { immediate: false },
 )
@@ -981,6 +992,7 @@ onBeforeUnmount(() => {
   requestGeneration++
   activeRequest?.abort()
   activeRequest = null
+  activeScopeKey = null
 })
 </script>
 
