@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RouteLocationNormalized } from 'vue-router'
 import type { ExternalTrafficConfig, ExternalTrafficSource, ManagedNode } from '@/utils/admin'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import { CardX } from '@/components/ui/card-x'
@@ -9,12 +9,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
+import { ADMIN_DRAFT_REGISTRY_KEY } from '@/composables/useAdminDraftGuard'
 import { useAuthStore } from '@/stores/auth'
 import { getSharedApi } from '@/utils/api'
-import { decideTrafficDeparture, unmountLeaveResult } from '@/utils/authFlow'
+import { decideTrafficDeparture, shouldWarnBeforeUnload, unmountLeaveResult } from '@/utils/authFlow'
 
 const props = defineProps<{ nodes: ManagedNode[] }>()
 const auth = useAuthStore()
+const draftRegistry = inject(ADMIN_DRAFT_REGISTRY_KEY, null)
 const selectedId = ref(props.nodes[0]?.id ?? '')
 const sources = ref<ExternalTrafficSource[]>([])
 const keyReady = ref(false)
@@ -29,6 +31,7 @@ const pendingLeave = ref(false)
 let resolveLeave: ((leave: boolean) => void) | null = null
 let discardFocusTarget: HTMLElement | null = null
 let formLoaded = false
+let beforeUnloadBound = false
 
 function emptyConfig(): ExternalTrafficConfig {
   return {
@@ -55,12 +58,39 @@ function emptyConfig(): ExternalTrafficConfig {
 const draft = ref<ExternalTrafficConfig>(emptyConfig())
 const savedDraft = ref<ExternalTrafficConfig>(emptyConfig())
 const current = computed(() => sources.value.find(source => source.node_id === selectedId.value))
+const currentNodeName = computed(() => props.nodes.find(node => node.id === selectedId.value)?.name ?? selectedId.value)
 const canReuseCredential = computed(() => current.value?.has_credential && current.value.config.auth_mode === draft.value.auth_mode)
 const hasUnsavedChanges = computed(() => Boolean(username.value || password.value || bearerToken.value)
   || (Object.keys(savedDraft.value) as (keyof ExternalTrafficConfig)[])
     .some(key => draft.value[key] !== savedDraft.value[key]))
 const pendingNodeName = computed(() => props.nodes.find(node => node.id === pendingNodeId.value)?.name)
-const { busy, error, success, run } = useAdminAction(load)
+
+const saveAction = useAdminAction(() => load(true))
+const removeAction = useAdminAction(() => load(true))
+const busy = computed(() => saveAction.busy.value || removeAction.busy.value)
+const pageAlert = computed(() => saveAction.error.value || (!confirmRemove.value ? removeAction.error.value : '') || loadError.value)
+const pageSuccess = computed(() => saveAction.success.value || removeAction.success.value)
+const pageNeedsResync = computed(() => saveAction.needsResync.value || (!confirmRemove.value && removeAction.needsResync.value))
+
+function handleBeforeUnload(event: BeforeUnloadEvent): void {
+  if (!shouldWarnBeforeUnload(auth.loggedIn, hasUnsavedChanges.value))
+    return
+  event.preventDefault()
+  event.returnValue = ''
+}
+
+function syncBeforeUnload(active: boolean): void {
+  if (typeof window === 'undefined')
+    return
+  if (active && !beforeUnloadBound) {
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    beforeUnloadBound = true
+  }
+  else if (!active && beforeUnloadBound) {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+    beforeUnloadBound = false
+  }
+}
 
 function selectSource(): void {
   savedDraft.value = current.value
@@ -75,8 +105,8 @@ function selectSource(): void {
 function switchNode(id: string): void {
   selectedId.value = id
   selectSource()
-  error.value = ''
-  success.value = ''
+  saveAction.clearFeedback()
+  removeAction.clearFeedback()
 }
 
 function requestNodeChange(id: string): void {
@@ -148,18 +178,35 @@ function confirmDeparture(to: RouteLocationNormalized): boolean | Promise<boolea
   })
 }
 
+watch(
+  () => shouldWarnBeforeUnload(auth.loggedIn, hasUnsavedChanges.value),
+  active => syncBeforeUnload(active),
+  { immediate: true },
+)
+
 watch(() => auth.loggedIn, (loggedIn) => {
   if (!loggedIn) {
+    syncBeforeUnload(false)
     pendingNodeId.value = null
     settleLeave(true)
   }
 })
 
+const unregisterDraft = draftRegistry?.register({
+  section: 'traffic',
+  isDirty: () => hasUnsavedChanges.value,
+  isBusy: () => busy.value,
+})
+
 onBeforeRouteUpdate(confirmDeparture)
 onBeforeRouteLeave(confirmDeparture)
-onBeforeUnmount(() => settleLeave(unmountLeaveResult(auth.loggedIn)))
+onBeforeUnmount(() => {
+  unregisterDraft?.()
+  syncBeforeUnload(false)
+  settleLeave(unmountLeaveResult(auth.loggedIn))
+})
 
-async function load(): Promise<void> {
+async function load(rethrow = false): Promise<void> {
   loading.value = true
   loadError.value = ''
   try {
@@ -175,6 +222,8 @@ async function load(): Promise<void> {
     loadError.value = cause instanceof Error
       ? cause.message
       : String(cause)
+    if (rethrow)
+      throw cause
   }
   finally { loading.value = false }
 }
@@ -185,29 +234,68 @@ async function save(): Promise<void> {
   if (!selectedId.value || loading.value)
     return
   const config = { ...draft.value }
-  await run(async () => {
+  await saveAction.run(async () => {
     await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(selectedId.value)}`, {
       config,
       username: username.value,
       password: password.value,
       bearer_token: bearerToken.value,
     })
-    username.value = ''
-    password.value = ''
-    bearerToken.value = ''
-    savedDraft.value = config
-  }, '已保存；启用后通常在一分钟内首次同步')
+  }, {
+    message: '已保存；启用后通常在一分钟内首次同步',
+    onCommitted: () => {
+      username.value = ''
+      password.value = ''
+      bearerToken.value = ''
+      savedDraft.value = config
+    },
+  })
+}
+
+function openRemove(): void {
+  removeAction.clearFeedback()
+  confirmRemove.value = true
+}
+
+function closeRemove(): void {
+  if (removeAction.busy.value)
+    return
+  confirmRemove.value = false
+  removeAction.clearFeedback()
 }
 
 async function remove(): Promise<void> {
-  if (!selectedId.value || loading.value)
+  if (!selectedId.value || loading.value || removeAction.uncertain.value)
     return
-  await run(async () => {
-    await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(selectedId.value)}/delete`, {})
-    sources.value = sources.value.filter(source => source.node_id !== selectedId.value)
-    selectSource()
+  const targetId = selectedId.value
+  await removeAction.run(async () => {
+    await getSharedApi().post(`admin/traffic-sources/${encodeURIComponent(targetId)}/delete`, {})
+  }, {
+    message: '已移除外部流量源',
+    riskyWrite: true,
+    onCommitted: () => {
+      sources.value = sources.value.filter(source => source.node_id !== targetId)
+      selectSource()
+      confirmRemove.value = false
+    },
+  })
+}
+
+async function resyncPage(): Promise<void> {
+  if (saveAction.needsResync.value) {
+    await saveAction.resync()
+    return
+  }
+  await removeAction.resync()
+}
+
+async function resyncRemove(): Promise<void> {
+  const ok = await removeAction.resync()
+  if (ok) {
+    if (!current.value)
+      selectSource()
     confirmRemove.value = false
-  }, '已移除外部流量源')
+  }
 }
 
 const statusText: Record<string, string> = {
@@ -226,11 +314,16 @@ const statusText: Record<string, string> = {
 
 <template>
   <div class="space-y-4">
-    <p v-if="loadError || error" role="alert" class="text-sm text-destructive">
-      {{ loadError || error }}
-    </p>
-    <p v-if="success" role="status" class="text-sm text-success">
-      {{ success }}
+    <div v-if="pageAlert || pageNeedsResync" class="flex flex-wrap items-center gap-2">
+      <p v-if="pageAlert" role="alert" class="text-sm text-destructive">
+        {{ pageAlert }}
+      </p>
+      <Button v-if="pageNeedsResync" type="button" variant="outline" size="sm" :disabled="busy || loading" @click="resyncPage">
+        重新同步
+      </Button>
+    </div>
+    <p v-if="pageSuccess" role="status" class="text-sm text-success">
+      {{ pageSuccess }}
     </p>
     <CardX title="外部流量源" content-class="space-y-4">
       <p class="text-sm text-muted-foreground">
@@ -239,7 +332,7 @@ const statusText: Record<string, string> = {
       <p v-if="!keyReady" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
         尚未配置 SENLUN_TRAFFIC_KEY_FILE。请在 Service 上提供权限为 0600 的 32 字节随机密钥文件后重启，才能保存登录凭据。
       </p>
-      <Button type="button" variant="outline" :disabled="loading || busy" @click="load">{{ loading ? '正在刷新…' : '刷新同步状态' }}</Button>
+      <Button type="button" variant="outline" :disabled="loading || busy" @click="load()">{{ loading ? '正在刷新…' : '刷新同步状态' }}</Button>
       <label class="grid gap-2 text-sm">关联节点
         <SelectControl id="traffic-source-node" aria-label="关联节点" :model-value="selectedId" :options="nodes.map(node => ({ value: node.id, label: node.name }))" :disabled="busy || loading" @update:model-value="requestNodeChange" />
       </label>
@@ -287,8 +380,8 @@ const statusText: Record<string, string> = {
           <label class="grid gap-2 text-sm">周期重置时间路径（可选）<Input v-model="draft.reset_pointer" /></label>
         </fieldset>
         <div class="flex flex-wrap gap-2">
-          <Button type="submit" class="min-h-11" :disabled="busy || loading || !keyReady">{{ busy ? '正在保存…' : '保存外部流量源' }}</Button>
-          <Button v-if="current" type="button" variant="outline" class="min-h-11 text-destructive" :disabled="busy || loading" @click="confirmRemove = true">移除流量源</Button>
+          <Button type="submit" class="min-h-11" :disabled="busy || loading || !keyReady">{{ saveAction.busy.value ? '正在保存…' : '保存外部流量源' }}</Button>
+          <Button v-if="current" type="button" variant="outline" class="min-h-11 text-destructive" :disabled="busy || loading" @click="openRemove">移除流量源</Button>
         </div>
       </form>
     </CardX>
@@ -313,10 +406,28 @@ const statusText: Record<string, string> = {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    <Dialog :open="confirmRemove" @update:open="value => { if (!value && !busy) confirmRemove = false }">
-      <DialogContent :show-close="!busy">
-        <DialogHeader><DialogTitle>移除外部流量源？</DialogTitle><DialogDescription>将删除此节点的外部流量配置、凭据及快照；Agent 本地流量不会改变。</DialogDescription></DialogHeader>
-        <DialogFooter><Button variant="outline" :disabled="busy" @click="confirmRemove = false">取消</Button><Button variant="destructive" :disabled="busy" @click="remove">确认移除</Button></DialogFooter>
+    <Dialog :open="confirmRemove" @update:open="value => { if (!value) closeRemove() }">
+      <DialogContent :show-close="!removeAction.busy.value" @escape-key-down="event => { if (removeAction.busy.value) event.preventDefault() }" @interact-outside="event => { if (removeAction.busy.value) event.preventDefault() }">
+        <DialogHeader>
+          <DialogTitle>移除外部流量源？</DialogTitle>
+          <DialogDescription>
+            将删除节点「{{ currentNodeName }}」的外部流量配置、凭据及快照；Agent 本地流量不会改变。
+          </DialogDescription>
+        </DialogHeader>
+        <p v-if="removeAction.error.value" role="alert" class="text-sm text-destructive">
+          {{ removeAction.error.value }}
+        </p>
+        <DialogFooter>
+          <Button variant="outline" :disabled="removeAction.busy.value" @click="closeRemove">
+            取消
+          </Button>
+          <Button v-if="removeAction.needsResync.value" variant="outline" :disabled="removeAction.busy.value || loading" @click="resyncRemove">
+            重新同步
+          </Button>
+          <Button variant="destructive" :disabled="removeAction.busy.value || removeAction.uncertain.value" @click="remove">
+            {{ removeAction.busy.value ? '正在移除…' : '确认移除' }}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   </div>

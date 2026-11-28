@@ -324,3 +324,319 @@ test('logout and 401 expiry leave dirty traffic drafts cleanly, and expired oaut
   await expect(page.getByRole('dialog', { name: '放弃未保存修改？' })).toBeHidden()
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
+
+test('node and site drafts guard switch/refresh/history, survive local traffic correction, and handle resync, timeout, and failed logout', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const initialState = await (await page.request.get('/api/admin/state')).json()
+  const baseNode = initialState.nodes[0]
+  const nodes = [
+    {
+      ...baseNode,
+      id: 'guard-node-a',
+      name: 'Guard Node A',
+      public_remark: 'Original Remark A',
+      disabled: false,
+    },
+    {
+      ...baseNode,
+      id: 'guard-node-b',
+      name: 'Guard Node B',
+      public_remark: 'Original Remark B',
+      disabled: false,
+    },
+  ]
+  let currentSettings = { ...initialState.settings }
+  let failStateRefresh = false
+  let nodeSaveMode: 'ok' | 'timeout' = 'ok'
+  let nodeSaveCount = 0
+  let logoutMode: 'ok' | 'fail-403' = 'fail-403'
+  let signedOut = false
+
+  await page.route('**/api/admin/state', async (route) => {
+    if (failStateRefresh) {
+      await route.fulfill({
+        status: 503,
+        json: { error: 'Synthetic state refresh failure' },
+      })
+      return
+    }
+    await route.fulfill({
+      json: {
+        ...initialState,
+        settings: currentSettings,
+        nodes,
+      },
+    })
+  })
+  await page.route('**/api/admin/nodes/*/traffic-correction', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        json: {
+          baseline: {
+            cycle_start_ms: Date.now() - 3_600_000,
+            traffic_reset_day: 1,
+            traffic_limit_type: 'sum',
+            used_up_bytes: '1073741824',
+            used_down_bytes: '2147483648',
+          },
+          sampled_at_ms: Date.now(),
+          traffic_limit_bytes: '0',
+        },
+      })
+      return
+    }
+    nodes[0] = {
+      ...nodes[0],
+      selected_traffic: {
+        source: 'local',
+        status: 'ready',
+        used_bytes: 5 * 1024 ** 3,
+        limit_bytes: null,
+        up_bytes: 2 * 1024 ** 3,
+        down_bytes: 3 * 1024 ** 3,
+        percentage: null,
+        last_success_unix_ms: Date.now(),
+        reset_at: null,
+      },
+    }
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/admin/nodes/guard-node-a', async (route) => {
+    nodeSaveCount++
+    if (nodeSaveMode === 'timeout') {
+      await route.abort('timedout')
+      return
+    }
+    const body = route.request().postDataJSON()
+    nodes[0] = {
+      ...nodes[0],
+      ...body,
+    }
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/admin/settings', async (route) => {
+    currentSettings = {
+      ...currentSettings,
+      ...route.request().postDataJSON(),
+    }
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/auth/logout', async (route) => {
+    if (logoutMode === 'fail-403') {
+      await route.fulfill({
+        status: 403,
+        json: { error: 'Origin mismatch' },
+      })
+      return
+    }
+    signedOut = true
+    await route.fulfill({
+      json: { ok: true },
+    })
+  })
+  await page.route('**/api/auth/status', async (route) => {
+    await route.fulfill({
+      json: {
+        initialized: true,
+        logged_in: !signedOut,
+        username: signedOut ? null : 'admin',
+        csrf_token: 'synthetic-csrf-token',
+        totp_enabled: false,
+        oauth_enabled: false,
+        oauth_totp_required: false,
+      },
+    })
+  })
+
+  await page.goto('/admin?section=nodes')
+  const nodeSelect = page.getByRole('combobox', { name: '选择节点' })
+  const remarkInput = page.getByLabel('公开备注')
+  const topRefresh = page.getByRole('button', { name: '刷新', exact: true })
+  const navigation = page.getByRole('navigation', { name: '管理页面' })
+  const siteLink = navigation.getByRole('link', { name: '站点设置', exact: true })
+  const nodesLink = navigation.getByRole('link', { name: '节点', exact: true })
+  const confirmation = page.getByRole('dialog', { name: '放弃未保存修改？' })
+
+  await expect(remarkInput).toHaveValue('Original Remark A')
+  await remarkInput.fill('Unsaved Remark Draft')
+  await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeVisible()
+
+  // Node switch and top refresh must guard unsaved drafts and restore focus on cancel.
+  await nodeSelect.click()
+  await page.getByRole('option', { name: /Guard Node B/ }).click()
+  await expect(confirmation).toContainText('Guard Node B')
+  await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(nodeSelect).toBeFocused()
+  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+
+  await topRefresh.click()
+  await expect(confirmation).toContainText('刷新管理数据')
+  await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(topRefresh).toBeFocused()
+  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+
+  await page.evaluate(() => history.back())
+  await expect(confirmation).toBeVisible()
+  await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+
+  // Performing local traffic correction refreshes server state without overwriting dirty node remarks.
+  await page.getByRole('button', { name: '校正本周期本地流量' }).click()
+  const correctionDialog = page.getByRole('dialog', { name: '校正本周期本地流量' })
+  await expect(correctionDialog.getByLabel('校正原因')).toBeVisible()
+  await correctionDialog.getByLabel('目标上传已用量').fill('2')
+  await correctionDialog.getByLabel('目标下载已用量').fill('3')
+  await correctionDialog.getByLabel('校正原因').fill('Synthetic correction')
+  await correctionDialog.getByRole('button', { name: '预览校正' }).click()
+  await correctionDialog.getByRole('button', { name: '确认校正本地流量' }).click()
+  await expect(correctionDialog).toBeHidden()
+  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+  await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeVisible()
+
+  // Confirmed write + refresh failure must clear dirty baseline and resync read-only without replaying POST.
+  failStateRefresh = true
+  await page.getByRole('button', { name: '保存节点' }).click()
+  await expect(page.getByRole('alert')).toContainText('重新同步')
+  await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeHidden()
+  expect(nodeSaveCount).toBe(1)
+  failStateRefresh = false
+  await page.getByRole('button', { name: '重新同步' }).first().click()
+  await expect(page.getByRole('status').filter({ hasText: '已重新同步最新状态' })).toBeVisible()
+  expect(nodeSaveCount).toBe(1)
+
+  // Timeout/disconnect write must keep user input and surface uncertain-write resync guidance.
+  await remarkInput.fill('Timed Out Remark')
+  nodeSaveMode = 'timeout'
+  await page.getByRole('button', { name: '保存节点' }).click()
+  await expect(page.getByRole('alert')).toContainText('无法确认写入是否已生效')
+  await expect(remarkInput).toHaveValue('Timed Out Remark')
+  await expect(page.getByRole('button', { name: '重新同步' }).first()).toBeVisible()
+
+  // Explicit discard-and-refresh resets dirty draft to server state.
+  await topRefresh.click()
+  await confirmation.getByRole('button', { name: '放弃修改并刷新' }).click()
+  await expect(remarkInput).toHaveValue('Unsaved Remark Draft')
+  await expect(page.getByRole('status').filter({ hasText: '有未保存修改' })).toBeHidden()
+
+  // Site settings draft guard + failed 403 logout keeps draft + successful logout leaves without prompt.
+  await siteLink.click()
+  await expect(page).toHaveURL('/admin?section=site')
+  const siteName = page.getByLabel('站点名称')
+  await siteName.fill('Unsaved Site Name')
+  await nodesLink.click()
+  await expect(confirmation).toContainText('离开站点设置栏目')
+  await confirmation.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(nodesLink).toBeFocused()
+  await expect(siteName).toHaveValue('Unsaved Site Name')
+
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await expect(page.getByRole('alert')).toContainText('Origin mismatch')
+  await expect(page).toHaveURL('/admin?section=site')
+  await expect(siteName).toHaveValue('Unsaved Site Name')
+
+  logoutMode = 'ok'
+  await page.getByRole('button', { name: '退出登录' }).click()
+  await expect(page).toHaveURL('/login')
+  await expect(confirmation).toBeHidden()
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0)
+})
+
+test('external traffic removal keeps failures inside the dialog, clears stale errors, and avoids double leave prompts', async ({ page }) => {
+  await login(page, '/admin')
+  await waitForNode(page.request)
+  const state = await (await page.request.get('/api/admin/state')).json()
+  const nodes = [
+    {
+      ...state.nodes[0],
+      id: 'rm-node-a',
+      name: 'Remove Node A',
+    },
+  ]
+  const source: ExternalTrafficSource = {
+    node_id: 'rm-node-a',
+    config: {
+      name: 'Provider A',
+      enabled: false,
+      auth_mode: 'none',
+      traffic_url: 'https://example.invalid/usage',
+      login_url: '',
+      refresh_url: '',
+      username_field: 'email',
+      password_field: 'password',
+      refresh_token_field: 'refresh_token',
+      access_pointer: '/data/access_token',
+      refresh_pointer: '/data/refresh_token',
+      up_pointer: '/up',
+      down_pointer: '/down',
+      used_pointer: '',
+      limit_pointer: '',
+      limit_unit: 'bytes',
+      reset_pointer: '',
+    },
+    has_credential: false,
+    snapshot: null,
+    last_attempt_unix_ms: 0,
+    last_success_unix_ms: 0,
+    status: 'pending',
+  }
+  let removeMode: 'fail-500' | 'timeout' = 'fail-500'
+  await page.route('**/api/admin/state', route => route.fulfill({
+    json: { ...state, nodes },
+  }))
+  await page.route('**/api/admin/traffic-sources', route => route.fulfill({
+    json: {
+      sources: [source],
+      credential_key_ready: true,
+    },
+  }))
+  await page.route('**/api/admin/traffic-sources/*/delete', async (route) => {
+    if (removeMode === 'timeout') {
+      await route.abort('timedout')
+      return
+    }
+    await route.fulfill({
+      status: 500,
+      json: { error: 'Synthetic remove failure' },
+    })
+  })
+
+  await page.goto('/admin?section=traffic')
+  await expect(page.getByLabel('来源名称（必填）')).toHaveValue('Provider A')
+
+  // Dirty external traffic route leave must trigger only a single discard dialog.
+  await page.getByLabel('来源名称（必填）').fill('Dirty Provider A')
+  await page.getByRole('navigation', { name: '管理页面' }).getByRole('link', { name: '节点', exact: true }).click()
+  const leaveDialogs = page.getByRole('dialog', { name: '放弃未保存修改？' })
+  await expect(leaveDialogs).toHaveCount(1)
+  await leaveDialogs.getByRole('button', { name: '取消，继续编辑' }).click()
+  await expect(leaveDialogs).toHaveCount(0)
+
+  // Removal confirmation explicitly names target node, keeps 500 error in dialog, and clears stale error on reopen.
+  await page.getByRole('button', { name: '移除流量源' }).click()
+  const removeDialog = page.getByRole('dialog', { name: '移除外部流量源？' })
+  await expect(removeDialog).toContainText('Remove Node A')
+  await removeDialog.getByRole('button', { name: '确认移除' }).click()
+  await expect(removeDialog).toBeVisible()
+  await expect(removeDialog.getByRole('alert')).toContainText('Synthetic remove failure')
+  await removeDialog.getByRole('button', { name: '取消' }).click()
+  await expect(removeDialog).toBeHidden()
+
+  await page.getByRole('button', { name: '移除流量源' }).click()
+  await expect(removeDialog.getByRole('alert')).toHaveCount(0)
+
+  // Uncertain timeout disables blind retry and offers read-only resync inside the dialog.
+  removeMode = 'timeout'
+  await removeDialog.getByRole('button', { name: '确认移除' }).click()
+  await expect(removeDialog).toBeVisible()
+  await expect(removeDialog.getByRole('alert')).toContainText('勿直接重复提交')
+  await expect(removeDialog.getByRole('button', { name: '确认移除' })).toBeDisabled()
+  await expect(removeDialog.getByRole('button', { name: '重新同步' })).toBeVisible()
+})

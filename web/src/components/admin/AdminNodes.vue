@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import type { ManagedNode, PeerProbeSettings } from '@/utils/admin'
+import type { RouteLocationNormalized } from 'vue-router'
+import type { ManagedNode } from '@/utils/admin'
+import type { NodeDraftForm, NodeDraftSnapshot } from '@/utils/adminDraft'
 import type { TagColor } from '@/utils/tagHelper'
-import { computed, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import AdminTrafficCorrection from '@/components/admin/AdminTrafficCorrection.vue'
 import NodeTagBadge from '@/components/NodeTagBadge.vue'
@@ -11,7 +13,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input'
 import SelectControl from '@/components/ui/SelectControl.vue'
 import { useAdminAction } from '@/composables/useAdminAction'
-import { nodeMetadata } from '@/utils/admin'
+import { ADMIN_DRAFT_REGISTRY_KEY, useAdminDraftGuard } from '@/composables/useAdminDraftGuard'
+import { useAuthStore } from '@/stores/auth'
+import { cloneNodeDraft, createNodeDraftSnapshot, isNodeDraftDirty, shouldSyncNodeDraftFromServer } from '@/utils/adminDraft'
 import { normalizePublicRemark, validatePublicRemark } from '@/utils/adminEditing'
 import { getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
@@ -20,16 +24,23 @@ import { parseTags } from '@/utils/tagHelper'
 const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }>()
 const route = useRoute()
 const router = useRouter()
+const auth = useAuthStore()
+const draftRegistry = inject(ADMIN_DRAFT_REGISTRY_KEY, null)
+
 const selected = computed(() => props.nodes.find(n => n.id === route.query.node) ?? props.nodes[0])
-const draft = ref<(ManagedNode & { peer_probe: PeerProbeSettings }) | null>(null)
+const draft = ref<NodeDraftForm | null>(null)
+const savedBaseline = ref<NodeDraftSnapshot | null>(null)
+const loadedNodeId = ref<string | null>(null)
 const expires = ref('')
-const quotaGiB = ref(0)
+const quotaGiB = ref<number | string>(0)
 const ttlHours = ref(24)
 const secret = ref('')
 const confirm = ref<'rotate' | 'revoke' | 'delete' | 'reset-traffic' | null>(null)
 const newTagText = ref('')
 const newTagColor = ref<TagColor>('blue')
 const tagError = ref('')
+let forceResetNextSync = false
+
 const tagPreview = computed(() => parseTags(draft.value?.tags))
 const tagColors: { value: TagColor, label: string }[] = [
   { value: 'gray', label: '灰色' },
@@ -42,7 +53,21 @@ const tagColors: { value: TagColor, label: string }[] = [
 const invalidTagPattern = /[;<>]/
 const trailingSemicolonsPattern = /;+$/
 const utcTime = (ms: number) => `${new Date(ms).toISOString().replace('T', ' ').slice(0, 19)} UTC`
-const { busy, error, success, run } = useAdminAction(props.refresh)
+
+const saveAction = useAdminAction(props.refresh)
+const dangerAction = useAdminAction(props.refresh)
+const busy = computed(() => saveAction.busy.value || dangerAction.busy.value)
+const hasUnsavedChanges = computed(() => isNodeDraftDirty({
+  draft: draft.value,
+  expires: expires.value,
+  quotaGiB: quotaGiB.value,
+  newTagText: newTagText.value,
+}, savedBaseline.value))
+
+const pageError = computed(() => saveAction.error.value || (confirm.value === null ? dangerAction.error.value : ''))
+const pageSuccess = computed(() => saveAction.success.value || dangerAction.success.value)
+const pageNeedsResync = computed(() => saveAction.needsResync.value || (confirm.value === null && dangerAction.needsResync.value))
+
 const actionLabels = {
   'rotate': '轮换 Agent 凭据',
   'revoke': '撤销 Agent 凭据',
@@ -56,24 +81,96 @@ const actionHints = {
   'reset-traffic': '将本周期流量计数归零，不会重置主机的网络接口计数。',
 }
 
-watch(selected, (node) => {
-  draft.value = node
-    ? {
-        ...nodeMetadata(node),
-        peer_probe: {
-          ...(node.peer_probe ?? { kind: 'tcp', family: 'auto', disabled: false }),
-        },
-      }
-    : null
+function loadDraftFromNode(node: ManagedNode | undefined): void {
+  if (!node) {
+    draft.value = null
+    savedBaseline.value = null
+    loadedNodeId.value = null
+    expires.value = ''
+    quotaGiB.value = 0
+    newTagText.value = ''
+    tagError.value = ''
+    return
+  }
+  const snapshot = createNodeDraftSnapshot(node)
+  draft.value = cloneNodeDraft(snapshot.draft)
+  savedBaseline.value = snapshot
+  loadedNodeId.value = node.id
+  expires.value = snapshot.expires
+  quotaGiB.value = snapshot.quotaGiB
   newTagText.value = ''
   tagError.value = ''
-  quotaGiB.value = (node?.traffic_limit_bytes ?? 0) / 1024 ** 3
-  if (node?.expired_at_unix_ms) {
-    const date = new Date(node.expired_at_unix_ms)
-    expires.value = new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
+watch(selected, (node) => {
+  const shouldSync = shouldSyncNodeDraftFromServer({
+    incomingNodeId: node?.id ?? null,
+    loadedNodeId: loadedNodeId.value,
+    hasUnsavedChanges: hasUnsavedChanges.value,
+    forceReset: forceResetNextSync,
+  })
+  if (!shouldSync) {
+    if (node) {
+      const serverSnapshot = createNodeDraftSnapshot(node)
+      if (!isNodeDraftDirty({
+        draft: draft.value,
+        expires: expires.value,
+        quotaGiB: quotaGiB.value,
+        newTagText: newTagText.value,
+      }, serverSnapshot)) {
+        savedBaseline.value = serverSnapshot
+      }
+    }
+    return
   }
-  else { expires.value = '' }
+  forceResetNextSync = false
+  loadDraftFromNode(node)
 }, { immediate: true })
+
+function isStayingOnSameNode(to: RouteLocationNormalized): boolean {
+  if (to.name !== 'admin')
+    return false
+  const targetSection = typeof to.query.section === 'string' && to.query.section
+    ? to.query.section
+    : 'nodes'
+  if (targetSection !== 'nodes')
+    return false
+  const targetNodeId = typeof to.query.node === 'string' && to.query.node
+    ? to.query.node
+    : props.nodes[0]?.id ?? ''
+  return targetNodeId === (selected.value?.id ?? '')
+}
+
+const draftGuard = useAdminDraftGuard({
+  isLoggedIn: () => auth.loggedIn,
+  isDirty: () => hasUnsavedChanges.value,
+  isBusy: () => busy.value,
+  isStayingInSameContext: isStayingOnSameNode,
+})
+
+const unregisterDraft = draftRegistry?.register({
+  section: 'nodes',
+  isDirty: () => hasUnsavedChanges.value,
+  isBusy: () => busy.value,
+  requestRefresh: triggerEl => draftGuard.requestRefresh(async () => {
+    forceResetNextSync = true
+    saveAction.clearFeedback()
+    dangerAction.clearFeedback()
+    try {
+      await props.refresh()
+    }
+    catch (cause) {
+      forceResetNextSync = false
+      saveAction.error.value = cause instanceof Error
+        ? cause.message
+        : String(cause)
+    }
+  }, triggerEl),
+})
+
+onBeforeUnmount(() => {
+  unregisterDraft?.()
+})
 
 function addTag(): void {
   if (!draft.value)
@@ -97,15 +194,32 @@ function addTag(): void {
   tagError.value = ''
 }
 
-function choose(id: string): void {
+function applyNodeSwitch(id: string): void {
   secret.value = ''
+  saveAction.clearFeedback()
+  dangerAction.clearFeedback()
+  const targetNode = props.nodes.find(item => item.id === id)
+  if (targetNode)
+    loadDraftFromNode(targetNode)
   void router.replace({
     query: { ...route.query, node: id },
   })
 }
 
+function choose(id: string): void {
+  if (id === selected.value?.id || busy.value)
+    return
+  const targetName = props.nodes.find(item => item.id === id)?.name ?? id
+  draftGuard.requestSwitch(
+    id,
+    targetName,
+    () => applyNodeSwitch(id),
+    document.getElementById('managed-node'),
+  )
+}
+
 function openConfirm(action: 'rotate' | 'revoke' | 'delete' | 'reset-traffic'): void {
-  error.value = ''
+  dangerAction.clearFeedback()
   confirm.value = action
 }
 
@@ -113,7 +227,7 @@ function closeConfirm(): void {
   if (busy.value)
     return
   confirm.value = null
-  error.value = ''
+  dangerAction.clearFeedback()
 }
 
 async function save(): Promise<void> {
@@ -121,38 +235,60 @@ async function save(): Promise<void> {
     return
   const remarkError = validatePublicRemark(draft.value.public_remark)
   if (remarkError) {
-    error.value = remarkError
-    success.value = ''
+    saveAction.error.value = remarkError
+    saveAction.success.value = ''
     return
   }
+  const normalizedRemark = normalizePublicRemark(draft.value.public_remark)
+  const numericQuota = Number(quotaGiB.value) || 0
   const node = {
     ...draft.value,
-    public_remark: normalizePublicRemark(draft.value.public_remark),
+    public_remark: normalizedRemark,
     expired_at_unix_ms: expires.value
       ? new Date(expires.value).getTime()
       : null,
-    traffic_limit_bytes: Math.round(quotaGiB.value * 1024 ** 3),
+    traffic_limit_bytes: Math.round(numericQuota * 1024 ** 3),
   }
-  await run(async () => {
+  const submittedExpires = expires.value
+  await saveAction.run(async () => {
     await getSharedApi().post(`admin/nodes/${encodeURIComponent(node.id)}`, node)
+  }, {
+    message: '已保存',
+    onCommitted: () => {
+      if (!draft.value)
+        return
+      draft.value.public_remark = normalizedRemark
+      quotaGiB.value = numericQuota
+      newTagText.value = ''
+      tagError.value = ''
+      savedBaseline.value = {
+        draft: cloneNodeDraft(draft.value),
+        expires: submittedExpires,
+        quotaGiB: numericQuota,
+      }
+    },
   })
 }
 
 async function enroll(): Promise<void> {
   secret.value = ''
-  await run(async () => {
+  await saveAction.run(async () => {
     const response = await getSharedApi().post<{ token: string }>('admin/enrollment', { ttl_seconds: ttlHours.value * 3600 })
     secret.value = response.token
-  }, '已生成注册令牌')
+  }, {
+    message: '已生成注册令牌',
+    reload: false,
+    riskyWrite: true,
+  })
 }
 
 async function execute(): Promise<void> {
-  if (!confirm.value || !selected.value)
+  if (!confirm.value || !selected.value || dangerAction.uncertain.value)
     return
   const action = confirm.value
   const id = selected.value.id
   secret.value = ''
-  await run(async () => {
+  await dangerAction.run(async () => {
     if (action === 'rotate') {
       const response = await getSharedApi().post<{ agent_token: string }>(`admin/nodes/${encodeURIComponent(id)}/rotate`)
       secret.value = response.agent_token
@@ -160,18 +296,42 @@ async function execute(): Promise<void> {
     else {
       await getSharedApi().post(`admin/nodes/${encodeURIComponent(id)}/${action}`)
     }
+  }, {
+    message: '操作已完成',
+    riskyWrite: true,
+    onCommitted: () => {
+      confirm.value = null
+    },
+  })
+}
+
+async function resyncPage(): Promise<void> {
+  if (saveAction.needsResync.value) {
+    await saveAction.resync()
+    return
+  }
+  await dangerAction.resync()
+}
+
+async function resyncDanger(): Promise<void> {
+  const ok = await dangerAction.resync()
+  if (ok)
     confirm.value = null
-  }, '操作已完成')
 }
 </script>
 
 <template>
   <div class="space-y-4">
-    <p v-if="error" role="alert" class="text-sm text-destructive">
-      {{ error }}
-    </p>
-    <p v-if="success" role="status" class="text-sm text-success">
-      {{ success }}
+    <div v-if="pageError || pageNeedsResync" class="flex flex-wrap items-center gap-2">
+      <p v-if="pageError" role="alert" class="text-sm text-destructive">
+        {{ pageError }}
+      </p>
+      <Button v-if="pageNeedsResync" type="button" variant="outline" size="sm" :disabled="busy" @click="resyncPage">
+        重新同步
+      </Button>
+    </div>
+    <p v-if="pageSuccess" role="status" class="text-sm text-success">
+      {{ pageSuccess }}
     </p>
     <CardX title="接入节点" content-class="space-y-4">
       <form class="flex flex-wrap items-end gap-3" @submit.prevent="enroll">
@@ -197,6 +357,9 @@ async function execute(): Promise<void> {
       </label>
       <p v-else class="text-sm text-muted-foreground">
         尚无节点。生成注册令牌并安装 Agent 后，节点会出现在这里。
+      </p>
+      <p v-if="hasUnsavedChanges" role="status" class="text-sm text-muted-foreground">
+        有未保存修改；后台状态刷新不会覆盖未保存的节点输入。
       </p>
       <form v-if="draft" class="space-y-5" :aria-busy="busy" @submit.prevent="save">
         <fieldset :disabled="busy" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -282,9 +445,12 @@ async function execute(): Promise<void> {
         </fieldset>
         <div class="flex flex-wrap gap-2">
           <Button class="min-h-11" type="submit" :disabled="busy">
-            {{ busy ? '正在处理…' : '保存节点' }}
-          </Button><Button variant="outline" type="button" :disabled="selected?.hidden" @click="router.push(`/instance/${draft.id}`)">
+            {{ saveAction.busy.value ? '正在处理…' : '保存节点' }}
+          </Button><Button variant="outline" type="button" class="min-h-11" :disabled="selected?.hidden" @click="router.push(`/instance/${draft.id}`)">
             查看监控
+          </Button>
+          <Button v-if="saveAction.needsResync.value" variant="outline" type="button" class="min-h-11" :disabled="busy" @click="resyncPage">
+            重新同步
           </Button>
         </div>
         <p v-if="selected?.hidden" class="text-sm text-muted-foreground">
@@ -298,17 +464,51 @@ async function execute(): Promise<void> {
         </Button>
       </div>
     </CardX>
+    <Dialog :open="draftGuard.isOpen.value" @update:open="value => { if (!value) draftGuard.cancel() }">
+      <DialogContent @close-auto-focus="draftGuard.restoreFocus">
+        <DialogHeader>
+          <DialogTitle>放弃未保存修改？</DialogTitle>
+          <DialogDescription v-if="draftGuard.pending.value?.kind === 'switch'">
+            切换到 {{ draftGuard.pending.value.targetLabel }} 会丢弃当前节点未保存的修改，不会保存任何更改。
+          </DialogDescription>
+          <DialogDescription v-else-if="draftGuard.pending.value?.kind === 'refresh'">
+            刷新管理数据会丢弃当前节点未保存的修改，不会保存任何更改。
+          </DialogDescription>
+          <DialogDescription v-else>
+            离开当前节点编辑会丢弃未保存的修改，不会保存任何更改。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" @click="draftGuard.cancel">
+            取消，继续编辑
+          </Button>
+          <Button variant="destructive" @click="draftGuard.confirm">
+            {{
+              draftGuard.pending.value?.kind === 'switch'
+                ? '放弃修改并切换'
+                : draftGuard.pending.value?.kind === 'refresh'
+                  ? '放弃修改并刷新'
+                  : '放弃修改并离开'
+            }}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     <Dialog :open="confirm !== null" @update:open="value => { if (!value) closeConfirm() }">
       <DialogContent :show-close="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
         <DialogHeader><DialogTitle>{{ confirm ? actionLabels[confirm] : '' }}</DialogTitle><DialogDescription>{{ selected?.name }}：{{ confirm ? actionHints[confirm] : '' }}</DialogDescription></DialogHeader>
-        <p v-if="error" role="alert" class="text-sm text-destructive">
-          {{ error }}
+        <p v-if="dangerAction.error.value" role="alert" class="text-sm text-destructive">
+          {{ dangerAction.error.value }}
         </p>
         <DialogFooter>
           <Button variant="outline" :disabled="busy" @click="closeConfirm">
             取消
-          </Button><Button variant="destructive" :disabled="busy" @click="execute">
-            {{ busy ? '正在处理…' : '确认执行' }}
+          </Button>
+          <Button v-if="dangerAction.needsResync.value" variant="outline" :disabled="busy" @click="resyncDanger">
+            重新同步
+          </Button>
+          <Button variant="destructive" :disabled="busy || dangerAction.uncertain.value" @click="execute">
+            {{ dangerAction.busy.value ? '正在处理…' : '确认执行' }}
           </Button>
         </DialogFooter>
       </DialogContent>
