@@ -46,8 +46,36 @@ struct Incident {
     id: String,
     status: String,
     opened_at: u64,
-    // -1 is a durable recovery notification waiting for outbox capacity.
-    last_sent_at: i64,
+    // Timestamp (unix ms) of the last genuinely enqueued firing notification (0 if none).
+    last_sent_at: u64,
+    firing_notified: bool,
+    recovery_pending: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnqueueOutcome {
+    Enqueued,
+    AlreadyPending,
+    NoTargets,
+    OutboxFull,
+}
+
+pub(crate) fn migrate(db: &Connection) -> rusqlite::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE alert_incidents
+             ADD COLUMN firing_notified INTEGER NOT NULL DEFAULT 0 CHECK(firing_notified IN (0,1));
+         ALTER TABLE alert_incidents
+             ADD COLUMN recovery_pending INTEGER NOT NULL DEFAULT 0 CHECK(recovery_pending IN (0,1));
+         UPDATE alert_incidents
+             SET firing_notified = 1
+             WHERE status = 'firing' AND last_sent_at_ms > 0 AND last_sent_at_ms >= opened_at_ms;
+         UPDATE alert_incidents
+             SET recovery_pending = 1, last_sent_at_ms = 0
+             WHERE status = 'resolved' AND last_sent_at_ms < 0;
+         UPDATE alert_incidents
+             SET last_sent_at_ms = 0
+             WHERE last_sent_at_ms < 0;",
+    )
 }
 
 impl Storage {
@@ -66,7 +94,14 @@ impl Storage {
         )?;
         if !enabled {
             tx.execute("DELETE FROM alert_deliveries", [])?;
-            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status NOT IN ('resolved','superseded')", [integer(now_ms)])?;
+            tx.execute(
+                "UPDATE alert_incidents
+                 SET status=CASE WHEN status='superseded' THEN 'superseded' ELSE 'resolved' END,
+                     updated_at_ms=CASE WHEN status NOT IN ('resolved','superseded') THEN ?1 ELSE updated_at_ms END,
+                     firing_notified=0,recovery_pending=0
+                 WHERE status NOT IN ('resolved','superseded') OR firing_notified!=0 OR recovery_pending!=0",
+                [integer(now_ms)],
+            )?;
             tx.commit()?;
             return Ok(());
         }
@@ -84,7 +119,14 @@ impl Storage {
             let rule: AlertRule = decode(&record?)?;
             if !rule.enabled {
                 tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT id FROM alert_incidents WHERE rule_id=?1)", [&rule.id])?;
-                tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2 WHERE rule_id=?1 AND status NOT IN ('resolved','superseded')", params![rule.id, integer(now_ms)])?;
+                tx.execute(
+                    "UPDATE alert_incidents
+                     SET status=CASE WHEN status='superseded' THEN 'superseded' ELSE 'resolved' END,
+                         updated_at_ms=CASE WHEN status NOT IN ('resolved','superseded') THEN ?2 ELSE updated_at_ms END,
+                         firing_notified=0,recovery_pending=0
+                     WHERE rule_id=?1 AND (status NOT IN ('resolved','superseded') OR firing_notified!=0 OR recovery_pending!=0)",
+                    params![rule.id, integer(now_ms)],
+                )?;
                 continue;
             }
             retire_unassigned(&tx, &rule, &nodes, now_ms)?;
@@ -118,7 +160,15 @@ impl Storage {
         }
         drop(rules);
         tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT a.id FROM alert_incidents a JOIN nodes n ON n.id=a.node_id WHERE n.disabled_at_ms IS NOT NULL)", [])?;
-        tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?1 WHERE status NOT IN ('resolved','superseded') AND node_id IN (SELECT id FROM nodes WHERE disabled_at_ms IS NOT NULL)", [integer(now_ms)])?;
+        tx.execute(
+            "UPDATE alert_incidents
+             SET status=CASE WHEN status='superseded' THEN 'superseded' ELSE 'resolved' END,
+                 updated_at_ms=CASE WHEN status NOT IN ('resolved','superseded') THEN ?1 ELSE updated_at_ms END,
+                 firing_notified=0,recovery_pending=0
+             WHERE node_id IN (SELECT id FROM nodes WHERE disabled_at_ms IS NOT NULL)
+               AND (status NOT IN ('resolved','superseded') OR firing_notified!=0 OR recovery_pending!=0)",
+            [integer(now_ms)],
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -223,7 +273,15 @@ pub(crate) fn retire_traffic_evaluation(
     now: u64,
 ) -> Result<(), StorageError> {
     tx.execute("DELETE FROM alert_deliveries WHERE incident_id IN (SELECT i.id FROM alert_incidents i JOIN alert_rules r ON r.id=i.rule_id WHERE i.node_id=?1 AND json_extract(r.data,'$.metric')='traffic')", [node_id])?;
-    tx.execute("UPDATE alert_incidents SET status='superseded',message=message || ' [Traffic source changed; previous evaluation ended without recovery]',updated_at_ms=?2,last_sent_at_ms=0 WHERE node_id=?1 AND (status IN ('pending','firing') OR last_sent_at_ms<0) AND rule_id IN (SELECT id FROM alert_rules WHERE json_extract(data,'$.metric')='traffic')", params![node_id, integer(now)])?;
+    tx.execute(
+        "UPDATE alert_incidents
+         SET status='superseded',
+             message=message || ' [Traffic source changed; previous evaluation ended without recovery]',
+             updated_at_ms=?2,last_sent_at_ms=0,firing_notified=0,recovery_pending=0
+         WHERE node_id=?1 AND (status IN ('pending','firing') OR recovery_pending!=0)
+           AND rule_id IN (SELECT id FROM alert_rules WHERE json_extract(data,'$.metric')='traffic')",
+        params![node_id, integer(now)],
+    )?;
     Ok(())
 }
 
@@ -290,11 +348,19 @@ fn pause_evaluation(
             "DELETE FROM alert_deliveries WHERE incident_id=?1",
             [&incident.id],
         )?;
-        if incident.status == "resolved" && incident.last_sent_at < 0 {
-            tx.execute("UPDATE alert_incidents SET status='superseded',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1", params![incident.id, integer(now)])?;
+        if incident.status == "resolved" && incident.recovery_pending {
+            tx.execute(
+                "UPDATE alert_incidents
+                 SET status='superseded',updated_at_ms=?2,last_sent_at_ms=0,
+                     firing_notified=0,recovery_pending=0
+                 WHERE id=?1",
+                params![incident.id, integer(now)],
+            )?;
         } else if removed > 0 {
             tx.execute(
-                "UPDATE alert_incidents SET last_sent_at_ms=0 WHERE id=?1",
+                "UPDATE alert_incidents
+                 SET last_sent_at_ms=0,firing_notified=0,recovery_pending=0
+                 WHERE id=?1",
                 [&incident.id],
             )?;
         }
@@ -306,11 +372,132 @@ fn pause_evaluation(
             "resolved"
         };
         tx.execute(
-            "UPDATE alert_incidents SET status=?3,updated_at_ms=?2 WHERE id=?1",
+            "UPDATE alert_incidents
+             SET status=?3,updated_at_ms=?2,firing_notified=0,recovery_pending=0
+             WHERE id=?1",
             params![incident.id, integer(now), status],
         )?;
     }
     Ok(())
+}
+
+fn resolve_incident(
+    tx: &Transaction<'_>,
+    rule: &AlertRule,
+    node_id: &str,
+    node: &NodeState,
+    incident: &Incident,
+    now: u64,
+) -> Result<(), StorageError> {
+    if incident.status == "superseded" {
+        return Ok(());
+    }
+    let message = format!("{}: {} recovered", node.name, rule.name);
+    let needs_recovery = (incident.status == "firing" && incident.firing_notified)
+        || (incident.status == "resolved" && incident.recovery_pending);
+    if incident.status != "resolved" {
+        tx.execute(
+            "UPDATE alert_incidents
+             SET status='resolved',message=?2,updated_at_ms=?3,
+                 firing_notified=0,recovery_pending=?4
+             WHERE id=?1",
+            params![
+                incident.id,
+                message,
+                integer(now),
+                i64::from(needs_recovery)
+            ],
+        )?;
+    }
+    if needs_recovery {
+        let outcome = enqueue(
+            tx,
+            &incident.id,
+            rule,
+            node_id,
+            node,
+            "resolved",
+            &message,
+            now,
+        )?;
+        if matches!(
+            outcome,
+            EnqueueOutcome::Enqueued | EnqueueOutcome::AlreadyPending | EnqueueOutcome::NoTargets
+        ) {
+            tx.execute(
+                "UPDATE alert_incidents SET recovery_pending=0 WHERE id=?1",
+                [&incident.id],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn load_incident(
+    tx: &Transaction<'_>,
+    node_id: &str,
+    rule_id: &str,
+) -> Result<Option<Incident>, StorageError> {
+    Ok(tx
+        .query_row(
+            "SELECT id,status,opened_at_ms,last_sent_at_ms,firing_notified,recovery_pending
+             FROM alert_incidents WHERE node_id=?1 AND rule_id=?2",
+            params![node_id, rule_id],
+            |row| {
+                Ok(Incident {
+                    id: row.get(0)?,
+                    status: row.get(1)?,
+                    opened_at: unsigned(row.get(2)?),
+                    last_sent_at: unsigned(row.get(3)?),
+                    firing_notified: row.get::<_, i64>(4)? != 0,
+                    recovery_pending: row.get::<_, i64>(5)? != 0,
+                })
+            },
+        )
+        .optional()?)
+}
+
+fn open_or_resume_incident(
+    tx: &Transaction<'_>,
+    old: Option<Incident>,
+    rule: &AlertRule,
+    node_id: &str,
+    now: u64,
+    incident_slots: &mut usize,
+) -> Result<Option<Incident>, StorageError> {
+    let mut incident = if let Some(incident) = old {
+        incident
+    } else {
+        if !reserve_incident(tx, incident_slots)? {
+            return Ok(None);
+        }
+        let incident = Incident {
+            id: Uuid::new_v4().to_string(),
+            status: "pending".into(),
+            opened_at: now,
+            last_sent_at: 0,
+            firing_notified: false,
+            recovery_pending: false,
+        };
+        tx.execute(
+            "INSERT INTO alert_incidents(
+                 id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,
+                 last_sent_at_ms,firing_notified,recovery_pending
+             ) VALUES(?1,?2,?3,'pending','',?4,?4,0,0,0)",
+            params![incident.id, node_id, rule.id, integer(now)],
+        )?;
+        incident
+    };
+    if incident.status == "resolved" || incident.status == "superseded" {
+        incident.status = "pending".into();
+        incident.opened_at = now;
+        incident.firing_notified = false;
+        incident.recovery_pending = false;
+        if rule.metric == "traffic" {
+            incident.last_sent_at = 0;
+        }
+    }
+    Ok(Some(incident))
 }
 
 fn evaluate_node(
@@ -322,10 +509,7 @@ fn evaluate_node(
     offline_after: u64,
     incident_slots: &mut usize,
 ) -> Result<(), StorageError> {
-    let old: Option<Incident> = tx.query_row(
-        "SELECT id,status,opened_at_ms,last_sent_at_ms FROM alert_incidents WHERE node_id=?1 AND rule_id=?2",
-        params![node_id, rule.id], |row| Ok(Incident { id: row.get(0)?, status: row.get(1)?, opened_at: unsigned(row.get(2)?), last_sent_at: row.get(3)? }),
-    ).optional()?;
+    let old = load_incident(tx, node_id, &rule.id)?;
     let (breached, _) = condition(rule, node, now, offline_after);
     let Some(breached) = breached else {
         pause_evaluation(tx, rule, old.as_ref(), now)?;
@@ -333,57 +517,14 @@ fn evaluate_node(
     };
     if !breached {
         if let Some(incident) = old {
-            if incident.status == "superseded" {
-                return Ok(());
-            }
-            let message = format!("{}: {} recovered", node.name, rule.name);
-            let needs_recovery = incident.status == "firing"
-                || (incident.status == "resolved" && incident.last_sent_at < 0);
-            if incident.status != "resolved" {
-                tx.execute("UPDATE alert_incidents SET status='resolved',message=?2,updated_at_ms=?3,last_sent_at_ms=?4 WHERE id=?1", params![incident.id, message, integer(now), if needs_recovery { -1 } else { incident.last_sent_at }])?;
-            }
-            if needs_recovery
-                && enqueue(
-                    tx,
-                    &incident.id,
-                    rule,
-                    node_id,
-                    node,
-                    "resolved",
-                    &message,
-                    now,
-                )?
-            {
-                tx.execute(
-                    "UPDATE alert_incidents SET last_sent_at_ms=?2 WHERE id=?1",
-                    params![incident.id, integer(now)],
-                )?;
-            }
+            resolve_incident(tx, rule, node_id, node, &incident, now)?;
         }
         return Ok(());
     }
-    let mut incident = if let Some(incident) = old {
-        incident
-    } else {
-        if !reserve_incident(tx, incident_slots)? {
-            return Ok(());
-        }
-        let incident = Incident {
-            id: Uuid::new_v4().to_string(),
-            status: "pending".into(),
-            opened_at: now,
-            last_sent_at: 0,
-        };
-        tx.execute("INSERT INTO alert_incidents(id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,last_sent_at_ms) VALUES(?1,?2,?3,'pending','',?4,?4,0)", params![incident.id, node_id, rule.id, integer(now)])?;
-        incident
+    let Some(mut incident) = open_or_resume_incident(tx, old, rule, node_id, now, incident_slots)?
+    else {
+        return Ok(());
     };
-    if incident.status == "resolved" || incident.status == "superseded" {
-        incident.status = "pending".into();
-        incident.opened_at = now;
-        if rule.metric == "traffic" {
-            incident.last_sent_at = 0;
-        }
-    }
     let ready =
         now.saturating_sub(incident.opened_at) >= rule.duration_seconds.saturating_mul(1000);
     if incident.status == "pending" && ready {
@@ -391,12 +532,29 @@ fn evaluate_node(
     }
     let reason = alert_reason(&rule.metric, node.traffic_source);
     let message = format!("{}: {}: {reason}", node.name, rule.name);
-    tx.execute("UPDATE alert_incidents SET status=?2,message=?3,opened_at_ms=?4,updated_at_ms=?5,last_sent_at_ms=?6 WHERE id=?1 AND (status!=?2 OR message!=?3 OR opened_at_ms!=?4 OR last_sent_at_ms!=?6)", params![incident.id, incident.status, message, integer(incident.opened_at), integer(now), incident.last_sent_at])?;
+    tx.execute(
+        "UPDATE alert_incidents
+         SET status=?2,message=?3,opened_at_ms=?4,updated_at_ms=?5,last_sent_at_ms=?6,
+             firing_notified=?7,recovery_pending=?8
+         WHERE id=?1 AND (status!=?2 OR message!=?3 OR opened_at_ms!=?4 OR last_sent_at_ms!=?6
+             OR firing_notified!=?7 OR recovery_pending!=?8)",
+        params![
+            incident.id,
+            incident.status,
+            message,
+            integer(incident.opened_at),
+            integer(now),
+            integer(incident.last_sent_at),
+            i64::from(incident.firing_notified),
+            i64::from(incident.recovery_pending)
+        ],
+    )?;
     if incident.status == "firing"
-        && (incident.last_sent_at <= 0
-            || now.saturating_sub(unsigned(incident.last_sent_at))
+        && (incident.last_sent_at == 0
+            || now.saturating_sub(incident.last_sent_at)
                 >= rule.cooldown_seconds.saturating_mul(1000))
-        && enqueue(
+    {
+        let outcome = enqueue(
             tx,
             &incident.id,
             rule,
@@ -405,12 +563,16 @@ fn evaluate_node(
             "firing",
             &message,
             now,
-        )?
-    {
-        tx.execute(
-            "UPDATE alert_incidents SET last_sent_at_ms=?2 WHERE id=?1",
-            params![incident.id, integer(now)],
         )?;
+        if matches!(
+            outcome,
+            EnqueueOutcome::Enqueued | EnqueueOutcome::AlreadyPending
+        ) {
+            tx.execute(
+                "UPDATE alert_incidents SET last_sent_at_ms=?2,firing_notified=1 WHERE id=?1",
+                params![incident.id, integer(now)],
+            )?;
+        }
     }
     Ok(())
 }
@@ -480,7 +642,7 @@ fn enqueue(
     event: &str,
     message: &str,
     now: u64,
-) -> Result<bool, StorageError> {
+) -> Result<EnqueueOutcome, StorageError> {
     // This is the administrator-approved disclosure: identifiers, names, rule,
     // state, time and a short reason. Never IPs, keys or raw/individual metrics.
     let payload = json!({ "status":event, "incident_id":incident_id, "node_id":node_id,
@@ -494,6 +656,7 @@ fn enqueue(
     }
     let mut channels = Vec::new();
     let mut required_slots = 0_usize;
+    let mut skipped_same_event = false;
     for channel_id in &rule.channel_ids {
         let raw: Option<String> = tx
             .query_row(
@@ -523,6 +686,7 @@ fn enqueue(
             .transpose()?
             .is_some_and(|body| body["status"].as_str() == Some(event))
         {
+            skipped_same_event = true;
             continue;
         }
         if existing.is_none() {
@@ -530,17 +694,24 @@ fn enqueue(
         }
         channels.push(channel_id);
     }
+    if channels.is_empty() {
+        return Ok(if skipped_same_event {
+            EnqueueOutcome::AlreadyPending
+        } else {
+            EnqueueOutcome::NoTargets
+        });
+    }
     let count: i64 = tx.query_row("SELECT count(*) FROM alert_deliveries", [], |row| {
         row.get(0)
     })?;
     let count = usize::try_from(count).unwrap_or(MAX_DELIVERIES);
     if count.saturating_add(required_slots) > MAX_DELIVERIES {
-        return Ok(false);
+        return Ok(EnqueueOutcome::OutboxFull);
     }
     for channel_id in channels {
         tx.execute("INSERT INTO alert_deliveries(id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms) VALUES(?1,?2,?3,?4,0,?5,?5) ON CONFLICT(incident_id,channel_id) DO UPDATE SET id=excluded.id,payload=excluded.payload,attempts=0,next_attempt_ms=excluded.next_attempt_ms,created_at_ms=excluded.created_at_ms", params![Uuid::new_v4().to_string(), incident_id, channel_id, payload, integer(now)])?;
     }
-    Ok(true)
+    Ok(EnqueueOutcome::Enqueued)
 }
 
 fn retire_unassigned(
@@ -564,7 +735,15 @@ fn retire_unassigned(
             || (!rule.node_ids.is_empty() && !rule.node_ids.contains(&node_id))
         {
             tx.execute("DELETE FROM alert_deliveries WHERE incident_id=?1", [&id])?;
-            tx.execute("UPDATE alert_incidents SET status='resolved',updated_at_ms=?2,last_sent_at_ms=0 WHERE id=?1 AND status!='superseded' AND (status!='resolved' OR last_sent_at_ms!=0)", params![id,integer(now)])?;
+            tx.execute(
+                "UPDATE alert_incidents
+                 SET status='resolved',
+                     updated_at_ms=CASE WHEN status!='resolved' THEN ?2 ELSE updated_at_ms END,
+                     last_sent_at_ms=0,firing_notified=0,recovery_pending=0
+                 WHERE id=?1 AND status!='superseded'
+                   AND (status!='resolved' OR last_sent_at_ms!=0 OR firing_notified!=0 OR recovery_pending!=0)",
+                params![id, integer(now)],
+            )?;
         }
     }
     Ok(())
@@ -908,5 +1087,322 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert!(failures[0].subject.ends_with(&delivery.id));
         assert!(!failures[0].subject.contains("https://"));
+    }
+
+    fn incident_flags(storage: &Storage, rule_id: &str) -> (String, i64, i64, i64) {
+        storage
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT status,last_sent_at_ms,firing_notified,recovery_pending
+                 FROM alert_incidents WHERE rule_id=?1",
+                [rule_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap()
+    }
+
+    fn set_node_seen(storage: &Storage, node_id: &str, seen_ms: u64) {
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO node_state(node_id,last_seen_at_ms) VALUES(?1,?2)
+                 ON CONFLICT(node_id) DO UPDATE SET last_seen_at_ms=excluded.last_seen_at_ms",
+                params![node_id, integer(seen_ms)],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn in_app_only_and_disabled_channel_alerts_do_not_emit_spurious_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::open(&directory.path().join("senlun.db"), 64 * 1024 * 1024).unwrap();
+        let secret = storage.create_enrollment(600, 1_000).unwrap();
+        let enrolled = storage
+            .enroll(
+                &senlun_protocol::EnrollmentRequest {
+                    protocol_version: senlun_protocol::PROTOCOL_VERSION,
+                    node_name: "in-app-node".into(),
+                    agent_version: "test".into(),
+                    region: String::new(),
+                    group: String::new(),
+                },
+                &crate::storage::hash_token(&secret.token),
+                100,
+                1_000,
+            )
+            .unwrap();
+        let mut disabled_channel = Channel {
+            id: String::new(),
+            name: "disabled-channel".into(),
+            kind: "webhook".into(),
+            url: "https://example.invalid/disabled".into(),
+            enabled: false,
+        };
+        storage.save_channel(&mut disabled_channel).unwrap();
+        let mut in_app_rule = rule("offline");
+        in_app_rule.id.clear();
+        in_app_rule.name = "in-app-offline".into();
+        storage.save_alert_rule(&mut in_app_rule).unwrap();
+        let mut disabled_rule = rule("offline");
+        disabled_rule.id.clear();
+        disabled_rule.name = "disabled-channel-offline".into();
+        disabled_rule.channel_ids = vec![disabled_channel.id.clone()];
+        storage.save_alert_rule(&mut disabled_rule).unwrap();
+
+        storage.evaluate_alerts(100_000, 90_000).unwrap();
+        storage.evaluate_alerts(110_000, 90_000).unwrap();
+        for rule_id in [&in_app_rule.id, &disabled_rule.id] {
+            assert_eq!(
+                incident_flags(&storage, rule_id),
+                ("firing".into(), 0, 0, 0)
+            );
+        }
+        assert!(storage.pending_deliveries(110_000).unwrap().is_empty());
+
+        set_node_seen(&storage, &enrolled.node_id, 110_001);
+        storage.evaluate_alerts(110_001, 90_000).unwrap();
+        for rule_id in [&in_app_rule.id, &disabled_rule.id] {
+            assert_eq!(
+                incident_flags(&storage, rule_id),
+                ("resolved".into(), 0, 0, 0)
+            );
+        }
+        disabled_channel.enabled = true;
+        storage.save_channel(&mut disabled_channel).unwrap();
+        storage.evaluate_alerts(110_002, 90_000).unwrap();
+        assert!(storage.pending_deliveries(110_002).unwrap().is_empty());
+    }
+
+    #[test]
+    fn cooldown_suppressed_firing_skips_recovery_and_recovery_preserves_cooldown() {
+        let (_directory, storage, node_id) = configured_storage();
+        let rule_id: String = storage
+            .connection()
+            .unwrap()
+            .query_row("SELECT id FROM alert_rules", [], |row| row.get(0))
+            .unwrap();
+
+        // Episode 1 fires at 110_000 and recovers at 150_000 (cooldown is 60_000 ms).
+        storage.evaluate_alerts(100_000, 90_000).unwrap();
+        storage.evaluate_alerts(110_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("firing".into(), 110_000, 1, 0)
+        );
+        let firing = storage.pending_deliveries(110_000).unwrap().pop().unwrap();
+        storage.delivery_result(&firing.id, true, 110_001).unwrap();
+
+        set_node_seen(&storage, &node_id, 150_000);
+        storage.evaluate_alerts(150_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 110_000, 0, 0)
+        );
+        let recovery = storage.pending_deliveries(150_000).unwrap().pop().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recovery.payload).unwrap()["status"],
+            "resolved"
+        );
+        storage
+            .delivery_result(&recovery.id, true, 150_001)
+            .unwrap();
+
+        // Episode 2 breaches and recovers while still within firing cooldown (until 170_000).
+        set_node_seen(&storage, &node_id, 50_000);
+        storage.evaluate_alerts(155_000, 90_000).unwrap();
+        storage.evaluate_alerts(165_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("firing".into(), 110_000, 0, 0)
+        );
+        assert!(storage.pending_deliveries(165_000).unwrap().is_empty());
+
+        set_node_seen(&storage, &node_id, 166_000);
+        storage.evaluate_alerts(166_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 110_000, 0, 0)
+        );
+        assert!(storage.pending_deliveries(166_000).unwrap().is_empty());
+
+        // Episode 3 fires at 177_000: >60s after firing (110_000), <60s after recovery (150_000).
+        set_node_seen(&storage, &node_id, 60_000);
+        storage.evaluate_alerts(167_000, 90_000).unwrap();
+        storage.evaluate_alerts(177_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("firing".into(), 177_000, 1, 0)
+        );
+        let next_firing = storage.pending_deliveries(177_000).unwrap().pop().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&next_firing.payload).unwrap()["status"],
+            "firing"
+        );
+    }
+
+    fn fill_outbox(storage: &Storage, incident_id: &str) {
+        let db = storage.connection().unwrap();
+        for index in 0..MAX_DELIVERIES {
+            let channel_id = format!("pad-channel-{index}");
+            let channel_json = json!({
+                "id": channel_id,
+                "name": format!("pad-{index}"),
+                "kind": "webhook",
+                "url": "https://example.invalid/pad",
+                "enabled": true,
+            })
+            .to_string();
+            db.execute(
+                "INSERT OR IGNORE INTO alert_channels(id,data) VALUES(?1,?2)",
+                params![channel_id, channel_json],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT OR IGNORE INTO alert_deliveries(
+                     id,incident_id,channel_id,payload,attempts,next_attempt_ms,created_at_ms
+                 ) VALUES(?1,?2,?3,'{\"status\":\"firing\"}',0,999999999,1)",
+                params![format!("pad-delivery-{index}"), incident_id, channel_id],
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn outbox_full_recovery_retries_and_disabling_clears_stale_recovery_marker() {
+        let (_directory, storage, node_id) = configured_storage();
+        let (rule_id, mut stored_rule): (String, AlertRule) = {
+            let db = storage.connection().unwrap();
+            let (id, raw): (String, String) = db
+                .query_row("SELECT id,data FROM alert_rules", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .unwrap();
+            (id, serde_json::from_str(&raw).unwrap())
+        };
+
+        // Fire Episode 1 and deliver it so recovery needs a fresh outbox slot.
+        storage.evaluate_alerts(100_000, 90_000).unwrap();
+        storage.evaluate_alerts(110_000, 90_000).unwrap();
+        let firing = storage.pending_deliveries(110_000).unwrap().pop().unwrap();
+        storage.delivery_result(&firing.id, true, 110_001).unwrap();
+        let incident_id: String = storage
+            .connection()
+            .unwrap()
+            .query_row("SELECT id FROM alert_incidents", [], |row| row.get(0))
+            .unwrap();
+
+        fill_outbox(&storage, &incident_id);
+        set_node_seen(&storage, &node_id, 120_000);
+        storage.evaluate_alerts(120_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 110_000, 0, 1)
+        );
+
+        // Free one slot and confirm recovery retries without altering firing cooldown.
+        storage
+            .connection()
+            .unwrap()
+            .execute(
+                "DELETE FROM alert_deliveries WHERE id='pad-delivery-0'",
+                [],
+            )
+            .unwrap();
+        storage.evaluate_alerts(121_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 110_000, 0, 0)
+        );
+        let recovery = storage.pending_deliveries(121_000).unwrap().pop().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&recovery.payload).unwrap()["status"],
+            "resolved"
+        );
+        storage
+            .delivery_result(&recovery.id, true, 121_001)
+            .unwrap();
+
+        // Fire Episode 2, fill outbox before recovery, then disable the rule.
+        set_node_seen(&storage, &node_id, 50_000);
+        storage.evaluate_alerts(200_000, 90_000).unwrap();
+        storage.evaluate_alerts(210_000, 90_000).unwrap();
+        let second = storage.pending_deliveries(210_000).unwrap().pop().unwrap();
+        storage.delivery_result(&second.id, true, 210_001).unwrap();
+        fill_outbox(&storage, &incident_id);
+        set_node_seen(&storage, &node_id, 220_000);
+        storage.evaluate_alerts(220_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 210_000, 0, 1)
+        );
+
+        stored_rule.enabled = false;
+        storage.save_alert_rule(&mut stored_rule).unwrap();
+        storage.evaluate_alerts(225_000, 90_000).unwrap();
+        assert_eq!(
+            incident_flags(&storage, &rule_id),
+            ("resolved".into(), 210_000, 0, 0)
+        );
+
+        stored_rule.enabled = true;
+        storage.save_alert_rule(&mut stored_rule).unwrap();
+        storage.evaluate_alerts(226_000, 90_000).unwrap();
+        assert!(storage.pending_deliveries(226_000).unwrap().is_empty());
+    }
+
+    #[test]
+    fn schema_v11_migration_backfills_legacy_recovery_and_firing_flags() {
+        let (_directory, path, db) = crate::storage::version_six_store();
+        for id in [
+            "rule-fired",
+            "rule-suppressed",
+            "rule-recovery",
+            "rule-pending",
+        ] {
+            let mut item = rule("offline");
+            item.id = id.into();
+            db.execute(
+                "INSERT INTO alert_rules(id,data) VALUES(?1,?2)",
+                params![id, serde_json::to_string(&item).unwrap()],
+            )
+            .unwrap();
+        }
+        db.execute_batch(
+            "INSERT INTO alert_incidents(
+                 id,node_id,rule_id,status,message,opened_at_ms,updated_at_ms,last_sent_at_ms
+             ) VALUES
+                 ('inc-fired','node-a','rule-fired','firing','m',100,110,110),
+                 ('inc-suppressed','node-a','rule-suppressed','firing','m',200,210,110),
+                 ('inc-recovery','node-a','rule-recovery','resolved','m',100,150,-1),
+                 ('inc-pending','node-a','rule-pending','pending','m',300,300,-1);",
+        )
+        .unwrap();
+        drop(db);
+
+        let storage = Storage::open(&path, 64 * 1024 * 1024).unwrap();
+        let version: i64 = storage
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, crate::storage::SCHEMA_VERSION);
+        assert_eq!(
+            incident_flags(&storage, "rule-fired"),
+            ("firing".into(), 110, 1, 0)
+        );
+        assert_eq!(
+            incident_flags(&storage, "rule-suppressed"),
+            ("firing".into(), 110, 0, 0)
+        );
+        assert_eq!(
+            incident_flags(&storage, "rule-recovery"),
+            ("resolved".into(), 0, 0, 1)
+        );
+        assert_eq!(
+            incident_flags(&storage, "rule-pending"),
+            ("pending".into(), 0, 0, 0)
+        );
     }
 }
