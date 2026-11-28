@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createSerializedRefresh } from '@/utils/adminRefresh'
 import {
+  adminNodesViewState,
   clearAdminUncertainLocks,
   enrollUncertainLock,
   nodeDangerUncertainLocks,
@@ -160,13 +161,49 @@ describe('useAdminAction submission outcome classification', () => {
     expect(action.error.value).not.toContain('请先重新同步')
   })
 
+  it('supports per-action uncertain overrides such as structured 503 on node delete without changing global 503 handling', async () => {
+    const refresh = vi.fn().mockResolvedValue(undefined)
+    const defaultAction = useAdminAction(refresh)
+    const defaultOutcome = await defaultAction.run(async () => {
+      throw new ApiError('Service unavailable', 503)
+    })
+    expect(defaultOutcome).toBe('failed')
+    expect(defaultAction.uncertain.value).toBe(false)
+
+    const deleteAction = useAdminAction(refresh)
+    const deleteOutcome = await deleteAction.run(async () => {
+      throw new ApiError('Metrics cleanup failed after delete', 503)
+    }, {
+      riskyWrite: true,
+      isUncertainError: cause => cause instanceof ApiError && cause.statusCode === 503,
+    })
+    expect(deleteOutcome).toBe('uncertain')
+    expect(deleteAction.uncertain.value).toBe(true)
+    expect(deleteAction.needsResync.value).toBe(true)
+    expect(deleteAction.error.value).toContain('Metrics cleanup failed after delete')
+  })
+
   it('ignores late uncertain lock writes from an ended session even after re-authentication', () => {
     clearAdminUncertainLocks()
+    adminNodesViewState.value = {
+      searchQuery: 'SG',
+      statusFilter: 'hidden',
+      listScrollY: 240,
+      listScrollTop: 120,
+      lastNodeId: 'node-1',
+    }
     const oldSessionGen = getSessionGeneration()
 
     // Session ends and a new session authenticates (each bumps generation).
     invalidateSessionRequests()
     clearAdminUncertainLocks()
+    expect(adminNodesViewState.value).toEqual({
+      searchQuery: '',
+      statusFilter: 'all',
+      listScrollY: null,
+      listScrollTop: null,
+      lastNodeId: null,
+    })
     invalidateSessionRequests()
 
     expect(setEnrollUncertainLock(oldSessionGen, true, 'stale enroll')).toBe(false)

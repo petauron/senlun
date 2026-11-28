@@ -30,13 +30,14 @@ import {
   resolveNodeSelection,
 } from '@/utils/adminNodes'
 import {
+  adminNodesViewState,
   enrollUncertainLock,
   isSameActiveSession,
   nodeDangerUncertainLocks,
   setEnrollUncertainLock,
   setNodeDangerUncertainLock,
 } from '@/utils/adminUncertain'
-import { getSharedApi } from '@/utils/api'
+import { ApiError, getSharedApi } from '@/utils/api'
 import { trafficSelectionDetails } from '@/utils/nodeHelpers'
 import { getSessionGeneration } from '@/utils/session'
 import { parseTags } from '@/utils/tagHelper'
@@ -47,6 +48,19 @@ interface PendingUncertainNodeSave {
   submitted: NodeDraftSnapshot
   message: string
   resyncError: string
+}
+
+interface PendingDangerConfirm {
+  action: NodeDangerActionKind
+  nodeId: string
+  nodeName: string
+}
+
+interface IssuedSecretNotice {
+  token: string
+  kind: 'enroll' | 'rotate'
+  nodeId?: string
+  nodeName?: string
 }
 
 const props = defineProps<{ nodes: ManagedNode[], refresh: () => Promise<void> }>()
@@ -64,20 +78,13 @@ function handleViewportChange(event: MediaQueryListEvent): void {
   isDesktop.value = event.matches
 }
 
-onMounted(() => {
-  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function')
-    return
-  desktopMediaQuery = window.matchMedia('(min-width: 1024px)')
-  isDesktop.value = desktopMediaQuery.matches
-  desktopMediaQuery.addEventListener('change', handleViewportChange)
-})
-
-const searchQuery = ref('')
-const statusFilter = ref<NodeListFilter>('all')
-const savedListScrollY = ref<number | null>(null)
-const lastInteractedNodeId = ref<string | null>(null)
+const searchQuery = ref(adminNodesViewState.value.searchQuery)
+const statusFilter = ref<NodeListFilter>(adminNodesViewState.value.statusFilter)
+const savedListScrollY = ref<number | null>(adminNodesViewState.value.listScrollY)
+const lastInteractedNodeId = ref<string | null>(adminNodesViewState.value.lastNodeId)
 const editorHeadingRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLElement | null>(null)
+const nodeListEl = ref<HTMLElement | null>(null)
 const nodeButtonEls = new Map<string, HTMLButtonElement>()
 
 function setNodeButtonRef(id: string, el: Element | ComponentPublicInstance | null): void {
@@ -97,12 +104,43 @@ function setSearchInputRef(el: Element | ComponentPublicInstance | null): void {
 }
 
 const queryNodeId = computed(() => typeof route.query.node === 'string'
-  ? route.query.node
-  : null)
+  ? route.query.node.trim()
+  : '')
+
+function initialPinnedNodeId(): string | null {
+  if (queryNodeId.value)
+    return queryNodeId.value
+  if (!isDesktop.value)
+    return null
+  const remembered = adminNodesViewState.value.lastNodeId
+  if (remembered && props.nodes.some(node => node.id === remembered))
+    return remembered
+  return props.nodes[0]?.id ?? null
+}
+
+const pinnedNodeId = ref<string | null>(initialPinnedNodeId())
+
+// When mobile navigates back from ?node=<id> to /admin?section=nodes, clear pinnedNodeId synchronously after route commit.
+watch(queryNodeId, (next, prev) => {
+  if (prev && !next && !isDesktop.value)
+    pinnedNodeId.value = null
+}, { flush: 'sync' })
+
+watch(
+  [searchQuery, statusFilter],
+  ([nextQuery, nextFilter]) => {
+    adminNodesViewState.value = {
+      ...adminNodesViewState.value,
+      searchQuery: nextQuery,
+      statusFilter: nextFilter,
+    }
+  },
+)
 
 const selection = computed(() => resolveNodeSelection({
   nodes: props.nodes,
-  queryNodeId: queryNodeId.value,
+  queryNodeId: queryNodeId.value || null,
+  pinnedNodeId: pinnedNodeId.value,
   isDesktop: isDesktop.value,
 }))
 
@@ -133,11 +171,13 @@ const loadedNodeId = ref<string | null>(null)
 const expires = ref('')
 const quotaGiB = ref<number | string>(0)
 const ttlHours = ref(24)
-const secret = ref('')
-const confirm = ref<NodeDangerActionKind | null>(null)
+const issuedSecret = ref<IssuedSecretNotice | null>(null)
+const confirmTarget = ref<PendingDangerConfirm | null>(null)
 const newTagText = ref('')
 const newTagColor = ref<TagColor>('blue')
 const tagError = ref('')
+const pageStatusNotice = ref('')
+const lastSavedNodeSummary = ref<{ nodeId: string, nodeName: string } | null>(null)
 const enrollUncertain = enrollUncertainLock
 const enrollExpanded = ref(props.nodes.length === 0 || Boolean(enrollUncertain.value))
 const pendingUncertainSaves = ref<Record<string, PendingUncertainNodeSave>>({})
@@ -145,7 +185,10 @@ const pendingUncertainDangers = nodeDangerUncertainLocks
 let forceResetNextSync = false
 
 watch(
-  [() => props.nodes.length, enrollUncertain],
+  [
+    () => props.nodes.length,
+    enrollUncertain,
+  ],
   ([count, uncertain]) => {
     if (count === 0 || uncertain)
       enrollExpanded.value = true
@@ -216,20 +259,52 @@ const saveAlert = computed(() => {
 })
 const showSaveResync = computed(() => saveNeedsResync.value || Boolean(currentPendingSave.value))
 
-const activeConfirmMeta = computed(() => confirm.value
-  ? NODE_DANGER_ACTIONS[confirm.value]
+const activeConfirmMeta = computed(() => confirmTarget.value
+  ? NODE_DANGER_ACTIONS[confirmTarget.value.action]
   : null)
+
+const activeConfirmDescription = computed(() => {
+  if (!activeConfirmMeta.value || !confirmTarget.value)
+    return ''
+  return activeConfirmMeta.value.description(confirmTarget.value.nodeName)
+})
+
+const issuedSecretAttribution = computed(() => {
+  const secret = issuedSecret.value
+  if (!secret)
+    return ''
+  if (secret.kind === 'rotate')
+    return `归属：节点「${secret.nodeName}」轮换后的新 Agent 凭据`
+  return '归属：一次性注册令牌（用于注册独立新节点）'
+})
+
+const activeConfirmUncertain = computed(() => {
+  const target = confirmTarget.value
+  if (!target)
+    return null
+  return pendingUncertainDangers.value[`${target.action}:${target.nodeId}`] ?? null
+})
+
+const confirmTargetInvalidReason = computed(() => {
+  const target = confirmTarget.value
+  if (!target)
+    return ''
+  const liveNode = props.nodes.find(node => node.id === target.nodeId)
+  if (!liveNode)
+    return `节点「${target.nodeName}」已不存在（可能已在最新同步中被删除），本次确认已失效，无法执行。`
+  if (selected.value?.id !== target.nodeId)
+    return `当前编辑对象已切换，不再指向节点「${target.nodeName}」，本次确认已失效，请关闭后重新核对。`
+  if (target.action === 'rotate' && liveNode.disabled)
+    return `节点「${target.nodeName}」的 Agent 凭据已撤销，无法轮换旧凭据；如需重新接入，请生成一次性注册令牌注册为独立新节点。`
+  if (target.action === 'revoke' && liveNode.disabled)
+    return `节点「${target.nodeName}」的 Agent 凭据已处于撤销状态，无需重复执行。`
+  return ''
+})
 
 const confirmButtonLabel = computed(() => {
   if (dangerBusy.value)
     return '正在处理…'
   return activeConfirmMeta.value?.confirmLabel ?? '确认'
-})
-
-const activeConfirmUncertain = computed(() => {
-  if (!confirm.value || !selected.value)
-    return null
-  return pendingUncertainDangers.value[`${confirm.value}:${selected.value.id}`] ?? null
 })
 
 const selectedNodePendingDangers = computed(() => {
@@ -239,10 +314,20 @@ const selectedNodePendingDangers = computed(() => {
   return Object.values(pendingUncertainDangers.value).filter(item => item.nodeId === id)
 })
 
-const showInlineDangerRefreshError = computed(() => {
-  if (confirm.value !== null)
+const showTopDangerRefreshAlert = computed(() => {
+  if (confirmTarget.value !== null)
     return false
   return dangerOutcome.value === 'refresh_failed' && Boolean(dangerError.value)
+})
+
+const topStatusMessage = computed(() => {
+  if (pageStatusNotice.value)
+    return pageStatusNotice.value
+  if (selection.value.mode === 'list' && lastSavedNodeSummary.value)
+    return `已保存节点「${lastSavedNodeSummary.value.nodeName}」`
+  if (confirmTarget.value === null && selection.value.mode !== 'selected' && dangerSuccess.value)
+    return dangerSuccess.value
+  return ''
 })
 
 const dangerActionsList = NODE_DANGER_ACTION_ORDER.map(action => NODE_DANGER_ACTIONS[action])
@@ -253,9 +338,30 @@ function formatPendingAlert(message: string, resyncFailure: string): string {
     : message
 }
 
+function isDangerActionDisabled(action: NodeDangerActionKind): boolean {
+  if (busy.value)
+    return true
+  if (selected.value?.disabled && (action === 'rotate' || action === 'revoke'))
+    return true
+  return false
+}
+
+function isNodeHighlighted(id: string): boolean {
+  if (selected.value)
+    return selected.value.id === id
+  return lastInteractedNodeId.value === id
+}
+
 function resetFilters(): void {
   searchQuery.value = ''
   statusFilter.value = 'all'
+}
+
+function clearFiltersAndFocusSearch(): void {
+  resetFilters()
+  void nextTick(() => {
+    searchInputRef.value?.focus({ preventScroll: true })
+  })
 }
 
 function loadDraftFromNode(node: ManagedNode | undefined): void {
@@ -279,11 +385,28 @@ function loadDraftFromNode(node: ManagedNode | undefined): void {
   tagError.value = ''
 }
 
-watch(selected, (node) => {
-  if (node)
+watch(selected, (node, prevNode) => {
+  const nextId = node?.id ?? null
+  const prevId = prevNode?.id ?? null
+  if (node) {
+    pinnedNodeId.value = node.id
     lastInteractedNodeId.value = node.id
+    adminNodesViewState.value = {
+      ...adminNodesViewState.value,
+      lastNodeId: node.id,
+    }
+  }
+  if (nextId !== prevId) {
+    if (issuedSecret.value?.kind === 'rotate' && issuedSecret.value.nodeId !== nextId)
+      issuedSecret.value = null
+    if (prevId !== null) {
+      saveAction.clearFeedback()
+      if (dangerOutcome.value !== 'refresh_failed')
+        dangerAction.clearFeedback()
+    }
+  }
   const shouldSync = shouldSyncNodeDraftFromServer({
-    incomingNodeId: node?.id ?? null,
+    incomingNodeId: nextId,
     loadedNodeId: loadedNodeId.value,
     hasUnsavedChanges: hasUnsavedChanges.value,
     forceReset: forceResetNextSync,
@@ -306,23 +429,33 @@ watch(selected, (node) => {
   loadDraftFromNode(node)
 }, { immediate: true })
 
+async function restoreListScrollAndFocus(): Promise<void> {
+  await nextTick()
+  if (isDesktop.value) {
+    if (nodeListEl.value && adminNodesViewState.value.listScrollTop !== null)
+      nodeListEl.value.scrollTop = adminNodesViewState.value.listScrollTop
+    return
+  }
+  const scrollY = savedListScrollY.value ?? adminNodesViewState.value.listScrollY
+  if (scrollY !== null && typeof window !== 'undefined')
+    window.scrollTo({ top: scrollY, behavior: 'auto' })
+  const targetId = lastInteractedNodeId.value
+  const targetButton = targetId
+    ? nodeButtonEls.get(targetId)
+    : undefined
+  if (targetButton?.isConnected)
+    targetButton.focus({ preventScroll: true })
+  else
+    searchInputRef.value?.focus({ preventScroll: true })
+}
+
 watch(
   () => selection.value.mode,
   async (mode, prevMode) => {
     if (isDesktop.value)
       return
     if (mode === 'list' && (prevMode === 'selected' || prevMode === 'missing')) {
-      await nextTick()
-      if (savedListScrollY.value !== null && typeof window !== 'undefined')
-        window.scrollTo({ top: savedListScrollY.value, behavior: 'auto' })
-      const targetId = lastInteractedNodeId.value
-      const targetButton = targetId
-        ? nodeButtonEls.get(targetId)
-        : undefined
-      if (targetButton?.isConnected)
-        targetButton.focus({ preventScroll: true })
-      else
-        searchInputRef.value?.focus({ preventScroll: true })
+      await restoreListScrollAndFocus()
       return
     }
     if (mode === 'selected' && prevMode === 'list') {
@@ -333,6 +466,16 @@ watch(
     }
   },
 )
+
+onMounted(() => {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    desktopMediaQuery = window.matchMedia('(min-width: 1024px)')
+    isDesktop.value = desktopMediaQuery.matches
+    desktopMediaQuery.addEventListener('change', handleViewportChange)
+  }
+  if (showNodeList.value && (adminNodesViewState.value.listScrollY !== null || adminNodesViewState.value.listScrollTop !== null))
+    void restoreListScrollAndFocus()
+})
 
 function isStayingOnSameNode(to: RouteLocationNormalized): boolean {
   if (to.name !== 'admin')
@@ -345,9 +488,13 @@ function isStayingOnSameNode(to: RouteLocationNormalized): boolean {
   const nextQueryNodeId = typeof to.query.node === 'string'
     ? to.query.node.trim()
     : ''
+  const nextPinned = nextQueryNodeId || isDesktop.value
+    ? pinnedNodeId.value
+    : null
   const nextSelection = resolveNodeSelection({
     nodes: props.nodes,
     queryNodeId: nextQueryNodeId || null,
+    pinnedNodeId: nextPinned,
     isDesktop: isDesktop.value,
   })
   const currentNodeId = selected.value?.id ?? null
@@ -359,11 +506,28 @@ function isStayingOnSameNode(to: RouteLocationNormalized): boolean {
   return currentNodeId === nextNodeId
 }
 
+function describeRouteTarget(to: RouteLocationNormalized): string | undefined {
+  if (to.name !== 'admin')
+    return undefined
+  const targetSection = typeof to.query.section === 'string' && to.query.section
+    ? to.query.section
+    : 'nodes'
+  if (targetSection !== 'nodes')
+    return undefined
+  const targetId = typeof to.query.node === 'string'
+    ? to.query.node.trim()
+    : ''
+  if (!targetId)
+    return undefined
+  return props.nodes.find(node => node.id === targetId)?.name
+}
+
 const draftGuard = useAdminDraftGuard({
   isLoggedIn: () => auth.loggedIn,
   isDirty: () => hasUnsavedChanges.value,
   isBusy: () => busy.value,
   isStayingInSameContext: isStayingOnSameNode,
+  describeRouteTarget,
 })
 const {
   pending: draftGuardPending,
@@ -373,6 +537,28 @@ const {
   restoreFocus: restoreDraftGuardFocus,
 } = draftGuard
 
+const draftGuardSwitchTarget = computed(() => {
+  const action = draftGuardPending.value
+  if (!action)
+    return ''
+  if (action.kind === 'switch')
+    return action.targetLabel
+  if (action.kind === 'leave' && action.label)
+    return action.label
+  return ''
+})
+
+const draftGuardConfirmLabel = computed(() => {
+  const action = draftGuardPending.value
+  if (!action)
+    return '放弃修改并离开'
+  if (action.kind === 'refresh')
+    return '放弃修改并刷新'
+  if (action.kind === 'switch' || (action.kind === 'leave' && action.label))
+    return '放弃修改并切换'
+  return '放弃修改并离开'
+})
+
 const unregisterDraft = draftRegistry?.register({
   section: 'nodes',
   isDirty: () => hasUnsavedChanges.value,
@@ -381,6 +567,7 @@ const unregisterDraft = draftRegistry?.register({
     const activeId = selected.value?.id
     forceResetNextSync = true
     saveAction.clearFeedback()
+    pageStatusNotice.value = ''
     try {
       await props.refresh()
       if (activeId && pendingUncertainSaves.value[activeId]) {
@@ -425,10 +612,10 @@ function addTag(): void {
   tagError.value = ''
 }
 
-function clearNodeQuery(): void {
+async function clearNodeQuery(): Promise<void> {
   const nextQuery = { ...route.query }
   delete nextQuery.node
-  void router.replace({
+  await router.replace({
     query: {
       ...nextQuery,
       section: 'nodes',
@@ -436,15 +623,49 @@ function clearNodeQuery(): void {
   })
 }
 
-function applyNodeSwitch(id: string, pushHistory = false): void {
-  secret.value = ''
-  saveAction.clearFeedback()
-  if (dangerOutcome.value !== 'refresh_failed')
-    dangerAction.clearFeedback()
-  const targetNode = props.nodes.find(item => item.id === id)
-  if (targetNode) {
-    lastInteractedNodeId.value = targetNode.id
-    loadDraftFromNode(targetNode)
+function isNodesListHistoryEntry(backPath: unknown): boolean {
+  if (typeof backPath !== 'string')
+    return false
+  const resolved = router.resolve(backPath)
+  if (resolved.name !== 'admin')
+    return false
+  const targetSection = typeof resolved.query.section === 'string' && resolved.query.section
+    ? resolved.query.section
+    : 'nodes'
+  const targetNode = typeof resolved.query.node === 'string'
+    ? resolved.query.node.trim()
+    : ''
+  return targetSection === 'nodes' && !targetNode
+}
+
+function choose(id: string, event?: MouseEvent): void {
+  if (busy.value)
+    return
+  if (id === selected.value?.id && selection.value.mode === 'selected')
+    return
+  if (event?.currentTarget instanceof HTMLElement)
+    event.currentTarget.focus()
+  if (!hasUnsavedChanges.value)
+    pageStatusNotice.value = ''
+  const fromMobileList = !isDesktop.value && selection.value.mode === 'list'
+  if (fromMobileList) {
+    const scrollY = typeof window !== 'undefined'
+      ? window.scrollY
+      : null
+    savedListScrollY.value = scrollY
+    lastInteractedNodeId.value = id
+    lastSavedNodeSummary.value = null
+    adminNodesViewState.value = {
+      ...adminNodesViewState.value,
+      listScrollY: scrollY,
+      lastNodeId: id,
+    }
+  }
+  else if (nodeListEl.value) {
+    adminNodesViewState.value = {
+      ...adminNodesViewState.value,
+      listScrollTop: nodeListEl.value.scrollTop,
+    }
   }
   const location = {
     query: {
@@ -453,55 +674,74 @@ function applyNodeSwitch(id: string, pushHistory = false): void {
       node: id,
     },
   }
-  if (pushHistory)
+  if (fromMobileList)
     void router.push(location)
   else
     void router.replace(location)
 }
 
-function choose(id: string, event?: MouseEvent): void {
-  if (busy.value)
-    return
-  if (id === selected.value?.id && selection.value.mode === 'selected')
-    return
-  const triggerEl = event?.currentTarget instanceof HTMLElement
-    ? event.currentTarget
-    : nodeButtonEls.get(id) ?? null
-  if (!isDesktop.value && selection.value.mode === 'list') {
-    savedListScrollY.value = typeof window !== 'undefined'
-      ? window.scrollY
-      : null
-    lastInteractedNodeId.value = id
-    applyNodeSwitch(id, true)
-    return
-  }
-  const targetName = props.nodes.find(item => item.id === id)?.name ?? id
-  draftGuard.requestSwitch(
-    id,
-    targetName,
-    () => applyNodeSwitch(id, false),
-    triggerEl,
-  )
-}
-
 function requestBackToList(event?: MouseEvent): void {
   if (busy.value)
     return
-  if (event?.currentTarget instanceof HTMLElement)
-    event.currentTarget.focus()
-  clearNodeQuery()
+  const triggerEl = event?.currentTarget instanceof HTMLElement
+    ? event.currentTarget
+    : null
+  if (triggerEl)
+    triggerEl.focus()
+  // Resize edge case: desktop default node (/admin?section=nodes without ?node) narrowed to mobile.
+  if (!queryNodeId.value && pinnedNodeId.value) {
+    draftGuard.requestSwitch(
+      '__list__',
+      '节点列表',
+      () => {
+        pinnedNodeId.value = null
+        loadDraftFromNode(undefined)
+      },
+      triggerEl,
+    )
+    return
+  }
+  // Prefer popping the known same-document list history entry instead of creating duplicate adjacent list entries.
+  if (!isDesktop.value && queryNodeId.value && typeof window !== 'undefined' && isNodesListHistoryEntry(window.history.state?.back)) {
+    router.back()
+    return
+  }
+  void clearNodeQuery()
+}
+
+function viewMonitor(): void {
+  if (!draft.value || selected.value?.hidden)
+    return
+  adminNodesViewState.value = {
+    ...adminNodesViewState.value,
+    searchQuery: searchQuery.value,
+    statusFilter: statusFilter.value,
+    lastNodeId: draft.value.id,
+    listScrollTop: nodeListEl.value?.scrollTop ?? adminNodesViewState.value.listScrollTop,
+    listScrollY: isDesktop.value
+      ? adminNodesViewState.value.listScrollY
+      : (savedListScrollY.value ?? adminNodesViewState.value.listScrollY),
+  }
+  void router.push(`/instance/${draft.value.id}`)
 }
 
 function openConfirm(action: NodeDangerActionKind): void {
+  if (!selected.value || isDangerActionDisabled(action))
+    return
   if (dangerOutcome.value === 'failed' || dangerOutcome.value === 'saved')
     dangerAction.clearFeedback()
-  confirm.value = action
+  pageStatusNotice.value = ''
+  confirmTarget.value = {
+    action,
+    nodeId: selected.value.id,
+    nodeName: selected.value.name,
+  }
 }
 
 function closeConfirm(): void {
   if (busy.value)
     return
-  confirm.value = null
+  confirmTarget.value = null
   if (dangerOutcome.value === 'failed')
     dangerAction.clearFeedback()
 }
@@ -525,6 +765,26 @@ function clearPendingSave(nodeId: string): void {
   const next = { ...pendingUncertainSaves.value }
   delete next[nodeId]
   pendingUncertainSaves.value = next
+}
+
+async function finishDeletedNodeNavigation(deletedId: string, bannerMessage?: string): Promise<void> {
+  if (bannerMessage)
+    pageStatusNotice.value = bannerMessage
+  if (pinnedNodeId.value === deletedId)
+    pinnedNodeId.value = null
+  if (loadedNodeId.value === deletedId)
+    loadDraftFromNode(undefined)
+  if (lastSavedNodeSummary.value?.nodeId === deletedId)
+    lastSavedNodeSummary.value = null
+  if (lastInteractedNodeId.value === deletedId) {
+    lastInteractedNodeId.value = null
+    adminNodesViewState.value = {
+      ...adminNodesViewState.value,
+      lastNodeId: null,
+    }
+  }
+  if (queryNodeId.value === deletedId)
+    await clearNodeQuery()
 }
 
 async function save(): Promise<void> {
@@ -552,12 +812,17 @@ async function save(): Promise<void> {
     expires: submittedExpires,
     quotaGiB: numericQuota,
   }
+  pageStatusNotice.value = ''
   clearPendingSave(node.id)
   const result = await saveAction.run(async () => {
     await getSharedApi().post(`admin/nodes/${encodeURIComponent(node.id)}`, node)
   }, {
     message: '已保存',
     onCommitted: () => {
+      lastSavedNodeSummary.value = {
+        nodeId: node.id,
+        nodeName: node.name,
+      }
       if (!draft.value || draft.value.id !== node.id)
         return
       draft.value.public_remark = normalizedRemark
@@ -589,11 +854,15 @@ async function enroll(): Promise<void> {
   if (busy.value || enrollUncertain.value)
     return
   const sessionGen = getSessionGeneration()
-  secret.value = ''
+  issuedSecret.value = null
   const result = await enrollAction.run(async () => {
     const response = await getSharedApi().post<{ token: string }>('admin/enrollment', { ttl_seconds: ttlHours.value * 3600 })
-    if (isSameActiveSession(sessionGen, auth.loggedIn))
-      secret.value = response.token
+    if (isSameActiveSession(sessionGen, auth.loggedIn)) {
+      issuedSecret.value = {
+        token: response.token,
+        kind: 'enroll',
+      }
+    }
   }, {
     message: '已生成注册令牌',
     reload: false,
@@ -613,40 +882,61 @@ function buildDangerUncertainMessage(action: NodeDangerActionKind, nodeName: str
 }
 
 async function execute(): Promise<void> {
-  if (!confirm.value || !selected.value || activeConfirmUncertain.value)
+  if (!confirmTarget.value || activeConfirmUncertain.value || confirmTargetInvalidReason.value)
     return
   const sessionGen = getSessionGeneration()
-  const action = confirm.value
-  const id = selected.value.id
-  const nodeName = selected.value.name
+  const { action, nodeId: id, nodeName } = confirmTarget.value
   const key = `${action}:${id}`
-  secret.value = ''
+  issuedSecret.value = null
+  pageStatusNotice.value = ''
+  let committedDelete = false
   const result = await dangerAction.run(async () => {
     if (action === 'rotate') {
       const response = await getSharedApi().post<{ agent_token: string }>(`admin/nodes/${encodeURIComponent(id)}/rotate`)
-      if (isSameActiveSession(sessionGen, auth.loggedIn))
-        secret.value = response.agent_token
+      if (isSameActiveSession(sessionGen, auth.loggedIn)) {
+        issuedSecret.value = {
+          token: response.agent_token,
+          kind: 'rotate',
+          nodeId: id,
+          nodeName,
+        }
+      }
     }
     else {
       await getSharedApi().post(`admin/nodes/${encodeURIComponent(id)}/${action}`)
     }
   }, {
-    message: '操作已完成',
+    message: action === 'delete'
+      ? `已删除节点「${nodeName}」`
+      : '操作已完成',
     riskyWrite: true,
+    // Backend delete_node commits deletion before optional metrics cleanup, which can return structured 503.
+    isUncertainError: action === 'delete'
+      ? cause => cause instanceof ApiError && cause.statusCode === 503
+      : undefined,
     uncertainMessage: detail => buildDangerUncertainMessage(action, nodeName, detail),
     onCommitted: () => {
       if (!isSameActiveSession(sessionGen, auth.loggedIn))
         return
-      confirm.value = null
+      confirmTarget.value = null
       if (pendingUncertainDangers.value[key]) {
         const next = { ...pendingUncertainDangers.value }
         delete next[key]
         pendingUncertainDangers.value = next
       }
-      if (action === 'delete' && queryNodeId.value === id)
-        clearNodeQuery()
+      if (action === 'delete')
+        committedDelete = true
     },
   })
+  if (committedDelete && isSameActiveSession(sessionGen, auth.loggedIn)) {
+    await finishDeletedNodeNavigation(
+      id,
+      result === 'saved'
+        ? `已删除节点「${nodeName}」`
+        : undefined,
+    )
+    return
+  }
   if (result === 'uncertain') {
     setNodeDangerUncertainLock(sessionGen, auth.loggedIn, {
       key,
@@ -719,6 +1009,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
   }
   const sessionGen = getSessionGeneration()
   entry.resyncError = ''
+  let verifiedDeleted = false
   const ok = await dangerAction.resync({
     verify: () => {
       if (!isSameActiveSession(sessionGen, auth.loggedIn)) {
@@ -731,10 +1022,9 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       if (entry.action === 'delete') {
         unlockUncertainDanger(entry.key)
         if (!freshNode) {
-          if (confirm.value === 'delete')
-            confirm.value = null
-          if (queryNodeId.value === entry.nodeId)
-            clearNodeQuery()
+          if (confirmTarget.value?.action === 'delete' && confirmTarget.value.nodeId === entry.nodeId)
+            confirmTarget.value = null
+          verifiedDeleted = true
           return {
             resolved: true,
             message: `已核实：节点「${entry.nodeName}」已删除`,
@@ -748,16 +1038,16 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       if (entry.action === 'revoke') {
         unlockUncertainDanger(entry.key)
         if (!freshNode) {
-          if (confirm.value === 'revoke')
-            confirm.value = null
+          if (confirmTarget.value?.action === 'revoke' && confirmTarget.value.nodeId === entry.nodeId)
+            confirmTarget.value = null
           return {
             resolved: true,
             message: `已核实：节点「${entry.nodeName}」已不存在`,
           }
         }
         if (freshNode.disabled) {
-          if (confirm.value === 'revoke')
-            confirm.value = null
+          if (confirmTarget.value?.action === 'revoke' && confirmTarget.value.nodeId === entry.nodeId)
+            confirmTarget.value = null
           return {
             resolved: true,
             message: `已核实：节点「${entry.nodeName}」的 Agent 凭据已撤销`,
@@ -784,6 +1074,10 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       }
     },
   })
+  if (verifiedDeleted && isSameActiveSession(sessionGen, auth.loggedIn)) {
+    await finishDeletedNodeNavigation(entry.nodeId, `已核实：节点「${entry.nodeName}」已删除`)
+    return
+  }
   if (!ok && dangerResyncError.value && isSameActiveSession(sessionGen, auth.loggedIn) && pendingUncertainDangers.value[entry.key])
     pendingUncertainDangers.value[entry.key]!.resyncError = dangerResyncError.value
 }
@@ -791,6 +1085,18 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
 
 <template>
   <div class="space-y-4">
+    <div v-if="showTopDangerRefreshAlert" class="flex flex-wrap items-center gap-2 rounded-lg border border-destructive/40 bg-card p-3">
+      <p role="alert" class="text-sm text-destructive">
+        {{ dangerError }}
+      </p>
+      <Button v-if="dangerNeedsResync" type="button" variant="outline" class="min-h-11" :disabled="busy" @click="resyncDanger()">
+        重新同步
+      </Button>
+    </div>
+    <p v-if="topStatusMessage" role="status" class="rounded-lg border border-border bg-card px-3 py-2 text-sm text-success">
+      {{ topStatusMessage }}
+    </p>
+
     <section v-if="showNodeList || enrollExpanded" class="rounded-xl border bg-card text-card-foreground shadow-sm">
       <div class="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
         <div class="space-y-0.5">
@@ -813,7 +1119,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
           {{ enrollExpanded ? '收起接入节点' : '展开接入节点' }}
         </Button>
       </div>
-      <div v-if="enrollExpanded" id="admin-node-enroll-panel" class="space-y-4 border-t px-4 py-4">
+      <div v-show="enrollExpanded" id="admin-node-enroll-panel" class="space-y-4 border-t px-4 py-4">
         <form class="flex flex-wrap items-end gap-3" @submit.prevent="enroll">
           <label class="grid gap-2 text-sm">
             注册令牌有效期（小时）
@@ -824,7 +1130,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
           </Button>
         </form>
         <p class="text-sm text-muted-foreground">
-          令牌仅用于注册一个 Agent，请通过受保护的配置文件交给对应服务器。
+          令牌仅用于注册一个独立新节点，请通过受保护的配置文件交给对应服务器。
         </p>
         <div v-if="enrollUncertain" class="flex flex-wrap items-center gap-2">
           <p role="alert" class="text-sm text-destructive">
@@ -843,10 +1149,15 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       </div>
     </section>
 
-    <div v-if="secret" class="space-y-2 rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
-      <label for="agent-secret" class="text-sm font-medium">新令牌（离开页面后清除）</label>
-      <Input id="agent-secret" :model-value="secret" readonly autocomplete="off" class="h-11 font-mono" @focus="($event.target as HTMLInputElement).select()" />
-      <Button variant="outline" type="button" class="min-h-11" @click="secret = ''">
+    <div v-if="issuedSecret" class="space-y-2 rounded-xl border bg-card p-4 text-card-foreground shadow-sm">
+      <div class="space-y-0.5">
+        <label for="agent-secret" class="text-sm font-medium">新令牌（离开页面后清除）</label>
+        <p class="text-xs text-muted-foreground">
+          {{ issuedSecretAttribution }}
+        </p>
+      </div>
+      <Input id="agent-secret" :model-value="issuedSecret.token" readonly autocomplete="off" class="h-11 font-mono" @focus="($event.target as HTMLInputElement).select()" />
+      <Button variant="outline" type="button" class="min-h-11" @click="issuedSecret = null">
         隐藏令牌
       </Button>
     </div>
@@ -854,10 +1165,13 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
     <div :class="isDesktop ? 'grid items-start gap-4 lg:grid-cols-[280px_minmax(0,1fr)]' : 'space-y-4'">
       <CardX v-if="showNodeList" title="节点列表" content-class="space-y-3">
         <div class="space-y-2">
-          <label class="grid gap-1.5 text-sm">
-            搜索节点
+          <div class="grid gap-1.5 text-sm">
+            <label for="admin-nodes-search" class="font-medium">
+              搜索节点
+            </label>
             <div class="flex items-center gap-2">
               <Input
+                id="admin-nodes-search"
                 :ref="setSearchInputRef"
                 v-model="searchQuery"
                 type="search"
@@ -870,12 +1184,12 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
                 type="button"
                 variant="outline"
                 class="min-h-11"
-                @click="resetFilters"
+                @click="clearFiltersAndFocusSearch"
               >
                 清空
               </Button>
             </div>
-          </label>
+          </div>
           <div role="group" aria-label="按节点状态筛选" class="flex flex-wrap gap-1.5">
             <Button
               v-for="option in NODE_LIST_FILTER_OPTIONS"
@@ -898,7 +1212,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
           <p>
             当前正在编辑的节点「{{ selected.name }}」不在当前筛选结果中；筛选不会自动切换编辑对象。
           </p>
-          <Button type="button" variant="outline" class="min-h-11 w-full" @click="resetFilters">
+          <Button type="button" variant="outline" class="min-h-11 w-full" @click="clearFiltersAndFocusSearch">
             清除筛选并显示当前节点
           </Button>
         </div>
@@ -910,19 +1224,20 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
           <p>
             没有符合当前搜索或筛选条件的节点。
           </p>
-          <Button type="button" variant="outline" class="min-h-11" @click="resetFilters">
+          <Button type="button" variant="outline" class="min-h-11" @click="clearFiltersAndFocusSearch">
             重置筛选
           </Button>
         </div>
-        <ul v-else aria-label="可管理节点" class="space-y-1.5" :class="isDesktop ? 'max-h-[70vh] overflow-y-auto pr-1' : ''">
+        <ul v-else ref="nodeListEl" aria-label="可管理节点" class="space-y-1.5" :class="isDesktop ? 'max-h-[70vh] overflow-y-auto pr-1' : ''">
           <li v-for="node in filteredNodes" :key="node.id">
             <button
               :ref="el => setNodeButtonRef(node.id, el)"
               type="button"
               :disabled="busy"
               :aria-current="selected?.id === node.id ? 'true' : undefined"
+              :data-last-active="!selected && lastInteractedNodeId === node.id ? 'true' : undefined"
               class="flex min-h-11 w-full flex-col items-start gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
-              :class="selected?.id === node.id ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background/60 hover:bg-accent'"
+              :class="isNodeHighlighted(node.id) ? 'border-primary bg-primary/10 text-foreground' : 'border-border bg-background/60 hover:bg-accent'"
               @click="choose(node.id, $event)"
             >
               <div class="flex w-full items-center justify-between gap-2">
@@ -943,6 +1258,9 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
                 </Badge>
                 <Badge v-if="selected?.id === node.id && hasUnsavedChanges" variant="default">
                   未保存
+                </Badge>
+                <Badge v-else-if="!selected && lastInteractedNodeId === node.id" variant="outline">
+                  上次查看
                 </Badge>
               </div>
             </button>
@@ -997,7 +1315,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
               </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-              <Button variant="outline" type="button" class="min-h-11" :disabled="selected.hidden" @click="router.push(`/instance/${draft.id}`)">
+              <Button variant="outline" type="button" class="min-h-11" :disabled="selected.hidden" @click="viewMonitor">
                 查看监控
               </Button>
             </div>
@@ -1133,6 +1451,9 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
               <p class="text-xs text-muted-foreground">
                 以下操作会立即影响节点「{{ selected.name }}」的凭据、周期统计或节点数据，执行前需二次确认。
               </p>
+              <p v-if="selected.disabled" class="text-xs text-muted-foreground">
+                此节点的 Agent 凭据已撤销，无法再轮换或重复撤销；如需重新接入，请展开“接入节点”生成一次性注册令牌以注册独立新节点。
+              </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <Button
@@ -1141,14 +1462,14 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
                 variant="outline"
                 type="button"
                 class="min-h-11"
-                :disabled="busy"
+                :disabled="isDangerActionDisabled(item.action)"
                 :class="item.action === 'delete' ? 'border-destructive/40 text-destructive hover:bg-destructive/10' : ''"
                 @click="openConfirm(item.action)"
               >
                 {{ item.label }}
               </Button>
             </div>
-            <div v-if="confirm === null && selectedNodePendingDangers.length" class="space-y-2">
+            <div v-if="confirmTarget === null && selectedNodePendingDangers.length" class="space-y-2">
               <div v-for="entry in selectedNodePendingDangers" :key="entry.key" class="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 p-3">
                 <p role="alert" class="text-sm text-destructive">
                   {{ formatPendingAlert(entry.message, entry.resyncError) }}
@@ -1166,15 +1487,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
                 </template>
               </div>
             </div>
-            <div v-if="showInlineDangerRefreshError" class="flex flex-wrap items-center gap-2">
-              <p role="alert" class="text-sm text-destructive">
-                {{ dangerError }}
-              </p>
-              <Button v-if="dangerNeedsResync" type="button" variant="outline" class="min-h-11" :disabled="busy" @click="resyncDanger()">
-                重新同步
-              </Button>
-            </div>
-            <p v-if="confirm === null && dangerSuccess" role="status" class="text-sm text-success">
+            <p v-if="confirmTarget === null && !pageStatusNotice && dangerSuccess" role="status" class="text-sm text-success">
               {{ dangerSuccess }}
             </p>
           </section>
@@ -1186,8 +1499,8 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
       <DialogContent @close-auto-focus="restoreDraftGuardFocus">
         <DialogHeader>
           <DialogTitle>放弃未保存修改？</DialogTitle>
-          <DialogDescription v-if="draftGuardPending?.kind === 'switch'">
-            切换到 {{ draftGuardPending.targetLabel }} 会丢弃当前节点未保存的修改，不会保存任何更改。
+          <DialogDescription v-if="draftGuardSwitchTarget">
+            切换到 {{ draftGuardSwitchTarget }} 会丢弃当前节点未保存的修改，不会保存任何更改。
           </DialogDescription>
           <DialogDescription v-else-if="draftGuardPending?.kind === 'refresh'">
             刷新管理数据会丢弃当前节点未保存的修改，不会保存任何更改。
@@ -1201,38 +1514,35 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
             取消，继续编辑
           </Button>
           <Button variant="destructive" class="min-h-11" @click="confirmDraftGuard">
-            {{
-              draftGuardPending?.kind === 'switch'
-                ? '放弃修改并切换'
-                : draftGuardPending?.kind === 'refresh'
-                  ? '放弃修改并刷新'
-                  : '放弃修改并离开'
-            }}
+            {{ draftGuardConfirmLabel }}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
 
-    <Dialog :open="confirm !== null" @update:open="value => { if (!value) closeConfirm() }">
+    <Dialog :open="confirmTarget !== null" @update:open="value => { if (!value) closeConfirm() }">
       <DialogContent :show-close="!busy" @escape-key-down="event => { if (busy) event.preventDefault() }" @interact-outside="event => { if (busy) event.preventDefault() }">
         <DialogHeader>
           <DialogTitle>{{ activeConfirmMeta?.label ?? '' }}</DialogTitle>
-          <DialogDescription>{{ activeConfirmMeta && selected ? activeConfirmMeta.description(selected.name) : '' }}</DialogDescription>
+          <DialogDescription>{{ activeConfirmDescription }}</DialogDescription>
         </DialogHeader>
-        <p v-if="activeConfirmUncertain" role="alert" class="text-sm text-destructive">
+        <p v-if="confirmTargetInvalidReason" role="alert" class="text-sm text-destructive">
+          {{ confirmTargetInvalidReason }}
+        </p>
+        <p v-else-if="activeConfirmUncertain" role="alert" class="text-sm text-destructive">
           {{ formatPendingAlert(activeConfirmUncertain.message, activeConfirmUncertain.resyncError) }}
         </p>
         <p v-else-if="dangerError" role="alert" class="text-sm text-destructive">
           {{ dangerError }}
         </p>
-        <p v-if="!activeConfirmUncertain && dangerSuccess" role="status" class="text-sm text-success">
+        <p v-if="!confirmTargetInvalidReason && !activeConfirmUncertain && dangerSuccess" role="status" class="text-sm text-success">
           {{ dangerSuccess }}
         </p>
         <DialogFooter>
           <Button variant="outline" class="min-h-11" :disabled="busy" @click="closeConfirm">
             取消
           </Button>
-          <template v-if="activeConfirmUncertain">
+          <template v-if="activeConfirmUncertain && !confirmTargetInvalidReason">
             <Button v-if="activeConfirmUncertain.verifiable" variant="outline" class="min-h-11" :disabled="busy" @click="resyncDanger(activeConfirmUncertain)">
               重新同步
             </Button>
@@ -1245,7 +1555,7 @@ async function resyncDanger(entry?: PendingUncertainDangerLock): Promise<void> {
               </Button>
             </template>
           </template>
-          <Button variant="destructive" class="min-h-11" :disabled="busy || Boolean(activeConfirmUncertain)" @click="execute">
+          <Button variant="destructive" class="min-h-11" :disabled="busy || Boolean(activeConfirmUncertain) || Boolean(confirmTargetInvalidReason)" @click="execute">
             {{ confirmButtonLabel }}
           </Button>
         </DialogFooter>

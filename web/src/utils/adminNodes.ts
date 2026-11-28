@@ -24,6 +24,7 @@ export type NodeSelectionResolution
 export interface NodeSelectionContext {
   nodes: ManagedNode[]
   queryNodeId: string | null | undefined
+  pinnedNodeId?: string | null | undefined
   isDesktop: boolean
 }
 
@@ -52,7 +53,7 @@ export const NODE_DANGER_ACTIONS: Record<NodeDangerActionKind, NodeDangerActionM
     action: 'revoke',
     label: '撤销 Agent 凭据',
     confirmLabel: '确认撤销凭据',
-    description: nodeName => `节点「${nodeName}」的对应 Agent 将立即无法继续上报；后续需重新注册后才能恢复，现有配置与历史记录会保留。`,
+    description: nodeName => `节点「${nodeName}」的对应 Agent 将立即无法继续上报；已撤销的旧节点与历史记录会保留，不会因重新注册恢复。如需重新接入，请生成一次性注册令牌注册为独立新节点。`,
   },
   'reset-traffic': {
     action: 'reset-traffic',
@@ -117,6 +118,16 @@ export function resolveNodeSelection(context: NodeSelectionContext): NodeSelecti
   }
   if (context.nodes.length === 0)
     return { mode: 'empty' }
+  const pinnedId = context.pinnedNodeId?.trim() ?? ''
+  if (pinnedId) {
+    const pinnedMatch = context.nodes.find(node => node.id === pinnedId)
+    if (pinnedMatch) {
+      return {
+        mode: 'selected',
+        node: pinnedMatch,
+      }
+    }
+  }
   if (context.isDesktop) {
     return {
       mode: 'selected',

@@ -696,7 +696,10 @@ test('high-risk node uncertain locks persist across section remounts and disting
       json: { agent_token: 'synthetic-rotated-token' },
     })
   })
-  await page.route('**/api/admin/nodes/*/delete', route => route.abort('timedout'))
+  await page.route('**/api/admin/nodes/*/delete', route => route.fulfill({
+    status: 503,
+    json: { error: 'Metrics cleanup failed after delete' },
+  }))
 
   await page.goto('/admin?section=nodes')
   const isDesktop = await page.evaluate(() => innerWidth >= 1024)
@@ -758,12 +761,20 @@ test('high-risk node uncertain locks persist across section remounts and disting
   await confirmRotateButton.click()
   await expect(rotateDialog).toBeHidden()
   await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveValue('synthetic-rotated-token')
+  await expect(page.getByText('归属：节点「Lock Node A」轮换后的新 Agent 凭据')).toBeVisible()
+  if (isDesktop) {
+    // Switching active node must clear rotated token instead of leaving Lock Node A's secret under Lock Node B.
+    await page.getByRole('button', { name: /Lock Node B/ }).click()
+    await expect(page.getByLabel('新令牌（离开页面后清除）')).toHaveCount(0)
+    await page.getByRole('button', { name: /Lock Node A/ }).click()
+  }
 
-  // Verifiable delete timeout persists across section remounts and clears once fresh GET observes deletion.
+  // Structured 503 on delete_node enters per-target uncertain verification, persists across remounts, and returns cleanly to the list once GET confirms removal.
   await page.getByRole('button', { name: '删除节点' }).click()
   const deleteDialog = page.getByRole('dialog', { name: '删除节点' })
   const confirmDeleteButton = deleteDialog.getByRole('button', { name: '确认删除节点' })
   await confirmDeleteButton.click()
+  await expect(deleteDialog.getByRole('alert')).toContainText('Metrics cleanup failed after delete')
   await expect(confirmDeleteButton).toBeDisabled()
   await deleteDialog.getByRole('button', { name: '取消' }).click()
 
@@ -776,10 +787,11 @@ test('high-risk node uncertain locks persist across section remounts and disting
   nodes = nodes.filter(item => item.id !== 'lock-node-a')
   await deleteDialog.getByRole('button', { name: '重新同步' }).click()
   await expect(deleteDialog).toBeHidden()
-  if (isDesktop)
-    await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Lock Node A」已删除' })).toBeVisible()
-  else
-    await expect(page.getByRole('button', { name: /Lock Node A/ })).toHaveCount(0)
+  await expect(page).toHaveURL('/admin?section=nodes')
+  await expect(page.getByRole('list', { name: '可管理节点' })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Lock Node B/ })).toBeVisible()
+  await expect(page.getByText('未找到该节点')).toHaveCount(0)
+  await expect(page.getByRole('status').filter({ hasText: '已核实：节点「Lock Node A」已删除' })).toBeVisible()
   await expect(page.locator('vite-error-overlay')).toHaveCount(0)
 })
 

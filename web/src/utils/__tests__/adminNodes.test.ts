@@ -146,9 +146,20 @@ describe('adminNodes search, filter, selection, and danger action helpers', () =
       mode: 'missing',
       requestedId: 'missing-when-empty',
     })
+
+    // Pinned node survives viewport narrowing and list reordering without silently switching.
+    expect(resolveNodeSelection({
+      nodes: [nodes[1]!, nodes[0]!, nodes[2]!],
+      queryNodeId: null,
+      pinnedNodeId: nodes[0]!.id,
+      isDesktop: false,
+    })).toEqual({
+      mode: 'selected',
+      node: nodes[0],
+    })
   })
 
-  it('provides explicit target node names and concrete confirm verbs for every danger action', () => {
+  it('provides explicit target node names, concrete confirm verbs, and accurate revoke re-enrollment copy', () => {
     expect(NODE_DANGER_ACTION_ORDER).toEqual([
       'rotate',
       'revoke',
@@ -161,5 +172,7 @@ describe('adminNodes search, filter, selection, and danger action helpers', () =
       expect(meta.confirmLabel).toMatch(/^确认/)
       expect(meta.description('Alpha SG')).toContain('Alpha SG')
     }
+    expect(NODE_DANGER_ACTIONS.revoke.description('Alpha SG')).toContain('独立新节点')
+    expect(NODE_DANGER_ACTIONS.revoke.description('Alpha SG')).toContain('不会因重新注册恢复')
   })
 })
